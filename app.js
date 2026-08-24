@@ -484,6 +484,8 @@ function finishOnboard() { onboarded = '1'; localStorage.setItem('ct_onboarded',
 // ===================== Render =====================
 function render() {
   const app = document.getElementById('app');
+  const nav = app && app.querySelector('aside nav');
+  const savedScrollTop = nav ? nav.scrollTop : 0;
   app.innerHTML = `
     ${renderSidebar()}
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -494,6 +496,8 @@ function render() {
       ${renderFab()}
     </main>`;
   attachSidebarEvents();
+  const newNav = app.querySelector('aside nav');
+  if (newNav) newNav.scrollTop = savedScrollTop;
   if (currentRoute === 'schedule') {
     const btnP = document.querySelector('[data-periods]');
     if (btnP) btnP.addEventListener('click', openPeriodSetting);
@@ -567,17 +571,10 @@ function renderSidebar() {
       </nav>
       <div class="p-4 border-t space-y-2">
         <div class="text-xs text-gray-400">${formatDate(now)}</div>
-        <button class="w-full text-xs border rounded py-1.5 hover:bg-gray-50" onclick="maybeOnboard()">❓ 使用引导</button>
-        <div class="flex gap-2">
-          <button class="flex-1 text-xs border rounded py-1.5 hover:bg-gray-50" onclick="exportData()">⬇️ 导出</button>
-          <button class="flex-1 text-xs border rounded py-1.5 hover:bg-gray-50" onclick="importData()">⬆️ 导入</button>
+        <div class="grid grid-cols-2 gap-2">
+          <button class="text-xs border rounded py-1.5 hover:bg-gray-50" onclick="maybeOnboard()">❓ 使用引导</button>
+          <button class="text-xs border rounded py-1.5 hover:bg-gray-50" onclick="openSettings()">⚙️ 设置</button>
         </div>
-        <div class="flex gap-2">
-          <button class="flex-1 text-xs border border-primary/30 text-primary rounded py-1.5 hover:bg-primary/5" onclick="resetSampleData()">载入示例</button>
-          <button class="flex-1 text-xs border border-red-200 text-red-500 rounded py-1.5 hover:bg-red-50" onclick="clearAllData()">清空数据</button>
-        </div>
-        <button class="w-full text-xs border border-violet-200 text-violet-600 rounded py-1.5 hover:bg-violet-50" onclick="importFromClassScore()">📥 从班级积分备份导入</button>
-        <button class="w-full text-xs border rounded py-1.5 hover:bg-gray-50" onclick="openChangePassword()">🔑 修改密码</button>
       </div>
     </aside>`;
 }
@@ -2053,9 +2050,11 @@ function viewSnapshot(id) {
 function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !== id); save(); openPtHistory(); }
 
 
+
 // ===================== 成绩分析（数学单科 + 班级预设）=====================
 const EXAM_SUBJECT = '数学';
-let examTab = 'roster'; // roster | enter | compare | trend | personal
+let examTab = 'analysis'; // analysis | manage
+let examSelectedStudent = ''; // 当前在榜单中选中的学生
 
 function examClass(id) { return state.examData.classes.find(c => c.id === id); }
 function examById(id) { return state.examData.exams.find(e => e.id === id); }
@@ -2064,23 +2063,34 @@ function examSubjects() {
   state.examData.records.forEach(r => r.subject && set.add(r.subject));
   return [...set];
 }
+function examRecords(examId, classId, subject) {
+  return state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+}
 function examAvg(examId, classId, subject) {
-  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  const rs = examRecords(examId, classId, subject);
   if (!rs.length) return null;
   return rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length;
 }
-function examClassAvg(examId, classId) {
-  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId);
+function examMax(examId, classId, subject) {
+  const rs = examRecords(examId, classId, subject);
   if (!rs.length) return null;
-  return rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length;
+  return Math.max(...rs.map(r => +r.score || 0));
+}
+function examMin(examId, classId, subject) {
+  const rs = examRecords(examId, classId, subject);
+  if (!rs.length) return null;
+  return Math.min(...rs.map(r => +r.score || 0));
+}
+function examCount(examId, classId, subject) {
+  return examRecords(examId, classId, subject).length;
 }
 function examPassRate(examId, classId, subject, passLine) {
-  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  const rs = examRecords(examId, classId, subject);
   if (!rs.length) return null;
   return rs.filter(r => (+r.score || 0) >= passLine).length / rs.length;
 }
 function examGoodRate(examId, classId, subject, goodLine) {
-  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  const rs = examRecords(examId, classId, subject);
   if (!rs.length) return null;
   return rs.filter(r => (+r.score || 0) >= goodLine).length / rs.length;
 }
@@ -2108,30 +2118,35 @@ function findClassIdByName(name) {
   }
   return null;
 }
+function getStudentProgress(studentName, examId, subject) {
+  const exams = state.examData.exams;
+  const idx = exams.findIndex(e => e.id === examId);
+  if (idx <= 0) return null;
+  const current = state.examData.records.find(r => r.examId === examId && r.studentName === studentName && r.subject === subject);
+  if (!current) return null;
+  for (let i = idx - 1; i >= 0; i--) {
+    const prev = state.examData.records.find(r => r.examId === exams[i].id && r.studentName === studentName && r.subject === subject);
+    if (prev) return { diff: (+current.score) - (+prev.score), prevScore: +prev.score };
+  }
+  return null;
+}
 
 function renderExam() {
   const tabs = [
-    { id: 'roster', label: '📋 班级名单' },
-    { id: 'enter', label: '📥 录入' },
-    { id: 'compare', label: '📊 两班对比' },
-    { id: 'trend', label: '📈 趋势' },
-    { id: 'personal', label: '👤 个人追踪' },
+    { id: 'analysis', label: '📊 成绩分析' },
+    { id: 'manage', label: '⚙️ 数据管理' },
   ].map(t => `<button class="px-4 py-1.5 rounded-full text-sm transition ${examTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setExamTab('${t.id}')">${t.label}</button>`).join('');
-
-  let body = '';
-  if (examTab === 'roster') body = renderExamRoster();
-  else if (examTab === 'enter') body = renderExamEnter();
-  else if (examTab === 'compare') body = renderExamCompare();
-  else if (examTab === 'trend') body = renderExamTrend();
-  else body = renderExamPersonal();
 
   return `
   <div class="space-y-5">
     <div class="flex flex-wrap gap-2">${tabs}</div>
-    <div id="exam-body">${body}</div>
+    <div id="exam-body">${examTab === 'manage' ? renderExamManage() : renderExamAnalysis()}</div>
   </div>`;
 }
 function setExamTab(t) { examTab = t; render(); }
+function selectExamStudent(name) { examSelectedStudent = name; renderExamAnalysisInto(); }
+
+// ---------- 数据管理 ----------
 function addExamClass() {
   const id = 'c' + Date.now();
   state.examData.classes.push({ id, name: '新班级', studentNames: [] });
@@ -2182,8 +2197,9 @@ function saveExamClasses() {
   save(); render();
 }
 
-// ---------- 名单管理 ----------
-function renderExamRoster() {
+function renderExamManage() {
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date || '')}）</option>`).join('') || '<option value="">（先添加考试）</option>';
+  const clsOpts = state.examData.classes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   const clsHtml = state.examData.classes.map(c => `
     <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
       <div class="flex items-center gap-2 mb-3">
@@ -2195,7 +2211,7 @@ function renderExamRoster() {
       <div class="flex flex-wrap gap-2 mb-3 min-h-[2rem]">
         ${c.studentNames.length ? c.studentNames.map((n, i) => `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">${esc(n)}<button class="text-gray-400 hover:text-red-500 leading-none" onclick="removeClassStudent('${c.id}', ${i})">×</button></span>`).join('') : '<span class="text-xs text-gray-400">暂无学生，请在下方粘贴或上传名单</span>'}
       </div>
-      <textarea data-cls-names="${c.id}" rows="5" class="w-full border rounded-lg p-3 text-xs" placeholder="每行一个学生姓名，可批量粘贴">${esc(c.studentNames.join('\n'))}</textarea>
+      <textarea data-cls-names="${c.id}" rows="4" class="w-full border rounded-lg p-3 text-xs" placeholder="每行一个学生姓名，可批量粘贴">${esc(c.studentNames.join('\n'))}</textarea>
       <div class="flex gap-2 mt-2 items-center">
         <input id="clsFile_${c.id}" type="file" accept=".csv,.txt,.xlsx,.xls" class="text-xs flex-1">
         <button class="text-xs text-primary hover:underline" onclick="uploadClassNames('${c.id}')">上传名单</button>
@@ -2203,50 +2219,44 @@ function renderExamRoster() {
     </div>`).join('');
 
   return `
-  <div class="space-y-4">
+  <div class="space-y-5">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex items-center justify-between mb-3">
-        <div class="text-xs text-gray-500">设置班级数量与成员姓名，导入成绩时会按姓名自动匹配班级</div>
+        <div class="font-bold text-gray-800">📋 班级名单</div>
         <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="addExamClass()">+ 增加班级</button>
       </div>
+      <p class="text-xs text-gray-500 mb-3">设置班级数量与成员姓名，导入成绩时会按姓名自动匹配班级</p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${clsHtml}</div>
       <button class="mt-4 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称与名单</button>
     </div>
-  </div>`;
-}
 
-// ---------- 录入 ----------
-function renderExamEnter() {
-  const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date || '')}）</option>`).join('') || '<option value="">（先添加考试）</option>';
-  const clsOpts = state.examData.classes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  return `
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
-      <h3 class="font-bold text-gray-800">考试管理</h3>
-      <div class="flex gap-2">
-        <input id="newExamName" class="flex-1 border rounded-lg p-2 text-sm" placeholder="考试名称，如：第一次月考">
-        <input id="newExamDate" type="date" class="border rounded-lg p-2 text-sm">
-        <button class="bg-primary text-white px-4 rounded-lg text-sm hover:bg-primaryDark" onclick="addExam()">添加</button>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+        <h3 class="font-bold text-gray-800">📝 考试管理</h3>
+        <div class="flex gap-2">
+          <input id="newExamName" class="flex-1 border rounded-lg p-2 text-sm" placeholder="考试名称，如：第一次月考">
+          <input id="newExamDate" type="date" class="border rounded-lg p-2 text-sm">
+          <button class="bg-primary text-white px-4 rounded-lg text-sm hover:bg-primaryDark" onclick="addExam()">添加</button>
+        </div>
+        <div class="space-y-1">${state.examData.exams.length ? state.examData.exams.map(e => `<div class="flex items-center gap-2 text-sm p-2 rounded bg-gray-50"><span class="flex-1">${esc(e.name)} <span class="text-gray-400 text-xs">${esc(e.date || '')}</span></span><button class="text-gray-300 hover:text-red-500" onclick="delExam('${e.id}')">🗑️</button></div>`).join('') : '<div class="text-gray-400 text-sm">暂无考试</div>'}</div>
       </div>
-      <div class="text-xs text-gray-500">已有考试：</div>
-      <div class="space-y-1">${state.examData.exams.length ? state.examData.exams.map(e => `<div class="flex items-center gap-2 text-sm p-2 rounded bg-gray-50"><span class="flex-1">${esc(e.name)} <span class="text-gray-400 text-xs">${esc(e.date || '')}</span></span><button class="text-gray-300 hover:text-red-500" onclick="delExam('${e.id}')">🗑️</button></div>`).join('') : '<div class="text-gray-400 text-sm">暂无考试</div>'}</div>
-    </div>
 
-    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
-      <h3 class="font-bold text-gray-800">批量导入数学成绩</h3>
-      <p class="text-[11px] text-gray-400">每行一个学生：<code>姓名,分数</code>。姓名会先与「班级名单」自动匹配班级。支持上传 Excel/CSV。</p>
-      <select id="exImpExam" class="w-full border rounded-lg p-2 text-sm">${examOpts}</select>
-      <textarea id="exImpText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,88&#10;王浩然,92"></textarea>
-      <input id="exImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
-      <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="doExamImport()">导入成绩</button>
+      <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+        <h3 class="font-bold text-gray-800">📥 批量导入数学成绩</h3>
+        <p class="text-[11px] text-gray-400">每行一个学生：<code>姓名,分数</code>。姓名会先与「班级名单」自动匹配班级。支持上传 Excel/CSV。</p>
+        <select id="exImpExam" class="w-full border rounded-lg p-2 text-sm">${examOpts}</select>
+        <textarea id="exImpText" rows="6" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,88&#10;王浩然,92"></textarea>
+        <input id="exImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
+        <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="doExamImport()">导入成绩</button>
 
-      <h3 class="font-bold text-gray-800 pt-2 border-t mt-2">单条录入</h3>
-      <div class="grid grid-cols-2 gap-3">
-        <select id="exClass" class="border rounded-lg p-2 text-sm">${clsOpts}</select>
-        <select id="exExam" class="border rounded-lg p-2 text-sm">${examOpts}</select>
-        <input id="exName" class="border rounded-lg p-2 text-sm" placeholder="学生姓名">
-        <input id="exScore" type="number" class="border rounded-lg p-2 text-sm" placeholder="数学分数">
-        <button class="col-span-2 bg-primary text-white rounded-lg text-sm py-2 hover:bg-primaryDark" onclick="saveExamScore()">保存</button>
+        <h3 class="font-bold text-gray-800 pt-2 border-t mt-2">➕ 单条录入</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <select id="exClass" class="border rounded-lg p-2 text-sm">${clsOpts}</select>
+          <select id="exExam" class="border rounded-lg p-2 text-sm">${examOpts}</select>
+          <input id="exName" class="border rounded-lg p-2 text-sm" placeholder="学生姓名">
+          <input id="exScore" type="number" class="border rounded-lg p-2 text-sm" placeholder="数学分数">
+          <button class="col-span-2 bg-primary text-white rounded-lg text-sm py-2 hover:bg-primaryDark" onclick="saveExamScore()">保存</button>
+        </div>
       </div>
     </div>
   </div>`;
@@ -2305,129 +2315,172 @@ function doExamImport() {
   alert(msg);
 }
 
-// ---------- 两班对比 ----------
-function renderExamCompare() {
-  if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「录入」添加考试并导入成绩。</p></div>`;
-  const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+// ---------- 成绩分析看板 ----------
+function renderExamAnalysis() {
+  if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「数据管理」添加考试并导入成绩。</p></div>`;
+  const lastExam = state.examData.exams[state.examData.exams.length - 1];
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}" ${e.id === lastExam.id ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+  const clsChecks = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-sm px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" checked> ${esc(c.name)}</label>`).join('');
   return `
   <div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
-      <div><label class="block text-xs text-gray-500 mb-1">考试</label><select id="cmpExam" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${examOpts}</select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">及格线</label><input id="cmpPass" type="number" value="72" class="border rounded-lg p-2 text-sm w-20"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="cmpGood" type="number" value="96" class="border rounded-lg p-2 text-sm w-20"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">考试</label><select id="anExam" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${examOpts}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">班级</label><div class="flex flex-wrap gap-2" id="anClassWrap">${clsChecks}</div></div>
+      <div><label class="block text-xs text-gray-500 mb-1">及格线</label><input id="anPass" type="number" value="72" class="border rounded-lg p-2 text-sm w-20"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="anGood" type="number" value="96" class="border rounded-lg p-2 text-sm w-20"></div>
       <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="renderExam()">刷新</button>
     </div>
-    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="cmpChart" height="160"></canvas></div>
-    <div id="cmpTable" class="bg-white rounded-2xl p-5 shadow-sm"></div>
+    <div id="anSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 bg-white rounded-2xl p-5 shadow-sm"><canvas id="anCmpChart" height="170"></canvas></div>
+      <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="anTrendChart" height="170"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800">📋 学生榜单</div>
+        <div class="text-xs text-gray-400">点击学生查看个人趋势</div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="text-gray-500 border-b text-left"><th class="py-2 w-16">排名</th><th class="py-2">姓名</th><th class="py-2">班级</th><th class="py-2">分数</th><th class="py-2">较上次</th></tr></thead>
+          <tbody id="anRankBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">👤 个人趋势</div>
+      <div id="anPersonalWrap"><p class="text-sm text-gray-400">请在榜单中点击一名学生</p></div>
+    </div>
   </div>`;
 }
-function renderExamCompareInto() {
-  const examId = document.getElementById('cmpExam') && document.getElementById('cmpExam').value;
+function renderExamAnalysisInto() {
+  const examId = document.getElementById('anExam') && document.getElementById('anExam').value;
   if (!examId) return;
-  const pass = +(document.getElementById('cmpPass').value || 72);
-  const good = +(document.getElementById('cmpGood').value || 96);
-  const labels = state.examData.classes.map(c => c.name);
-  const avg = state.examData.classes.map(c => examAvg(examId, c.id, EXAM_SUBJECT));
-  const passR = state.examData.classes.map(c => examPassRate(examId, c.id, EXAM_SUBJECT, pass));
-  const goodR = state.examData.classes.map(c => examGoodRate(examId, c.id, EXAM_SUBJECT, good));
+  const pass = +(document.getElementById('anPass').value || 72);
+  const good = +(document.getElementById('anGood').value || 96);
+  const checked = Array.from(document.querySelectorAll('.an-cls:checked')).map(c => c.value);
+  const classes = state.examData.classes.filter(c => checked.includes(c.id));
+  const exam = examById(examId);
+
+  // 概览
+  const totalCount = classes.reduce((sum, c) => sum + examCount(examId, c.id, EXAM_SUBJECT), 0);
+  const scores = classes.flatMap(c => examRecords(examId, c.id, EXAM_SUBJECT).map(r => +r.score));
+  const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+  const max = scores.length ? Math.max(...scores) : null;
+  const min = scores.length ? Math.min(...scores) : null;
+  const passCnt = scores.filter(s => s >= pass).length;
+  const goodCnt = scores.filter(s => s >= good).length;
+  const passRate = scores.length ? passCnt / scores.length : null;
+  const goodRate = scores.length ? goodCnt / scores.length : null;
+
+  const mkCard = (label, value, sub) => `<div class="bg-white rounded-xl p-4 shadow-sm text-center"><div class="text-xs text-gray-500 mb-1">${label}</div><div class="text-xl font-bold text-gray-800">${value}</div>${sub ? `<div class="text-[10px] text-gray-400 mt-0.5">${sub}</div>` : ''}</div>`;
+  const fmtN = a => a == null ? '—' : a.toFixed(1);
   const fmtPct = a => a == null ? '—' : (a * 100).toFixed(1) + '%';
-  const tbl = `<table class="w-full text-sm"><thead><tr class="text-gray-500 border-b"><th class="py-2 text-left">指标</th>${labels.map(l => `<th class="py-2 text-left">${esc(l)}</th>`).join('')}<th class="py-2 text-left">差值</th></tr></thead><tbody>
-    <tr class="border-b"><td class="py-2">平均分</td>${avg.map(a => `<td class="py-2 font-bold">${a == null ? '—' : a.toFixed(1)}</td>`).join('')}<td class="py-2 text-primary">${avg[0] != null && avg[1] != null ? (avg[0] - avg[1]).toFixed(1) : '—'}</td></tr>
-    <tr class="border-b"><td class="py-2">及格率(≥${pass})</td>${passR.map(a => `<td class="py-2">${fmtPct(a)}</td>`).join('')}<td class="py-2 text-primary">${passR[0] != null && passR[1] != null ? ((passR[0] - passR[1]) * 100).toFixed(1) + '%' : '—'}</td></tr>
-    <tr><td class="py-2">优秀率(≥${good})</td>${goodR.map(a => `<td class="py-2">${fmtPct(a)}</td>`).join('')}<td class="py-2 text-primary">${goodR[0] != null && goodR[1] != null ? ((goodR[0] - goodR[1]) * 100).toFixed(1) + '%' : '—'}</td></tr>
-  </tbody></table>`;
-  const tblEl = document.getElementById('cmpTable'); if (tblEl) tblEl.innerHTML = tbl;
-  if (window._cmpChart) try { window._cmpChart.destroy(); } catch (e) { }
-  const cv = document.getElementById('cmpChart'); if (!cv) return;
-  const ctx = cv.getContext('2d');
-  window._cmpChart = new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets: [
-      { label: '平均分', data: avg.map(a => a == null ? 0 : a), backgroundColor: '#f06292' },
-      { label: '及格率%', data: passR.map(a => a == null ? 0 : a * 100), backgroundColor: '#34d399' },
-      { label: '优秀率%', data: goodR.map(a => a == null ? 0 : a * 100), backgroundColor: '#60a5fa' },
-    ]},
-    options: { responsive: true, scales: { y: { beginAtZero: true } } }
-  });
-}
+  const summaryEl = document.getElementById('anSummary');
+  if (summaryEl) summaryEl.innerHTML = `
+    ${mkCard('参考人数', totalCount, `${classes.length}个班`)}
+    ${mkCard('平均分', fmtN(avg), exam ? esc(exam.name) : '')}
+    ${mkCard('最高分', max == null ? '—' : max, '')}
+    ${mkCard('最低分', min == null ? '—' : min, '')}
+    ${mkCard('及格率', fmtPct(passRate), `≥${pass}`)}
+    ${mkCard('优秀率', fmtPct(goodRate), `≥${good}`)}
+  `;
 
-// ---------- 趋势 ----------
-function renderExamTrend() {
-  const exams = state.examData.exams;
-  if (!exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📈</div><div class="font-bold text-gray-800">还没有考试数据</div></div>`;
-  return `
-  <div class="space-y-4">
-    <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
-      <div><label class="block text-xs text-gray-500 mb-1">指标</label><select id="trMetric" class="border rounded-lg p-2 text-sm" onchange="renderExam()"><option value="avg">数学平均分</option><option value="pass">及格率</option><option value="good">优秀率</option></select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">及格线</label><input id="trPass" type="number" value="72" class="border rounded-lg p-2 text-sm w-20"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="trGood" type="number" value="96" class="border rounded-lg p-2 text-sm w-20"></div>
-      <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="renderExam()">刷新</button>
-    </div>
-    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="trChart" height="170"></canvas></div>
-  </div>`;
-}
-function renderExamTrendInto() {
-  const metric = document.getElementById('trMetric') && document.getElementById('trMetric').value;
-  if (!metric) return;
-  const pass = +(document.getElementById('trPass').value || 72);
-  const good = +(document.getElementById('trGood').value || 96);
-  const exams = state.examData.exams;
-  const labels = exams.map(e => e.name);
-  const datasets = state.examData.classes.map((c, idx) => {
-    const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24'];
-    const arr = exams.map(e => {
-      if (metric === 'avg') return examAvg(e.id, c.id, EXAM_SUBJECT);
-      if (metric === 'pass') return examPassRate(e.id, c.id, EXAM_SUBJECT, pass);
-      return examGoodRate(e.id, c.id, EXAM_SUBJECT, good);
+  // 对比图
+  if (window._anCmpChart) try { window._anCmpChart.destroy(); } catch (e) { }
+  const cmpCtx = document.getElementById('anCmpChart');
+  if (cmpCtx) {
+    const labels = classes.map(c => c.name);
+    const avgArr = classes.map(c => examAvg(examId, c.id, EXAM_SUBJECT));
+    const passArr = classes.map(c => examPassRate(examId, c.id, EXAM_SUBJECT, pass));
+    const goodArr = classes.map(c => examGoodRate(examId, c.id, EXAM_SUBJECT, good));
+    window._anCmpChart = new Chart(cmpCtx.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [
+        { label: '平均分', data: avgArr.map(a => a == null ? 0 : a), backgroundColor: '#f06292' },
+        { label: '及格率%', data: passArr.map(a => a == null ? 0 : a * 100), backgroundColor: '#34d399' },
+        { label: '优秀率%', data: goodArr.map(a => a == null ? 0 : a * 100), backgroundColor: '#60a5fa' },
+      ]},
+      options: { responsive: true, plugins: { title: { display: true, text: esc(exam ? exam.name : '班级对比') } }, scales: { y: { beginAtZero: true } } }
     });
-    return { label: c.name, data: arr.map(a => a == null ? null : (metric === 'avg' ? a : a * 100)), borderColor: colors[idx % colors.length], backgroundColor: colors[idx % colors.length] + '20', fill: false, tension: .3 };
-  });
-  const cv = document.getElementById('trChart'); if (!cv) return;
-  if (window._trChart) try { window._trChart.destroy(); } catch (e) { }
-  window._trChart = new Chart(cv.getContext('2d'), {
-    type: 'line',
-    data: { labels, datasets },
-    options: { responsive: true, plugins: { title: { display: true, text: '数学' + (metric === 'avg' ? '平均分走势' : metric === 'pass' ? '及格率走势' : '优秀率走势') } }, scales: { y: { beginAtZero: metric !== 'avg', max: metric !== 'avg' ? 100 : undefined } } }
-  });
-}
+  }
 
-// ---------- 个人追踪 ----------
-function renderExamPersonal() {
-  const names = [];
-  state.examData.classes.forEach(c => (c.studentNames || []).forEach(n => { if (!names.includes(n)) names.push(n); }));
-  if (!names.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">👤</div><div class="font-bold text-gray-800">还没有班级名单</div><p class="text-sm text-gray-500 mt-2">先到「班级名单」设置学生。</p></div>`;
-  return `
-  <div class="space-y-4">
-    <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
-      <div><label class="block text-xs text-gray-500 mb-1">学生</label><select id="psName" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${names.map(n => `<option>${esc(n)}</option>`).join('')}</select></div>
-    </div>
-    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="psChart" height="170"></canvas></div>
-    <div id="psSummary" class="bg-white rounded-2xl p-5 shadow-sm text-sm text-gray-600"></div>
-  </div>`;
+  // 历次趋势图
+  if (window._anTrendChart) try { window._anTrendChart.destroy(); } catch (e) { }
+  const trCtx = document.getElementById('anTrendChart');
+  if (trCtx) {
+    const labels = state.examData.exams.map(e => e.name);
+    const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24'];
+    const datasets = classes.map((c, idx) => {
+      return { label: c.name, data: state.examData.exams.map(e => examAvg(e.id, c.id, EXAM_SUBJECT)).map(a => a == null ? null : a), borderColor: colors[idx % colors.length], backgroundColor: colors[idx % colors.length] + '20', fill: false, tension: .3 };
+    });
+    window._anTrendChart = new Chart(trCtx.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: { responsive: true, plugins: { title: { display: true, text: '平均分走势' } }, scales: { y: { beginAtZero: false } } }
+    });
+  }
+
+  // 榜单
+  let rankList = [];
+  classes.forEach(c => {
+    examRecords(examId, c.id, EXAM_SUBJECT).forEach(r => {
+      const prog = getStudentProgress(r.studentName, examId, EXAM_SUBJECT);
+      rankList.push({ name: r.studentName, classId: c.id, className: c.name, score: +r.score, progress: prog });
+    });
+  });
+  rankList.sort((a, b) => b.score - a.score);
+  if (!examSelectedStudent && rankList.length) examSelectedStudent = rankList[0].name;
+  const rankBody = document.getElementById('anRankBody');
+  if (rankBody) rankBody.innerHTML = rankList.map((r, i) => {
+    const selected = r.name === examSelectedStudent ? 'bg-primary/5' : 'hover:bg-gray-50';
+    const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `<span class="text-xs text-gray-400">${i + 1}</span>`;
+    const progHtml = !r.progress ? '<span class="text-gray-400">—</span>' :
+      (r.progress.diff > 0 ? `<span class="text-red-500 font-bold">↑${r.progress.diff}</span>` :
+       r.progress.diff < 0 ? `<span class="text-emerald-600 font-bold">↓${-r.progress.diff}</span>` :
+       '<span class="text-gray-500">—</span>');
+    return `<tr class="border-b cursor-pointer ${selected}" onclick="selectExamStudent('${esc(r.name)}')">
+      <td class="py-2.5 pl-2">${medal}</td>
+      <td class="py-2.5 font-medium">${esc(r.name)}</td>
+      <td class="py-2.5 text-gray-500">${esc(r.className)}</td>
+      <td class="py-2.5 font-bold">${r.score}</td>
+      <td class="py-2.5">${progHtml}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="py-6 text-center text-gray-400">暂无成绩记录</td></tr>';
+
+  // 个人趋势
+  renderExamPersonalInto();
 }
 function renderExamPersonalInto() {
-  const name = document.getElementById('psName') && document.getElementById('psName').value;
-  if (!name) return;
-  const series = studentRankSeries(name, EXAM_SUBJECT);
-  const cv = document.getElementById('psChart'); if (!cv) return;
-  if (window._psChart) try { window._psChart.destroy(); } catch (e) { }
-  window._psChart = new Chart(cv.getContext('2d'), {
-    type: 'line',
-    data: { labels: series.map(s => s.exam), datasets: [
-      { label: '数学成绩', data: series.map(s => s.score), borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3, yAxisID: 'y' },
-      { label: '班级排名', data: series.map(s => s.rank), borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.1)', fill: false, tension: .3, yAxisID: 'y1' },
-    ]},
-    options: { responsive: true, plugins: { title: { display: true, text: `${name} 数学成绩与排名变化` } }, scales: { y: { type: 'linear', display: true, position: 'left', title: { display: true, text: '分数' }, beginAtZero: false }, y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: '排名' }, reverse: true, beginAtZero: false, grid: { drawOnChartArea: false } } } }
-  });
-  if (series.length >= 2) {
-    const first = series[0], last = series[series.length - 1];
-    const diff = (last.score - first.score).toFixed(1);
-    const rankDiff = first.rank - last.rank;
-    const el = document.getElementById('psSummary');
-    if (el) el.innerHTML = `共 ${series.length} 次考试：最高 ${Math.max(...series.map(s => s.score))}、最低 ${Math.min(...series.map(s => s.score))}、平均 ${(series.reduce((a, b) => a + b.score, 0) / series.length).toFixed(1)}。<br>较首次成绩 <b class="${diff >= 0 ? 'text-red-500' : 'text-emerald-600'}">${diff >= 0 ? '+' : ''}${diff}</b> 分，排名 <b class="${rankDiff > 0 ? 'text-red-500' : rankDiff < 0 ? 'text-emerald-600' : 'text-gray-600'}">${rankDiff > 0 ? '上升' + rankDiff + '名' : rankDiff < 0 ? '下降' + (-rankDiff) + '名' : '持平'}</b>。`;
-  } else if (series.length === 1) {
-    const el = document.getElementById('psSummary'); if (el) el.innerHTML = `仅有 1 次记录：${series[0].score} 分，班级排名 ${series[0].rank}。`;
-  }
+  const wrap = document.getElementById('anPersonalWrap');
+  if (!wrap) return;
+  if (!examSelectedStudent) { wrap.innerHTML = '<p class="text-sm text-gray-400">请在榜单中点击一名学生</p>'; return; }
+  const series = studentRankSeries(examSelectedStudent, EXAM_SUBJECT);
+  if (!series.length) { wrap.innerHTML = '<p class="text-sm text-gray-400">该学生暂无成绩记录</p>'; return; }
+  wrap.innerHTML = `<canvas id="anPsChart" height="170"></canvas><div id="anPsSummary" class="mt-3 text-sm text-gray-600"></div>`;
+  setTimeout(() => {
+    if (window._anPsChart) try { window._anPsChart.destroy(); } catch (e) { }
+    const cv = document.getElementById('anPsChart');
+    if (!cv) return;
+    window._anPsChart = new Chart(cv.getContext('2d'), {
+      type: 'line',
+      data: { labels: series.map(s => s.exam), datasets: [
+        { label: '数学成绩', data: series.map(s => s.score), borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3, yAxisID: 'y' },
+        { label: '班级排名', data: series.map(s => s.rank), borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.1)', fill: false, tension: .3, yAxisID: 'y1' },
+      ]},
+      options: { responsive: true, plugins: { title: { display: true, text: `${esc(examSelectedStudent)} 数学成绩与排名变化` } }, scales: { y: { type: 'linear', display: true, position: 'left', title: { display: true, text: '分数' }, beginAtZero: false }, y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: '排名' }, reverse: true, beginAtZero: false, grid: { drawOnChartArea: false } } } }
+    });
+    const el = document.getElementById('anPsSummary');
+    if (!el) return;
+    if (series.length >= 2) {
+      const first = series[0], last = series[series.length - 1];
+      const diff = (last.score - first.score).toFixed(1);
+      const rankDiff = first.rank - last.rank;
+      el.innerHTML = `共 ${series.length} 次考试：最高 ${Math.max(...series.map(s => s.score))}、最低 ${Math.min(...series.map(s => s.score))}、平均 ${(series.reduce((a, b) => a + b.score, 0) / series.length).toFixed(1)}。<br>较首次成绩 <b class="${diff >= 0 ? 'text-red-500' : 'text-emerald-600'}">${diff >= 0 ? '+' : ''}${diff}</b> 分，排名 <b class="${rankDiff > 0 ? 'text-red-500' : rankDiff < 0 ? 'text-emerald-600' : 'text-gray-600'}">${rankDiff > 0 ? '上升' + rankDiff + '名' : rankDiff < 0 ? '下降' + (-rankDiff) + '名' : '持平'}</b>。`;
+    } else {
+      el.innerHTML = `仅有 1 次记录：${series[0].score} 分，班级排名 ${series[0].rank}。`;
+    }
+  }, 0);
 }
 
 // 在 render() 后渲染图表 / 绑定文件
@@ -2436,10 +2489,8 @@ render = function() {
   _origRender();
   setTimeout(() => {
     if (currentRoute === 'exam') {
-      if (examTab === 'enter') bindFileToText('exImpFile', 'exImpText');
-      else if (examTab === 'compare') renderExamCompareInto();
-      else if (examTab === 'trend') renderExamTrendInto();
-      else if (examTab === 'personal') renderExamPersonalInto();
+      if (examTab === 'manage') bindFileToText('exImpFile', 'exImpText');
+      else if (examTab === 'analysis') renderExamAnalysisInto();
     }
   }, 0);
 };
@@ -2857,6 +2908,14 @@ function qrSave() {
     });
   });
   lastRecordContent = content;
+
+  // 同步写入班级日志：汇总显示学生、类型、内容及自动积分
+  const typeText = qrDraft.types.map(t => REC_TYPE_LABELS[t]).join('/');
+  const stuText = qrDraft.students.map(st => st.name).join('、');
+  let logContent = `快速记录【${typeText}】${stuText}：${content}`;
+  if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
+  state.classLogs.unshift({ id: uid(), date, content: logContent });
+
   save(); closeModal();
   let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
   if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
@@ -2896,24 +2955,61 @@ function openFabDefault() {
 }
 
 // ===================== Data management =====================
+// 修改密码固定口令（前后端保持一致，可通过环境变量 RESET_PASSWORD_CODE 覆盖后端默认值）
+const RESET_PASSWORD_CODE = 'teacher2024';
+
+function openSettings() {
+  openModal('设置', `
+    <div class="grid grid-cols-2 gap-3 text-sm">
+      <button class="p-4 rounded-xl border hover:bg-gray-50 flex flex-col items-center gap-2" onclick="closeModal(); exportData()">
+        <span class="text-2xl">⬇️</span><span>导出数据</span>
+      </button>
+      <button class="p-4 rounded-xl border hover:bg-gray-50 flex flex-col items-center gap-2" onclick="closeModal(); importData()">
+        <span class="text-2xl">⬆️</span><span>导入数据</span>
+      </button>
+      <button class="p-4 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 flex flex-col items-center gap-2" onclick="closeModal(); clearAllData()">
+        <span class="text-2xl">🗑️</span><span>清空数据</span>
+      </button>
+      <button class="p-4 rounded-xl border border-violet-200 text-violet-600 hover:bg-violet-50 flex flex-col items-center gap-2" onclick="closeModal(); openChangePassword()">
+        <span class="text-2xl">🔑</span><span>修改密码</span>
+      </button>
+    </div>
+    <p class="text-[11px] text-gray-400 mt-4 text-center">修改密码需先验证固定口令，忘记口令请导出数据后重置应用</p>`, 'md');
+}
+
 function openChangePassword() {
+  openModal('验证固定口令', `
+    <div class="space-y-3">
+      <p class="text-xs text-gray-500">请输入固定口令以继续修改密码</p>
+      <input id="cp-code" type="password" placeholder="固定口令" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <p id="cp-code-msg" class="text-xs h-4"></p>
+      <div class="flex gap-2">
+        <button class="flex-1 border py-2 rounded-full" onclick="closeModal()">取消</button>
+        <button class="flex-1 bg-primary text-white py-2 rounded-full" onclick="verifyResetCode()">验证</button>
+      </div>
+    </div>`, 'sm');
+}
+function verifyResetCode() {
+  const code = document.getElementById('cp-code').value.trim();
+  const msg = document.getElementById('cp-code-msg');
+  if (code !== RESET_PASSWORD_CODE) {
+    msg.textContent = '固定口令错误'; msg.className = 'text-xs text-red-500 h-4'; return;
+  }
   openModal('修改密码', `
     <div class="space-y-3">
-      <input id="cp-old" type="password" placeholder="原密码" class="w-full border rounded-lg px-3 py-2 text-sm" />
       <input id="cp-new" type="password" placeholder="新密码（至少6位）" class="w-full border rounded-lg px-3 py-2 text-sm" />
       <p id="cp-msg" class="text-xs h-4"></p>
       <div class="flex gap-2">
         <button class="flex-1 border py-2 rounded-full" onclick="closeModal()">取消</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full" onclick="submitChangePassword()">确定</button>
       </div>
-    </div>`);
+    </div>`, 'sm');
 }
 function submitChangePassword() {
-  const oldP = document.getElementById('cp-old').value;
   const newP = document.getElementById('cp-new').value;
   const msg = document.getElementById('cp-msg');
   if (!AUTH_TOKEN) { msg.textContent = '未登录，无法修改'; msg.className = 'text-xs text-red-500 h-4'; return; }
-  fetch('/api/password', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AUTH_TOKEN }, body: JSON.stringify({ oldPassword: oldP, newPassword: newP }) })
+  fetch('/api/password', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AUTH_TOKEN }, body: JSON.stringify({ oldPassword: RESET_PASSWORD_CODE, newPassword: newP }) })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('修改失败')))
     .then(() => { closeModal(); toast('密码已更新'); })
     .catch(e => { msg.textContent = e.message; msg.className = 'text-xs text-red-500 h-4'; });

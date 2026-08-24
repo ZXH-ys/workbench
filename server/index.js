@@ -13,6 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ct-workbench-secret-change-me';
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const USE_PG = !!DATABASE_URL;
+const RESET_PASSWORD_CODE = process.env.RESET_PASSWORD_CODE || 'teacher2024';
 
 console.log('[db] 模式:', USE_PG ? 'Postgres (DATABASE_URL)' : 'sql.js (本地文件)');
 
@@ -161,11 +162,13 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, username });
 });
 
-// 修改密码
+// 修改密码：支持原密码 或 固定口令验证
 app.post('/api/password', authMiddleware, async (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
   const u = await store.getUser(req.user);
-  if (!u || !bcrypt.compareSync(oldPassword, u.password_hash)) return res.status(401).json({ error: '原密码错误' });
+  if (!u) return res.status(401).json({ error: '用户不存在' });
+  const isResetCode = oldPassword === RESET_PASSWORD_CODE;
+  if (!isResetCode && !bcrypt.compareSync(oldPassword, u.password_hash)) return res.status(401).json({ error: '原密码错误' });
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: '新密码至少6位' });
   await store.upsertUser(req.user, bcrypt.hashSync(newPassword, 10));
   res.json({ ok: true });
