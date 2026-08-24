@@ -3,3 +3,9 @@ nixPkgs = ["nodejs", "npm", "python3", "gcc", "gnumake"]
 
 [phases.build]
 cmds = ["npm install"]
+
+[deploy]
+startCommand = "node server/index.js"
+healthcheckPath = "/health"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

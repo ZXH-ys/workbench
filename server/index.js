@@ -64,6 +64,9 @@ function authMiddleware(req, res, next) {
 const app = express();
 app.use(express.json({ limit: '25mb' })); // 相册图片可能较大
 
+// 健康检查（Railway 等平台的探针用）
+app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
 // 登录
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
@@ -117,3 +120,7 @@ app.listen(PORT, '0.0.0.0', () => {
 
 // 优雅退出
 process.on('SIGINT', () => { db.close(); process.exit(0); });
+
+// 捕获未处理异常，避免静默崩溃
+process.on('uncaughtException', (err) => { console.error('[fatal] uncaughtException:', err.stack || err.message); process.exit(1); });
+process.on('unhandledRejection', (reason, p) => { console.error('[fatal] unhandledRejection:', reason); });
