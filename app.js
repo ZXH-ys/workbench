@@ -49,8 +49,7 @@ function defaultState() {
       ]},
       { id: 'communication', label: '家校沟通', icon: '💬' },
       { section: '减负工具', items: [
-        { id: 'scores', label: '成绩管理', icon: '📊' },
-        { id: 'exam', label: '成绩分析', icon: '📈' },
+        { id: 'exam', label: '成绩管理', icon: '📊' },
         { id: 'homework', label: '作业管理', icon: '📚' },
         { id: 'templates', label: '模板库', icon: '📋' },
         { id: 'report', label: '周报月报', icon: '📰' },
@@ -134,11 +133,11 @@ function defaultState() {
       { id: uid(), title: '提交本月教学计划', time: '2026-08-25 17:00' },
     ],
     points: defaultPoints(),
-    // ===== 成绩分析（两班对比）=====
+    // ===== 成绩分析（两班对比 + 成员预设）=====
     examData: {
       classes: [
-        { id: 'c1', name: '初三(1)班', students: [] },
-        { id: 'c2', name: '初三(2)班', students: [] },
+        { id: 'c1', name: '初三(1)班', studentNames: [] },
+        { id: 'c2', name: '初三(2)班', studentNames: [] },
       ],
       exams: [],          // [{id,name,date,subjects:[]}]
       records: [],        // [{id,examId,classId,studentName,subject,score}]
@@ -228,8 +227,16 @@ function migrateState(s) {
   if (!Array.isArray(s.classRecords)) s.classRecords = [];
   if (!s.user || typeof s.user !== 'object') s.user = { name: '班主任', role: '' };
   // 成绩分析 / 折算 / 快照
-  if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',students:[]},{id:'c2',name:'初三(2)班',students:[]}], exams: [], records: [], subjects: [] };
-  if (!Array.isArray(s.examData.classes) || !s.examData.classes.length) s.examData.classes = [{id:'c1',name:'初三(1)班',students:[]},{id:'c2',name:'初三(2)班',students:[]}];
+  if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}], exams: [], records: [], subjects: [] };
+  if (!Array.isArray(s.examData.classes) || !s.examData.classes.length) s.examData.classes = [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}];
+  // 旧数据兼容：classes 里若有 students 字段，迁移为 studentNames（旧 students 里可能存的是 {id,name}）
+  s.examData.classes.forEach(c => {
+    if (Array.isArray(c.students)) {
+      c.studentNames = c.students.map(x => typeof x === 'string' ? x : (x && x.name) || '').filter(Boolean);
+      delete c.students;
+    }
+    if (!Array.isArray(c.studentNames)) c.studentNames = [];
+  });
   if (!Array.isArray(s.examData.exams)) s.examData.exams = [];
   if (!Array.isArray(s.examData.records)) s.examData.records = [];
   if (!Array.isArray(s.examData.subjects)) s.examData.subjects = [];
@@ -594,8 +601,8 @@ function renderTopBar() {
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     album: '班级相册', seating: '座次表', duty: '值日表', classRecord: '课堂记录',
-    communication: '家校沟通', scores: '成绩管理', homework: '作业管理', templates: '模板库',
-    report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩分析',
+    communication: '家校沟通', homework: '作业管理', templates: '模板库',
+    report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
@@ -639,7 +646,7 @@ function renderPage() {
   const map = {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
     album: renderAlbum, seating: renderSeating, duty: renderDuty, classRecord: renderClassRecord,
-    communication: renderCommunication, scores: renderScores, homework: renderHomework,
+    communication: renderCommunication, scores: renderExam, homework: renderHomework,
     templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
     points: renderPoints, exam: renderExam,
   };
@@ -2096,14 +2103,22 @@ function renderExam() {
     { id: 'personal', label: '👤 个人追踪' },
   ].map(t => `<button class="px-4 py-1.5 rounded-full text-sm transition ${examTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setExamTab('${t.id}')">${t.label}</button>`).join('');
 
-  // 班级设置区
-  const clsHtml = state.examData.classes.map(c => {
-    const cnt = state.examData.records.filter(r => r.classId === c.id).length;
-    return `<div class="flex items-center gap-2 p-2 rounded-lg bg-gray-50">
-      <input class="flex-1 border rounded p-1.5 text-sm" value="${esc(c.name)}" data-cls="${c.id}" data-field="name">
-      <span class="text-xs text-gray-400">${cnt}条</span>
-    </div>`;
-  }).join('');
+  // 班级设置区（含班级数量、班级成员名单）
+  const clsHtml = state.examData.classes.map(c => `
+    <div class="border rounded-xl p-3 bg-gray-50 space-y-2">
+      <div class="flex items-center gap-2">
+        <input class="flex-1 border rounded p-1.5 text-sm" value="${esc(c.name)}" data-cls="${c.id}" data-field="name">
+        <span class="text-xs text-gray-400">${c.studentNames.length}人</span>
+        ${state.examData.classes.length > 1 ? `<button class="text-gray-300 hover:text-red-500" onclick="delExamClass('${c.id}')">🗑️</button>` : ''}
+      </div>
+      <div class="flex gap-2">
+        <textarea data-cls-names="${c.id}" rows="3" class="flex-1 border rounded p-1.5 text-xs" placeholder="每行一个姓名，或用「上传名单」批量导入">${esc((c.studentNames||[]).join('\n'))}</textarea>
+      </div>
+      <div class="flex gap-2 items-center">
+        <input id="clsFile_${c.id}" type="file" accept=".csv,.txt,.xlsx,.xls" class="text-xs flex-1">
+        <button class="text-xs text-primary hover:underline" onclick="uploadClassNames('${c.id}')">上传名单</button>
+      </div>
+    </div>`).join('');
 
   let body = '';
   if (examTab === 'enter') body = renderExamEnter();
@@ -2114,19 +2129,55 @@ function renderExam() {
   return `
   <div class="space-y-5">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
-      <div class="text-xs text-gray-500 mb-2">班级设置（两个班）</div>
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-xs text-gray-500">班级预设（设置班级数量与成员姓名，导入成绩时按姓名匹配）</div>
+        <button class="text-xs text-primary border border-primary px-2 py-1 rounded-full hover:bg-primary/5" onclick="addExamClass()">+ 增加班级</button>
+      </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${clsHtml}</div>
-      <button class="mt-3 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称</button>
+      <button class="mt-3 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称与名单</button>
     </div>
     <div class="flex flex-wrap gap-2">${tabs}</div>
     <div id="exam-body">${body}</div>
   </div>`;
 }
 function setExamTab(t) { examTab = t; render(); }
+function addExamClass() {
+  const id = 'c' + (Date.now());
+  state.examData.classes.push({ id, name: '新班级', studentNames: [] });
+  save(); render();
+}
+function delExamClass(id) {
+  if (state.examData.classes.length <= 1) return alert('至少保留一个班级');
+  // 同时清理该班的成绩记录
+  state.examData.records = state.examData.records.filter(r => r.classId !== id);
+  state.examData.classes = state.examData.classes.filter(c => c.id !== id);
+  save(); render();
+}
+function uploadClassNames(clsId) {
+  const f = document.getElementById('clsFile_' + clsId);
+  const file = f && f.files[0]; if (!file) return alert('请先选择文件');
+  const r = new FileReader();
+  const finish = (text) => {
+    const names = text.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const c = examClass(clsId);
+    if (c) { c.studentNames = names; save(); render(); alert(`已导入 ${names.length} 名学生到「${c.name}」`); }
+  };
+  if (/\.xlsx?$/i.test(file.name)) {
+    r.onload = e => {
+      try { const wb = XLSX.read(e.target.result, { type: 'array' }); const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); finish(csv); }
+      catch (err) { alert('Excel 解析失败：' + err.message); }
+    };
+    file.arrayBuffer().then(buf => r.readAsArrayBuffer(new Blob([buf]))).catch(()=>alert('读取文件失败'));
+  } else { r.onload = e => finish(e.target.result); r.readAsText(file); }
+}
 function saveExamClasses() {
   document.querySelectorAll('[data-cls]').forEach(el => {
     const c = examClass(el.dataset.cls); if (!c) return;
     c[el.dataset.field] = el.value;
+  });
+  document.querySelectorAll('[data-cls-names]').forEach(el => {
+    const c = examClass(el.dataset.clsNames); if (!c) return;
+    c.studentNames = el.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   });
   save(); render();
 }
@@ -2164,7 +2215,7 @@ function renderExamEnter() {
       </div>
       <hr>
       <h3 class="font-bold text-gray-800">批量导入（Excel / CSV）</h3>
-      <p class="text-[11px] text-gray-400">支持两种格式：<br>① 含班级列：<code>姓名,班级,科目,分数</code><br>② 指定考试+班级，仅 <code>姓名,科目,分数</code><br>首行标题自动跳过。也可直接上传 .xlsx / .xls 文件。</p>
+      <p class="text-[11px] text-gray-400">支持两种格式：<br>① 含班级列：<code>姓名,班级,科目,分数</code><br>② 指定考试+班级，仅 <code>姓名,科目,分数</code><br>首行标题自动跳过。也可直接上传 .xlsx / .xls 文件。姓名会与上方「班级名单」匹配校验。</p>
       <textarea id="exImpText" rows="5" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,初三(1)班,数学,88&#10;王浩然,初三(1)班,数学,92"></textarea>
       <div class="mt-2"><input id="exImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-2 mt-2">
@@ -2217,20 +2268,29 @@ function doExamImport() {
   let start = 0;
   if (rows.length && /姓名|name|学生|班级|科目|分数|score/i.test(rows[0].join(''))) start = 1;
   let n = 0, unmatched = [];
+  // 班级名单匹配提示：若班级已设名单，则仅统计不在名单内的姓名
+  const classNames = {};
+  state.examData.classes.forEach(c => { classNames[c.id] = new Set((c.studentNames||[]).map(x=>x.trim())); });
+  const defaultClass = document.getElementById('exClass') ? document.getElementById('exClass').value : state.examData.classes[0].id;
   for (let i = start; i < rows.length; i++) {
     const cells = rows[i];
     let name, classId, subject, score;
     if (cells.length >= 4) { name = cells[0].trim(); classId = resolveClassId(cells[1].trim()); subject = cells[2].trim(); score = parseFloat(cells[3]); }
-    else if (cells.length === 3) { name = cells[0].trim(); subject = cells[1].trim(); score = parseFloat(cells[2]); classId = document.getElementById('exClass') ? document.getElementById('exClass').value : state.examData.classes[0].id; }
+    else if (cells.length === 3) { name = cells[0].trim(); subject = cells[1].trim(); score = parseFloat(cells[2]); classId = defaultClass; }
     else continue;
     if (!name || !subject || isNaN(score) || !classId) continue;
+    // 若班级设了名单，校验姓名是否在内（不在则仍导入但列入未匹配提示）
+    const names = classNames[classId];
+    if (names && names.size && !names.has(name)) unmatched.push(`${name}（不在${examClass(classId).name}名单）`);
     const ex = state.examData.records.find(r => r.examId===examId && r.classId===classId && r.studentName===name && r.subject===subject);
     if (ex) ex.score = score; else state.examData.records.push({ id: uid(), examId, classId, studentName: name, subject, score });
     n++;
   }
   if (!n) return alert('没有成功解析任何一行');
   save(); render();
-  alert(`成功导入 ${n} 条成绩。`);
+  let msg = `成功导入 ${n} 条成绩。`;
+  if (unmatched.length) msg += `\n注意：以下姓名不在对应班级名单中（已照常导入）：${unmatched.slice(0,10).join('、')}${unmatched.length>10?'…':''}`;
+  alert(msg);
 }
 function resolveClassId(name) {
   if (!name) return null;
@@ -2430,20 +2490,53 @@ function deleteJob(id) {
   save(); renderJobManageInto(); renderJobAssignInto();
 }
 function importJobs() {
-  const txt = prompt('粘贴职务列表，每行一个，格式：职务名称,每日积分\n例如：\n班长,2\n学习委员,2');
-  if (!txt) return;
+  openModal('批量导入职务（支持 Excel / CSV）', `
+    <div class="space-y-4">
+      <p class="text-xs text-gray-500 leading-relaxed">每行一个职务，格式：<code>职务名称,每日积分</code>（制表符或逗号分隔）。首行若是标题自动跳过。也可上传 .xlsx / .xls / .csv 文件。</p>
+      <textarea id="impJobsText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="班长,2&#10;学习委员,2&#10;体育委员,1.5"></textarea>
+      <div><input id="impJobsFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
+      <div class="flex gap-2">
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impJobsText').value='班长,2\\n学习委员,2\\n体育委员,1.5'">填入示例</button>
+        <button class="bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportJobs()">导入</button>
+      </div>
+    </div>`, 'lg');
+  const f = document.getElementById('impJobsFile');
+  if (f) f.addEventListener('change', () => {
+    const file = f.files[0]; if (!file) return;
+    const r = new FileReader();
+    if (/\.xlsx?$/i.test(file.name)) {
+      r.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: 'array' });
+          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+          document.getElementById('impJobsText').value = csv;
+        } catch (err) { alert('Excel 解析失败：' + err.message); }
+      };
+      file.arrayBuffer().then(buf => r.readAsArrayBuffer(new Blob([buf]))).catch(()=>alert('读取文件失败'));
+    } else {
+      r.onload = e => { document.getElementById('impJobsText').value = e.target.result; };
+      r.readAsText(file);
+    }
+  });
+}
+function doImportJobs() {
+  const text = document.getElementById('impJobsText').value.trim();
+  if (!text) return alert('请粘贴或上传职务数据');
   collectJobs();
+  const rows = parseCSV(text);
+  let start = 0;
+  if (rows.length && /职务|名称|name|职位/.test(rows[0][0])) start = 1;
   let n = 0;
-  txt.split('\n').forEach(line => {
-    const parts = line.split(/[,，\t]/).map(x => x.trim());
-    if (!parts[0]) return;
-    const name = parts[0], daily = parseFloat(parts[1]) || 0;
+  for (let i = start; i < rows.length; i++) {
+    const name = (rows[i][0] || '').trim();
+    if (!name) continue;
+    const daily = parseFloat(rows[i][1]) || 0;
     if (!state.points.jobs.some(j => j.name === name))
       state.points.jobs.push({ id: uid(), name, daily });
     n++;
-  });
+  }
   if (!n) return alert('没有可导入的职务');
-  save(); renderJobManageInto();
+  save(); closeModal(); renderJobManageInto(); renderJobAssignInto();
 }
 
 // ---------- 积分日志 / 撤销 ----------
@@ -2706,6 +2799,9 @@ function qrToggleStu(id) {
   if (on) { qrDraft.students = qrDraft.students.filter(x => x.id !== id); btn.classList.remove('qr-on'); btn.classList.add('qr-off'); }
   else { const s = state.students.find(x => x.id === id); qrDraft.students.push({ id: s.id, name: s.name }); btn.classList.add('qr-on'); btn.classList.remove('qr-off'); }
 }
+// 快速记录：表扬/批评自动折算积分（日常维度），可在数据管理-设置里调整
+let QR_PRAISE_POINTS = 1;   // 表扬自动 + 分
+let QR_CRITIC_POINTS = -1;  // 批评自动 - 分
 function qrSave() {
   const content = document.getElementById('qrContent').value.trim();
   const date = document.getElementById('qrDate').value.trim() || todayLabel;
@@ -2713,15 +2809,26 @@ function qrSave() {
   if (!qrDraft.types.length) return alert('请至少选择一个记录类型');
   if (!content) return alert('请输入记录内容');
   let n = 0;
+  const autoPointLogs = []; // 记录自动加减分明细，便于提示
   qrDraft.students.forEach(st => {
     qrDraft.types.forEach(t => {
       const s = state.students.find(x => x.id === st.id);
-      if (s) { s.records.unshift({ id: uid(), type: t, date, content }); n++; }
+      if (!s) return;
+      s.records.unshift({ id: uid(), type: t, date, content }); n++;
+      // 自动按对应模块加减分：表扬→日常+，批评→日常-（谈心不计分）
+      if (t === 'praise' && QR_PRAISE_POINTS) {
+        ptWriteLog(s.id, 'daily', QR_PRAISE_POINTS, '快速记录·表扬：' + content.slice(0, 20));
+        autoPointLogs.push(`${s.name} 日常+${QR_PRAISE_POINTS}`);
+      } else if (t === 'critic' && QR_CRITIC_POINTS) {
+        ptWriteLog(s.id, 'daily', QR_CRITIC_POINTS, '快速记录·批评：' + content.slice(0, 20));
+        autoPointLogs.push(`${s.name} 日常${QR_CRITIC_POINTS}`);
+      }
     });
   });
   lastRecordContent = content;
   save(); closeModal();
-  const msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
+  let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
+  if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
   toast(msg);
   render();
 }
