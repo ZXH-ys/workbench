@@ -2055,6 +2055,9 @@ function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !=
 const EXAM_SUBJECT = '数学';
 let examTab = 'analysis'; // analysis | manage
 let examSelectedStudent = ''; // 当前在榜单中选中的学生
+// 智能导入向导状态
+let eiBook = null, eiSheets = [], eiSheetName = '', eiRows = [], eiHeaders = [];
+let eiNameCol = -1, eiClassCol = -1, eiScoreCol = -1, eiHeaderRow = 1, eiExamId = '';
 // 公示列开关（仅 UI 偏好，不持久化）
 let examAnalysisColumns = {
   score: true,
@@ -2294,11 +2297,8 @@ function renderExamManage() {
 
       <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
         <h3 class="font-bold text-gray-800">📥 批量导入数学成绩</h3>
-        <p class="text-[11px] text-gray-400">每行一个学生：<code>姓名,分数</code>。姓名会先与「班级名单」自动匹配班级。支持上传 Excel/CSV。</p>
-        <select id="exImpExam" class="w-full border rounded-lg p-2 text-sm">${examOpts}</select>
-        <textarea id="exImpText" rows="6" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,88&#10;王浩然,92"></textarea>
-        <input id="exImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
-        <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="doExamImport()">导入成绩</button>
+        <p class="text-[11px] text-gray-400">支持多工作表 Excel：选工作表 → 识别标题 → 按姓名匹配班级 → 选择用于比较的分数列，一键导入。也支持直接粘贴 <code>姓名,分数</code>。</p>
+        <button class="w-full bg-primary text-white py-2.5 rounded-full text-sm hover:bg-primaryDark" onclick="openExamImportWizard()">🚀 打开智能导入向导</button>
 
         <h3 class="font-bold text-gray-800 pt-2 border-t mt-2">➕ 单条录入</h3>
         <div class="grid grid-cols-2 gap-3">
@@ -2338,34 +2338,245 @@ function saveExamScore() {
   else state.examData.records.push({ id: uid(), examId, classId, studentName: name, subject, score });
   save(); render();
 }
-function doExamImport() {
-  const examId = document.getElementById('exImpExam').value;
-  if (!examId) return alert('请先选择考试');
-  const text = document.getElementById('exImpText').value.trim();
-  if (!text) return alert('请粘贴成绩数据');
-  const rows = parseCSV(text);
-  let start = 0;
-  if (rows.length && /姓名|name|学生|分数|score|数学/i.test(rows[0].join(''))) start = 1;
-  let n = 0, unmatched = [];
-  for (let i = start; i < rows.length; i++) {
-    const cells = rows[i];
-    if (!cells.length) continue;
-    let name = (cells[0] || '').trim();
-    let score = parseFloat(cells[1]);
-    if (!name || isNaN(score)) continue;
-    let classId = findClassIdByName(name);
-    if (!classId) { unmatched.push(name); continue; }
-    const ex = state.examData.records.find(r => r.examId === examId && r.classId === classId && r.studentName === name && r.subject === EXAM_SUBJECT);
-    if (ex) ex.score = score;
-    else state.examData.records.push({ id: uid(), examId, classId, studentName: name, subject: EXAM_SUBJECT, score });
-    n++;
+
+// ---------- 成绩智能导入向导 ----------
+function openExamImportWizard() {
+  if (!state.examData.exams.length) { alert('请先在「考试管理」添加考试，再导入成绩'); return; }
+  eiBook = null; eiSheets = []; eiSheetName = ''; eiRows = []; eiHeaders = [];
+  eiNameCol = -1; eiClassCol = -1; eiScoreCol = -1; eiHeaderRow = 1;
+  eiExamId = state.examData.exams[state.examData.exams.length - 1].id;
+  openModal('📥 智能导入成绩', '<div id="eiHost"></div>', 'xl');
+  eiRenderBody();
+}
+function eiRenderBody() {
+  const host = document.querySelector('#modal-root .p-6');
+  if (!host) return;
+  host.innerHTML = renderEIWizardBody();
+  attachEIWizard();
+}
+function renderEIWizardBody() {
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}" ${e.id === eiExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+  const hasData = eiRows.length > 1;
+  const sheetOpts = eiSheets.map(s => `<option value="${esc(s)}" ${s === eiSheetName ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const colOptions = (sel, includeNone) => {
+    let o = includeNone ? `<option value="-1" ${sel === -1 ? 'selected' : ''}>（不使用）</option>` : '';
+    eiHeaders.forEach((h, i) => { o += `<option value="${i}" ${sel === i ? 'selected' : ''}>${esc(h || ('列' + (i + 1)))}</option>`; });
+    return o;
+  };
+  const canImport = hasData && eiNameCol >= 0 && eiScoreCol >= 0;
+  return `
+  <div class="space-y-5">
+    <div class="flex items-center gap-2 text-xs text-gray-500">
+      <span class="px-2 py-1 rounded-full ${hasData ? 'bg-green-100 text-green-700' : 'bg-gray-100'}">① 选文件 / 工作表</span>
+      <span>→</span>
+      <span class="px-2 py-1 rounded-full ${hasData ? 'bg-primary/10 text-primary' : 'bg-gray-100'}">② 识别标题 · 字段映射 · 预览</span>
+    </div>
+
+    <div class="bg-gray-50 rounded-xl p-4 space-y-3">
+      <div class="flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-[200px]">
+          <label class="block text-xs text-gray-500 mb-1">选择文件（Excel / CSV / 文本）</label>
+          <input id="eiFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
+        </div>
+        <div id="eiSheetWrap" class="${eiSheets.length ? '' : 'hidden'}">
+          <label class="block text-xs text-gray-500 mb-1">工作表</label>
+          <select id="eiSheet" class="border rounded-lg p-2 text-sm">${sheetOpts}</select>
+        </div>
+        <div id="eiHeaderRowWrap" class="${eiSheets.length ? '' : 'hidden'}">
+          <label class="block text-xs text-gray-500 mb-1">标题行</label>
+          <input id="eiHeaderRow" type="number" min="1" value="${eiHeaderRow}" class="border rounded-lg p-2 text-sm w-20">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">导入到考试</label>
+          <select id="eiExam" class="border rounded-lg p-2 text-sm">${examOpts}</select>
+        </div>
+      </div>
+      <p class="text-[11px] text-gray-400">支持含多个工作表的 Excel（可切换）；也可在下方直接粘贴 <code>姓名,分数</code> 文本。第一行将自动识别为标题。</p>
+      <textarea id="eiPaste" rows="3" class="w-full border rounded-lg p-3 text-sm" placeholder="也可直接粘贴：&#10;姓名,分数&#10;张明轩,88&#10;王浩然,92">${hasData && !eiBook ? eiRows.map(r => r.join(',')).join('\n') : ''}</textarea>
+    </div>
+
+    <div id="eiMapWrap" class="${hasData ? 'space-y-3' : 'hidden space-y-3'}">
+      <div class="font-bold text-gray-800 text-sm">识别到的标题（点选列映射）</div>
+      <div id="eiHeadChips" class="flex flex-wrap gap-2">${eiChipsHTML()}</div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">姓名列 *</label><select id="eiNameCol" class="w-full border rounded-lg p-2 text-sm">${colOptions(eiNameCol, false)}</select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">班级列（可选）</label><select id="eiClassCol" class="w-full border rounded-lg p-2 text-sm">${colOptions(eiClassCol, true)}</select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">分数 / 成绩列 *（用于比较）</label><select id="eiScoreCol" class="w-full border rounded-lg p-2 text-sm">${colOptions(eiScoreCol, false)}</select></div>
+      </div>
+      <div class="overflow-x-auto border rounded-xl">
+        <table class="w-full text-xs" id="eiPreviewTable"></table>
+      </div>
+      <div id="eiMatchInfo" class="text-xs"></div>
+    </div>
+
+    <div class="flex gap-3 pt-1">
+      <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">取消</button>
+      <button id="eiImportBtn" class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark disabled:opacity-40" onclick="doExamImportWizard()" ${canImport ? '' : 'disabled'}>导入成绩</button>
+    </div>
+  </div>`;
+}
+function eiChipsHTML() {
+  if (!eiHeaders.length) return '';
+  return eiHeaders.map((h, i) => {
+    let cls = 'bg-gray-100 text-gray-600';
+    let tag = '';
+    if (i === eiNameCol) { cls = 'bg-pink-100 text-pink-700'; tag = '姓名'; }
+    else if (i === eiScoreCol) { cls = 'bg-green-100 text-green-700'; tag = '分数'; }
+    else if (i === eiClassCol) { cls = 'bg-blue-100 text-blue-700'; tag = '班级'; }
+    return `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full ${cls}">${esc(h || ('列' + (i + 1)))} ${tag ? `<b class="font-bold">${tag}</b>` : ''}</span>`;
+  }).join('');
+}
+function eiPreviewHTML() {
+  if (eiRows.length < 2) return '';
+  let h = '<thead><tr class="bg-gray-100 text-gray-600">';
+  eiHeaders.forEach((hd, i) => {
+    const hl = (i === eiNameCol || i === eiClassCol || i === eiScoreCol) ? 'style="background:#fce7f3"' : '';
+    h += `<th class="px-2 py-1.5 text-left whitespace-nowrap font-medium" ${hl}>${esc(hd || ('列' + (i + 1)))}</th>`;
+  });
+  h += '</tr></thead><tbody>';
+  eiRows.slice(1, 11).forEach(r => {
+    h += '<tr class="border-t hover:bg-gray-50">';
+    eiHeaders.forEach((hd, i) => {
+      const hl = (i === eiNameCol || i === eiClassCol || i === eiScoreCol) ? 'style="background:#fdf2f8"' : '';
+      h += `<td class="px-2 py-1.5 whitespace-nowrap" ${hl}>${esc(String(r[i] ?? ''))}</td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody>';
+  if (eiRows.length - 1 > 10) h += `<caption class="text-[10px] text-gray-400 p-2">仅预览前 10 行，共 ${eiRows.length - 1} 条数据</caption>`;
+  return h;
+}
+function eiMatchInfoHTML() {
+  if (eiRows.length < 2 || eiNameCol < 0 || eiScoreCol < 0) return '';
+  let total = 0, matched = 0, invalid = 0; const unmatched = [];
+  eiRows.slice(1).forEach(r => {
+    const name = String(r[eiNameCol] ?? '').trim();
+    if (!name) return;
+    const sc = parseFloat(String(r[eiScoreCol] ?? '').trim());
+    if (isNaN(sc)) { invalid++; return; }
+    total++;
+    let cid = null;
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv && (c.studentNames || []).includes(name)) || {}).id; }
+    if (!cid) cid = findClassIdByName(name);
+    if (cid) matched++; else unmatched.push(name);
+  });
+  const unmatchedTxt = unmatched.length ? `未匹配 <b class="text-red-500">${unmatched.length}</b> 人（${esc(unmatched.slice(0, 8).join('、'))}${unmatched.length > 8 ? '…' : ''}）` : '';
+  return `<div class="flex flex-wrap gap-x-4 gap-y-1">
+    <span>数据共 <b>${total}</b> 条</span>
+    <span>可匹配班级 <b class="text-green-600">${matched}</b> 人</span>
+    ${invalid ? `<span>分数无效 <b class="text-orange-500">${invalid}</b> 行</span>` : ''}
+    ${unmatchedTxt ? `<span>${unmatchedTxt}</span>` : ''}
+    ${!unmatched.length && !invalid ? '<span class="text-green-600">✓ 全部匹配成功</span>' : ''}
+  </div>`;
+}
+function eiRefreshPreview() {
+  const chips = document.getElementById('eiHeadChips'); if (chips) chips.innerHTML = eiChipsHTML();
+  const pt = document.getElementById('eiPreviewTable'); if (pt) pt.innerHTML = eiPreviewHTML();
+  const mi = document.getElementById('eiMatchInfo'); if (mi) mi.innerHTML = eiMatchInfoHTML();
+  const btn = document.getElementById('eiImportBtn');
+  if (btn) btn.disabled = !(eiRows.length > 1 && eiNameCol >= 0 && eiScoreCol >= 0);
+}
+function eiAutoDetect() {
+  eiNameCol = -1; eiClassCol = -1; eiScoreCol = -1;
+  eiHeaders.forEach((h, i) => {
+    const s = String(h || '');
+    if (eiNameCol < 0 && /姓名|名字|name|学生/i.test(s)) eiNameCol = i;
+    if (eiClassCol < 0 && /班级|class/i.test(s)) eiClassCol = i;
+    if (eiScoreCol < 0 && /数学/i.test(s)) eiScoreCol = i;
+  });
+  if (eiScoreCol < 0) eiHeaders.forEach((h, i) => { if (eiScoreCol < 0 && /分数|成绩|得分|总分|score/i.test(String(h || ''))) eiScoreCol = i; });
+  if (eiNameCol < 0 && eiHeaders.length >= 1) eiNameCol = 0;
+  if (eiScoreCol < 0 && eiHeaders.length >= 2) eiScoreCol = eiHeaders.length - 1;
+}
+function eiLoadSheet(name) {
+  if (!eiBook || !name) return;
+  const ws = eiBook.Sheets[name];
+  if (!ws) return;
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const idx = Math.max(0, (parseInt(eiHeaderRow, 10) || 1) - 1);
+  const header = (raw[idx] || []).map(c => String(c ?? '').trim());
+  const data = raw.slice(idx + 1).filter(r => Array.isArray(r) && r.some(c => c !== '' && c !== undefined && c !== null));
+  eiRows = [header, ...data];
+  eiHeaders = header;
+  eiAutoDetect();
+}
+function eiOnFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (['xlsx', 'xls'].includes(ext)) {
+    if (typeof XLSX === 'undefined') { alert('Excel 解析库尚未加载，请刷新页面后再试'); return; }
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        eiBook = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        eiSheets = eiBook.SheetNames;
+        eiSheetName = eiSheets[0] || '';
+        eiLoadSheet(eiSheetName);
+        eiRenderBody();
+      } catch (err) { alert('解析 Excel 失败：' + (err && err.message ? err.message : err)); }
+    };
+    r.readAsArrayBuffer(file);
+  } else {
+    const r = new FileReader();
+    r.onload = ev => {
+      eiBook = null; eiSheets = []; eiSheetName = '';
+      eiRows = parseCSV(ev.target.result);
+      eiHeaders = eiRows[0] || [];
+      eiAutoDetect();
+      eiRenderBody();
+    };
+    r.readAsText(file);
   }
-  save(); render();
-  let msg = `成功导入 ${n} 条数学成绩。`;
-  if (unmatched.length) msg += `\n未匹配到班级名单（未导入）：${unmatched.slice(0, 15).join('、')}${unmatched.length > 15 ? '…' : ''}`;
+}
+function attachEIWizard() {
+  const file = document.getElementById('eiFile'); if (file) file.addEventListener('change', eiOnFile);
+  const sheet = document.getElementById('eiSheet');
+  if (sheet) sheet.addEventListener('change', () => { eiSheetName = sheet.value; eiLoadSheet(eiSheetName); eiRenderBody(); });
+  const hr = document.getElementById('eiHeaderRow');
+  if (hr) hr.addEventListener('change', () => { eiHeaderRow = parseInt(hr.value, 10) || 1; if (eiSheetName) { eiLoadSheet(eiSheetName); eiRenderBody(); } });
+  const paste = document.getElementById('eiPaste');
+  if (paste) paste.addEventListener('input', () => {
+    const text = paste.value.trim();
+    if (!text) { eiRows = []; eiHeaders = []; eiRenderBody(); return; }
+    eiBook = null; eiSheets = []; eiSheetName = '';
+    eiRows = parseCSV(text);
+    eiHeaders = eiRows[0] || [];
+    eiAutoDetect();
+    eiRenderBody();
+  });
+  const nc = document.getElementById('eiNameCol'); if (nc) nc.addEventListener('change', () => { eiNameCol = parseInt(nc.value, 10); eiRefreshPreview(); });
+  const cc = document.getElementById('eiClassCol'); if (cc) cc.addEventListener('change', () => { eiClassCol = parseInt(cc.value, 10); eiRefreshPreview(); });
+  const sc = document.getElementById('eiScoreCol'); if (sc) sc.addEventListener('change', () => { eiScoreCol = parseInt(sc.value, 10); eiRefreshPreview(); });
+  const ex = document.getElementById('eiExam'); if (ex) ex.addEventListener('change', () => { eiExamId = ex.value; });
+  eiRefreshPreview();
+}
+function doExamImportWizard() {
+  const examId = eiExamId;
+  if (!examId) return alert('请选择考试');
+  if (eiNameCol < 0) return alert('请指定姓名列');
+  if (eiScoreCol < 0) return alert('请指定分数列');
+  if (eiRows.length < 2) return alert('没有可导入的数据');
+  let n = 0, invalid = 0; const unmatched = [];
+  eiRows.slice(1).forEach(r => {
+    const name = String(r[eiNameCol] ?? '').trim();
+    if (!name) return;
+    const sc = parseFloat(String(r[eiScoreCol] ?? '').trim());
+    if (isNaN(sc)) { invalid++; return; }
+    let cid = null;
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv && (c.studentNames || []).includes(name)) || {}).id; }
+    if (!cid) cid = findClassIdByName(name);
+    if (!cid) { unmatched.push(name); return; }
+    const ex = state.examData.records.find(x => x.examId === examId && x.classId === cid && x.studentName === name && x.subject === EXAM_SUBJECT);
+    if (ex) ex.score = sc; else state.examData.records.push({ id: uid(), examId, classId: cid, studentName: name, subject: EXAM_SUBJECT, score: sc });
+    n++;
+  });
+  save(); closeModal(); render();
+  let msg = `成功导入 ${n} 条数学成绩`;
+  if (unmatched.length) msg += `\n未匹配到班级名单（已跳过）：${unmatched.slice(0, 15).join('、')}${unmatched.length > 15 ? '…' : ''}`;
+  if (invalid) msg += `\n分数无效 ${invalid} 行（已跳过）`;
   alert(msg);
 }
-
 // ---------- 成绩分析看板 ----------
 function renderExamAnalysis() {
   if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「数据管理」添加考试并导入成绩。</p></div>`;
@@ -2605,8 +2816,7 @@ render = function() {
   _origRender();
   setTimeout(() => {
     if (currentRoute === 'exam') {
-      if (examTab === 'manage') bindFileToText('exImpFile', 'exImpText');
-      else if (examTab === 'analysis') renderExamAnalysisInto();
+      if (examTab === 'analysis') renderExamAnalysisInto();
     }
   }, 0);
 };
@@ -3295,7 +3505,7 @@ function clearAllData() {
 
 // ===================== Modal =====================
 function openModal(title, body, size='md') {
-  const width = size === 'lg' ? 'max-w-2xl' : size === 'sm' ? 'max-w-sm' : 'max-w-lg';
+  const width = size === 'xl' ? 'max-w-4xl' : size === 'lg' ? 'max-w-2xl' : size === 'sm' ? 'max-w-sm' : 'max-w-lg';
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="if(event.target===this) closeModal()">
       <div class="bg-white rounded-2xl shadow-2xl w-full ${width} max-h-[90vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
