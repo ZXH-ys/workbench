@@ -50,6 +50,7 @@ function defaultState() {
       { id: 'communication', label: '家校沟通', icon: '💬' },
       { section: '减负工具', items: [
         { id: 'scores', label: '成绩管理', icon: '📊' },
+        { id: 'exam', label: '成绩分析', icon: '📈' },
         { id: 'homework', label: '作业管理', icon: '📚' },
         { id: 'templates', label: '模板库', icon: '📋' },
         { id: 'report', label: '周报月报', icon: '📰' },
@@ -133,6 +134,20 @@ function defaultState() {
       { id: uid(), title: '提交本月教学计划', time: '2026-08-25 17:00' },
     ],
     points: defaultPoints(),
+    // ===== 成绩分析（两班对比）=====
+    examData: {
+      classes: [
+        { id: 'c1', name: '初三(1)班', students: [] },
+        { id: 'c2', name: '初三(2)班', students: [] },
+      ],
+      exams: [],          // [{id,name,date,subjects:[]}]
+      records: [],        // [{id,examId,classId,studentName,subject,score}]
+      subjects: [],       // 全局科目列表
+    },
+    // ===== 积分折算比例（各维度 × 比例 = 折算分）=====
+    convertRatios: { sport: 1, daily: 1, exam: 1, post: 1 },
+    // ===== 历史快照（按日期回看积分榜）=====
+    snapshots: [],        // [{id,date,type,ranking:[{name,score,conv}]}]
   };
 }
 
@@ -207,6 +222,15 @@ function migrateState(s) {
   if (!s.points.jobStartDate) s.points.jobStartDate = '2026-01-01';
   if (!Array.isArray(s.classRecords)) s.classRecords = [];
   if (!s.user || typeof s.user !== 'object') s.user = { name: '班主任', role: '' };
+  // 成绩分析 / 折算 / 快照
+  if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',students:[]},{id:'c2',name:'初三(2)班',students:[]}], exams: [], records: [], subjects: [] };
+  if (!Array.isArray(s.examData.classes) || !s.examData.classes.length) s.examData.classes = [{id:'c1',name:'初三(1)班',students:[]},{id:'c2',name:'初三(2)班',students:[]}];
+  if (!Array.isArray(s.examData.exams)) s.examData.exams = [];
+  if (!Array.isArray(s.examData.records)) s.examData.records = [];
+  if (!Array.isArray(s.examData.subjects)) s.examData.subjects = [];
+  if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
+  ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 1; });
+  if (!Array.isArray(s.snapshots)) s.snapshots = [];
   // 学生补全 alias 字段
   if (Array.isArray(s.students)) s.students.forEach(st => { if (st && typeof st.alias === 'undefined') st.alias = ''; });
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
@@ -543,7 +567,7 @@ function renderTopBar() {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     album: '班级相册', seating: '座次表', duty: '值日表', classRecord: '课堂记录',
     communication: '家校沟通', scores: '成绩管理', homework: '作业管理', templates: '模板库',
-    report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理',
+    report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩分析',
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
@@ -589,7 +613,7 @@ function renderPage() {
     album: renderAlbum, seating: renderSeating, duty: renderDuty, classRecord: renderClassRecord,
     communication: renderCommunication, scores: renderScores, homework: renderHomework,
     templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
-    points: renderPoints,
+    points: renderPoints, exam: renderExam,
   };
   return (map[currentRoute] || renderHome)();
 }
@@ -1441,6 +1465,10 @@ function renderPPTLive() {
 // ===================== Points: 积分管理 =====================
 let pointsTab = 'all';
 let pointsQuery = '';
+let pointsMode = 'conv'; // 'conv' 折算分 | 'raw' 原始分
+
+function setPtMode(m) { pointsMode = m; render(); }
+function ptScoreOf(sid) { return pointsMode === 'conv' ? ptConvTotal(sid) : ptRawTotal(sid); }
 
 function nowStamp() {
   const d = new Date(); const p = n => String(n).padStart(2, '0');
@@ -1452,7 +1480,7 @@ function ptTotal(sid) { return ptSum(ptStudentLogs(sid)); }
 function ptDimScore(sid, dim) { return ptSum(ptStudentLogs(sid).filter(l => l.dim === dim)); }
 function ptClassSum(dim) { return ptSum(state.points.logs.filter(l => dim === 'all' || l.dim === dim)); }
 function ptRanked(dim) {
-  const arr = state.students.map(s => ({ s, score: dim === 'all' ? ptTotal(s.id) : ptDimScore(s.id, dim) }));
+  const arr = state.students.map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
   return arr;
 }
@@ -1467,6 +1495,10 @@ function fmtScore(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
 function ptSigned(d) { return (d >= 0 ? '+' : '') + fmtScore(d); }
 function ptStudentName(sid) { const s = state.students.find(x => x.id === sid); return s ? s.name : '（已删除学生）'; }
 function ptJobsOf(sid) { return state.points.assigns.filter(a => a.stuId === sid).map(a => { const j = state.points.jobs.find(x => x.id === a.jobId); return j ? j.name : ''; }).filter(Boolean); }
+// ===== 折算：各维度原始分 × 比例 = 折算分 =====
+function ptConvDim(sid, dim) { return (ptDimScore(sid, dim) || 0) * (state.convertRatios[dim] != null ? state.convertRatios[dim] : 1); }
+function ptConvTotal(sid) { return POINT_DIMS.reduce((a, d) => a + ptConvDim(sid, d.id), 0); }
+function ptRawTotal(sid) { return ptTotal(sid); }
 
 function setPtTab(t) { pointsTab = t; render(); }
 function ptFilter(v) { pointsQuery = v; const el = document.getElementById('pt-list'); if (el) el.innerHTML = renderPtList(); }
@@ -1495,6 +1527,11 @@ function renderPoints() {
     `<button class="px-4 py-1.5 rounded-full text-sm transition ${pointsTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setPtTab('${t.id}')">${t.icon} ${t.label}</button>`
   ).join('');
 
+  const modeToggle = `<div class="flex gap-1 text-xs">
+    <button class="px-3 py-1.5 rounded-full ${pointsMode==='conv'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" onclick="setPtMode('conv')">折算分</button>
+    <button class="px-3 py-1.5 rounded-full ${pointsMode==='raw'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" onclick="setPtMode('raw')">原始分</button>
+  </div>`;
+
   return `
   <div class="space-y-5">
     <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -1509,7 +1546,13 @@ function renderPoints() {
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div class="flex flex-wrap gap-2">${tabs}</div>
-        <input value="${esc(pointsQuery)}" oninput="ptFilter(this.value)" placeholder="🔍 搜索学生姓名" class="border rounded-full px-4 py-1.5 text-sm w-48 focus:outline-none focus:border-primary">
+        <div class="flex items-center gap-2 flex-wrap">
+          ${modeToggle}
+          <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openConvertSettings()">⚙️ 折算</button>
+          <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtHistory()">📅 历史</button>
+          <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtImport()">⬆️ 导入Excel</button>
+          <input value="${esc(pointsQuery)}" oninput="ptFilter(this.value)" placeholder="🔍 搜索学生姓名" class="border rounded-full px-4 py-1.5 text-sm w-40 focus:outline-none focus:border-primary">
+        </div>
       </div>
       <div id="pt-list" class="space-y-2">${renderPtList()}</div>
     </div>
@@ -1550,7 +1593,7 @@ function renderPtList() {
           <div class="flex gap-1">${pills}</div>
         </div>
       </div>
-      <div class="text-right shrink-0 w-14"><span class="text-lg font-bold ${x.score >= 0 ? 'text-gray-800' : 'text-emerald-600'}">${fmtScore(x.score)}</span><div class="text-[10px] text-gray-400">分</div></div>
+      <div class="text-right shrink-0 w-14"><span class="text-lg font-bold ${x.score >= 0 ? 'text-gray-800' : 'text-emerald-600'}">${fmtScore(x.score)}</span><div class="text-[10px] text-gray-400">${pointsMode==='conv'?'折算分':'原始分'}</div></div>
       <div class="flex gap-1 shrink-0">
         <button class="w-8 h-8 rounded-full bg-red-50 text-red-500 hover:bg-red-100 text-sm font-bold" title="加分" onclick="openPtAdjust('${x.s.id}','${dim === 'all' ? 'daily' : dim}',1)">＋</button>
         <button class="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 hover:bg-emerald-100 text-sm font-bold" title="扣分" onclick="openPtAdjust('${x.s.id}','${dim === 'all' ? 'daily' : dim}',-1)">－</button>
@@ -1849,6 +1892,474 @@ function calcJobScores() {
   if (!count) return alert('还没有任何职务分配，请先在「职务分配」勾选');
   save(); closeModal(); render();
 }
+
+// ===================== 折算设置 =====================
+function openConvertSettings() {
+  const rows = POINT_DIMS.map(d => {
+    const st = dimStyle(d.id);
+    const v = state.convertRatios[d.id] != null ? state.convertRatios[d.id] : 1;
+    return `<div class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-50">
+      <span class="flex-1 text-sm ${st.text} font-medium">${d.icon} ${d.label}</span>
+      <span class="text-xs text-gray-400">原始分 ×</span>
+      <input id="conv_${d.id}" type="number" step="0.01" value="${v}" class="w-20 border rounded p-1.5 text-sm">
+      <span class="text-xs text-gray-400">= 折算分</span>
+    </div>`;
+  }).join('');
+  openModal('积分折算设置', `
+    <div class="space-y-3">
+      <p class="text-xs text-gray-500 leading-relaxed">每个维度的「原始分」乘以对应比例得到「折算分」，总分 = 各维度折算分之和。例如：体育原始分 100、比例 0.5 → 折算 50 分。可随时调整，立即生效。</p>
+      ${rows}
+      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveConvertSettings()">保存折算比例</button>
+    </div>`, 'md');
+}
+function saveConvertSettings() {
+  POINT_DIMS.forEach(d => {
+    const v = parseFloat(document.getElementById('conv_' + d.id).value);
+    state.convertRatios[d.id] = isNaN(v) ? 1 : v;
+  });
+  save(); closeModal(); render();
+}
+
+// ===================== 积分 Excel / CSV 导入（按维度按姓名累加）=====================
+function openPtImport() {
+  openModal('批量导入积分（按姓名累加）', `
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">选择积分维度</label>
+        <select id="ptImpDim" class="w-full border rounded-lg p-2 text-sm">
+          ${POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('')}
+        </select>
+        <p class="text-[11px] text-gray-400 mt-1">体育 / 日常 一般每周结算；考试 日期不定 —— 都用此入口按姓名累加。</p>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">粘贴 / 上传数据</label>
+        <p class="text-[11px] text-gray-400 mb-1">每行一个：<code>姓名,分值</code>（制表符或逗号分隔）。按姓名匹配学生，累加分值。首行若是标题自动跳过。</p>
+        <textarea id="ptImpText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,5&#10;王浩然,3&#10;李思雨,-2"></textarea>
+        <div class="mt-2"><input id="ptImpFile" type="file" accept=".csv,.txt,.xlsx" class="w-full text-sm"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <button class="border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('ptImpText').value='姓名,分值\\n张明轩,5\\n王浩然,3'">填入示例</button>
+        <button class="bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doPtImport()">导入并累加</button>
+      </div>
+    </div>`, 'lg');
+  const f = document.getElementById('ptImpFile');
+  if (f) f.addEventListener('change', () => {
+    const file = f.files[0]; if (!file) return;
+    const r = new FileReader();
+    r.onload = e => { const t = document.getElementById('ptImpText'); if (t) t.value = e.target.result; };
+    r.readAsText(file);
+  });
+}
+function doPtImport() {
+  const dim = document.getElementById('ptImpDim').value;
+  const text = document.getElementById('ptImpText').value.trim();
+  if (!text) return alert('请粘贴或上传积分数据');
+  const rows = parseCSV(text);
+  let start = 0;
+  if (rows.length && /姓名|name|学生|名字/.test(rows[0][0])) start = 1;
+  let n = 0, matched = 0, unmatched = [];
+  const batchId = uid();
+  for (let i = start; i < rows.length; i++) {
+    const name = (rows[i][0] || '').trim();
+    const val = parseFloat(rows[i][1]);
+    if (!name || isNaN(val)) continue;
+    const stu = state.students.find(s => s.name === name);
+    if (!stu) { unmatched.push(name); continue; }
+    ptWriteLog(stu.id, dim, val, `Excel导入`, batchId);
+    matched++; n++;
+  }
+  if (!matched) return alert('没有匹配到任何学生，请检查姓名是否与「学生管理」一致。');
+  // 导入即生成快照
+  takeSnapshot('import');
+  save(); closeModal();
+  render();
+  let msg = `成功导入 ${matched} 条（${dimLabel(dim)}）。`;
+  if (unmatched.length) msg += `\n未匹配（姓名不存在）：${unmatched.join('、')}`;
+  alert(msg);
+}
+
+// ===================== 历史快照（按日期回看积分榜）=====================
+function takeSnapshot(type) {
+  const date = new Date().toISOString().slice(0, 10);
+  const ranking = state.students.map(s => ({ name: s.name, score: ptScoreOf(s.id), raw: ptRawTotal(s.id) }))
+    .sort((a, b) => b.score - a.score);
+  state.snapshots.unshift({ id: uid(), date, type: type || 'manual', ranking });
+}
+function openPtHistory() {
+  const snapHtml = state.snapshots.length ? state.snapshots.map(sp => {
+    const top = sp.ranking.slice(0, 5).map((r, i) => `<span class="text-xs text-gray-600">${i+1}.${esc(r.name)} ${fmtScore(r.score)}</span>`).join('　');
+    return `<div class="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+      <span class="text-sm font-bold text-primary w-24">${sp.date}</span>
+      <span class="text-[10px] px-2 py-0.5 rounded bg-primary/10 text-primary">${esc(sp.type)}</span>
+      <div class="flex-1 flex flex-wrap gap-x-3 gap-y-1">${top}${sp.ranking.length>5?'…':''}</div>
+      <button class="text-xs text-primary hover:underline" onclick="viewSnapshot('${sp.id}')">查看</button>
+      <button class="text-gray-300 hover:text-red-500" onclick="delSnapshot('${sp.id}')">🗑️</button>
+    </div>`;
+  }).join('') : '<div class="text-sm text-gray-400 py-6 text-center">还没有快照。每周结算 / 每次导入会自动留档，也可手动点「生成快照」。</div>';
+  openModal('积分历史（按日期回看）', `
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <p class="text-xs text-gray-500">每次导入 / 手动生成都会保留当天全班积分榜，可随时回看。</p>
+        <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="manualSnapshot()">📸 生成快照</button>
+      </div>
+      <div class="space-y-2 max-h-[60vh] overflow-y-auto">${snapHtml}</div>
+    </div>`, 'lg');
+}
+function manualSnapshot() { takeSnapshot('手动'); save(); openPtHistory(); }
+function viewSnapshot(id) {
+  const sp = state.snapshots.find(x => x.id === id); if (!sp) return;
+  const rows = sp.ranking.map((r, i) => `<tr class="border-b hover:bg-gray-50"><td class="py-2 text-center text-gray-400">${i+1}</td><td class="py-2 font-medium">${esc(r.name)}</td><td class="py-2 text-right font-bold text-primary">${fmtScore(r.score)}</td><td class="py-2 text-right text-xs text-gray-400">原始 ${fmtScore(r.raw)}</td></tr>`).join('');
+  openModal(`${sp.date} · 积分榜（${esc(sp.type)}）`, `
+    <div class="space-y-3">
+      <table class="w-full text-sm"><thead><tr class="text-gray-500 border-b"><th class="py-2 text-left">名次</th><th class="py-2 text-left">姓名</th><th class="py-2 text-right">折算分</th><th class="py-2 text-right">原始分</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`, 'lg');
+}
+function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !== id); save(); openPtHistory(); }
+
+// ===================== 成绩分析（两班对比）=====================
+let examTab = 'enter'; // enter | compare | trend | personal
+function examClass(id) { return state.examData.classes.find(c => c.id === id); }
+function examById(id) { return state.examData.exams.find(e => e.id === id); }
+function examSubjects() {
+  const set = new Set(state.examData.subjects);
+  state.examData.records.forEach(r => r.subject && set.add(r.subject));
+  return [...set];
+}
+// 某次考试某班某科平均分
+function examAvg(examId, classId, subject) {
+  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  if (!rs.length) return null;
+  return rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length;
+}
+// 某次考试某班总平均分（按各科平均再平均，或按全部分数平均）
+function examClassAvg(examId, classId) {
+  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId);
+  if (!rs.length) return null;
+  return rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length;
+}
+function examPassRate(examId, classId, subject, passLine) {
+  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  if (!rs.length) return null;
+  const pass = rs.filter(r => (+r.score || 0) >= passLine).length;
+  return pass / rs.length;
+}
+function examGoodRate(examId, classId, subject, goodLine) {
+  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject);
+  if (!rs.length) return null;
+  const good = rs.filter(r => (+r.score || 0) >= goodLine).length;
+  return good / rs.length;
+}
+// 学生个人历次考试某科成绩
+function studentSubjectSeries(studentName, subject) {
+  return state.examData.exams
+    .map(e => {
+      const r = state.examData.records.find(x => x.examId === e.id && x.studentName === studentName && x.subject === subject);
+      return r ? { exam: e.name, date: e.date, score: +r.score } : null;
+    })
+    .filter(Boolean);
+}
+
+function renderExam() {
+  const tabs = [
+    { id: 'enter', label: '📥 录入' },
+    { id: 'compare', label: '📊 两班对比' },
+    { id: 'trend', label: '📈 趋势' },
+    { id: 'personal', label: '👤 个人追踪' },
+  ].map(t => `<button class="px-4 py-1.5 rounded-full text-sm transition ${examTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setExamTab('${t.id}')">${t.label}</button>`).join('');
+
+  // 班级设置区
+  const clsHtml = state.examData.classes.map(c => {
+    const cnt = state.examData.records.filter(r => r.classId === c.id).length;
+    return `<div class="flex items-center gap-2 p-2 rounded-lg bg-gray-50">
+      <input class="flex-1 border rounded p-1.5 text-sm" value="${esc(c.name)}" data-cls="${c.id}" data-field="name">
+      <span class="text-xs text-gray-400">${cnt}条</span>
+    </div>`;
+  }).join('');
+
+  let body = '';
+  if (examTab === 'enter') body = renderExamEnter();
+  else if (examTab === 'compare') body = renderExamCompare();
+  else if (examTab === 'trend') body = renderExamTrend();
+  else body = renderExamPersonal();
+
+  return `
+  <div class="space-y-5">
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="text-xs text-gray-500 mb-2">班级设置（两个班）</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${clsHtml}</div>
+      <button class="mt-3 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称</button>
+    </div>
+    <div class="flex flex-wrap gap-2">${tabs}</div>
+    <div id="exam-body">${body}</div>
+  </div>`;
+}
+function setExamTab(t) { examTab = t; render(); }
+function saveExamClasses() {
+  document.querySelectorAll('[data-cls]').forEach(el => {
+    const c = examClass(el.dataset.cls); if (!c) return;
+    c[el.dataset.field] = el.value;
+  });
+  save(); render();
+}
+
+// ---------- 录入 ----------
+function renderExamEnter() {
+  const subjOpts = examSubjects().map(s => `<option>${esc(s)}</option>`).join('') || '<option>数学</option><option>物理</option>';
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date||'')}）</option>`).join('');
+  return `
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+      <h3 class="font-bold text-gray-800">考试 / 科目管理</h3>
+      <div class="flex gap-2">
+        <input id="newExamName" class="flex-1 border rounded-lg p-2 text-sm" placeholder="考试名称，如：第一次月考">
+        <input id="newExamDate" type="date" class="border rounded-lg p-2 text-sm">
+        <button class="border border-primary text-primary px-3 rounded-lg text-sm hover:bg-primary/5" onclick="addExam()">添加</button>
+      </div>
+      <div class="flex gap-2">
+        <input id="newSubject" class="flex-1 border rounded-lg p-2 text-sm" placeholder="科目，如：数学">
+        <button class="border border-primary text-primary px-3 rounded-lg text-sm hover:bg-primary/5" onclick="addSubject()">添加科目</button>
+      </div>
+      <div class="text-xs text-gray-500">已有考试：</div>
+      <div class="space-y-1">${state.examData.exams.length ? state.examData.exams.map(e=>`<div class="flex items-center gap-2 text-sm p-1.5 rounded bg-gray-50"><span class="flex-1">${esc(e.name)} <span class="text-gray-400">${esc(e.date||'')}</span></span><button class="text-gray-300 hover:text-red-500" onclick="delExam('${e.id}')">🗑️</button></div>`).join('') : '<div class="text-gray-400 text-sm">暂无</div>'}</div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+      <h3 class="font-bold text-gray-800">单条录入成绩</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <select id="exClass" class="border rounded-lg p-2 text-sm">${state.examData.classes.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+        <select id="exExam" class="border rounded-lg p-2 text-sm">${examOpts || '<option value="">（先添加考试）</option>'}</select>
+        <input id="exSubject" class="border rounded-lg p-2 text-sm" placeholder="科目">
+        <input id="exName" class="border rounded-lg p-2 text-sm" placeholder="学生姓名">
+        <input id="exScore" type="number" class="border rounded-lg p-2 text-sm" placeholder="分数">
+        <button class="bg-primary text-white rounded-lg text-sm hover:bg-primaryDark" onclick="saveExamScore()">保存</button>
+      </div>
+      <hr>
+      <h3 class="font-bold text-gray-800">批量导入（Excel / CSV）</h3>
+      <p class="text-[11px] text-gray-400">支持两种格式：<br>① 含班级列：<code>姓名,班级,科目,分数</code><br>② 指定考试+班级，仅 <code>姓名,科目,分数</code><br>首行标题自动跳过。</p>
+      <textarea id="exImpText" rows="5" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,初三(1)班,数学,88&#10;王浩然,初三(1)班,数学,92"></textarea>
+      <div class="flex gap-2">
+        <select id="exImpExam" class="flex-1 border rounded-lg p-2 text-sm">${examOpts || '<option value="">（先选考试）</option>'}</select>
+        <button class="bg-primary text-white px-4 rounded-lg text-sm hover:bg-primaryDark" onclick="doExamImport()">导入</button>
+      </div>
+      <div class="text-[11px] text-gray-400">提示：学生姓名需与「学生管理」或本班名单一致；两班可各自建名单或在导入时用班级列区分。</div>
+    </div>
+  </div>`;
+}
+function addExam() {
+  const name = document.getElementById('newExamName').value.trim();
+  if (!name) return alert('请输入考试名称');
+  const date = document.getElementById('newExamDate').value;
+  state.examData.exams.push({ id: uid(), name, date });
+  save(); render();
+}
+function delExam(id) {
+  if (!confirm('删除该考试？其下所有成绩记录也会删除。')) return;
+  state.examData.records = state.examData.records.filter(r => r.examId !== id);
+  state.examData.exams = state.examData.exams.filter(e => e.id !== id);
+  save(); render();
+}
+function addSubject() {
+  const s = document.getElementById('newSubject').value.trim();
+  if (!s) return alert('请输入科目');
+  if (!state.examData.subjects.includes(s)) state.examData.subjects.push(s);
+  save(); render();
+}
+function saveExamScore() {
+  const classId = document.getElementById('exClass').value;
+  const examId = document.getElementById('exExam').value;
+  const subject = document.getElementById('exSubject').value.trim();
+  const name = document.getElementById('exName').value.trim();
+  const score = parseFloat(document.getElementById('exScore').value);
+  if (!examId) return alert('请先添加并选择考试');
+  if (!subject || !name || isNaN(score)) return alert('请填全科目、姓名、分数');
+  // 同名同考试同班同科目去重覆盖
+  const ex = state.examData.records.find(r => r.examId===examId && r.classId===classId && r.studentName===name && r.subject===subject);
+  if (ex) ex.score = score;
+  else state.examData.records.push({ id: uid(), examId, classId, studentName: name, subject, score });
+  save(); render();
+}
+function doExamImport() {
+  const examId = document.getElementById('exImpExam').value;
+  if (!examId) return alert('请先选择考试');
+  const text = document.getElementById('exImpText').value.trim();
+  if (!text) return alert('请粘贴数据');
+  const rows = parseCSV(text);
+  let start = 0;
+  if (rows.length && /姓名|name|学生|班级|科目|分数|score/i.test(rows[0].join(''))) start = 1;
+  let n = 0, unmatched = [];
+  for (let i = start; i < rows.length; i++) {
+    const cells = rows[i];
+    let name, classId, subject, score;
+    if (cells.length >= 4) { name = cells[0].trim(); classId = resolveClassId(cells[1].trim()); subject = cells[2].trim(); score = parseFloat(cells[3]); }
+    else if (cells.length === 3) { name = cells[0].trim(); subject = cells[1].trim(); score = parseFloat(cells[2]); classId = document.getElementById('exClass') ? document.getElementById('exClass').value : state.examData.classes[0].id; }
+    else continue;
+    if (!name || !subject || isNaN(score) || !classId) continue;
+    const ex = state.examData.records.find(r => r.examId===examId && r.classId===classId && r.studentName===name && r.subject===subject);
+    if (ex) ex.score = score; else state.examData.records.push({ id: uid(), examId, classId, studentName: name, subject, score });
+    n++;
+  }
+  if (!n) return alert('没有成功解析任何一行');
+  save(); render();
+  alert(`成功导入 ${n} 条成绩。`);
+}
+function resolveClassId(name) {
+  if (!name) return null;
+  const c = state.examData.classes.find(x => x.name === name || x.id === name);
+  return c ? c.id : null;
+}
+
+// ---------- 两班对比 ----------
+function renderExamCompare() {
+  if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「录入」添加考试并导入成绩。</p></div>`;
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date||'')}）</option>`).join('');
+  const subjOpts = examSubjects().map(s => `<option>${esc(s)}</option>`).join('');
+  return `
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
+      <div><label class="block text-xs text-gray-500 mb-1">考试</label><select id="cmpExam" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${examOpts}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">科目</label><select id="cmpSubject" class="border rounded-lg p-2 text-sm">${subjOpts || '<option>数学</option>'}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">及格线</label><input id="cmpPass" type="number" value="60" class="border rounded-lg p-2 text-sm w-20"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="cmpGood" type="number" value="85" class="border rounded-lg p-2 text-sm w-20"></div>
+      <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="renderExam()">刷新</button>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="cmpChart" height="160"></canvas></div>
+    <div id="cmpTable" class="bg-white rounded-2xl p-5 shadow-sm"></div>
+  </div>`;
+}
+function renderExamCompareInto() {
+  const examId = document.getElementById('cmpExam') && document.getElementById('cmpExam').value;
+  const subject = document.getElementById('cmpSubject') && document.getElementById('cmpSubject').value;
+  if (!examId || !subject) return;
+  const pass = +(document.getElementById('cmpPass').value || 60);
+  const good = +(document.getElementById('cmpGood').value || 85);
+  const c1 = state.examData.classes[0], c2 = state.examData.classes[1];
+  const labels = [c1.name, c2.name];
+  const avg = [examAvg(examId, c1.id, subject), examAvg(examId, c2.id, subject)];
+  const passR = [examPassRate(examId, c1.id, subject, pass), examPassRate(examId, c2.id, subject, pass)];
+  const goodR = [examGoodRate(examId, c1.id, subject, good), examGoodRate(examId, c2.id, subject, good)];
+  const fmtPct = a => a == null ? '—' : (a*100).toFixed(1) + '%';
+  // 表格
+  const tbl = `<table class="w-full text-sm"><thead><tr class="text-gray-500 border-b"><th class="py-2 text-left">指标</th>${labels.map(l=>`<th class="py-2 text-left">${esc(l)}</th>`).join('')}<th class="py-2 text-left">差值</th></tr></thead><tbody>
+    <tr class="border-b"><td class="py-2">平均分</td>${avg.map(a=>`<td class="py-2 font-bold">${a==null?'—':a.toFixed(1)}</td>`).join('')}<td class="py-2 text-primary">${avg[0]!=null&&avg[1]!=null?(avg[0]-avg[1]).toFixed(1):'—'}</td></tr>
+    <tr class="border-b"><td class="py-2">及格率(≥${pass})</td>${passR.map(a=>`<td class="py-2">${fmtPct(a)}</td>`).join('')}<td class="py-2 text-primary">${passR[0]!=null&&passR[1]!=null?((passR[0]-passR[1])*100).toFixed(1)+'%':'—'}</td></tr>
+    <tr><td class="py-2">优秀率(≥${good})</td>${goodR.map(a=>`<td class="py-2">${fmtPct(a)}</td>`).join('')}<td class="py-2 text-primary">${goodR[0]!=null&&goodR[1]!=null?((goodR[0]-goodR[1])*100).toFixed(1)+'%':'—'}</td></tr>
+  </tbody></table>`;
+  const tblEl = document.getElementById('cmpTable'); if (tblEl) tblEl.innerHTML = tbl;
+  // 图表
+  if (window._cmpChart) try { window._cmpChart.destroy(); } catch(e){}
+  const cv = document.getElementById('cmpChart'); if (!cv) return;
+  const ctx = cv.getContext('2d');
+  window._cmpChart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: '平均分', data: avg, backgroundColor: '#f06292' },
+      { label: '及格率%', data: passR.map(a=>a==null?0:a*100), backgroundColor: '#34d399' },
+      { label: '优秀率%', data: goodR.map(a=>a==null?0:a*100), backgroundColor: '#60a5fa' },
+    ]},
+    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+  });
+}
+
+// ---------- 趋势 ----------
+function renderExamTrend() {
+  const exams = state.examData.exams;
+  if (!exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📈</div><div class="font-bold text-gray-800">还没有考试数据</div></div>`;
+  const subjOpts = examSubjects().map(s => `<option>${esc(s)}</option>`).join('');
+  return `
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
+      <div><label class="block text-xs text-gray-500 mb-1">科目</label><select id="trSubject" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${subjOpts || '<option>数学</option>'}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">指标</label><select id="trMetric" class="border rounded-lg p-2 text-sm" onchange="renderExam()"><option value="avg">平均分</option><option value="pass">及格率</option><option value="good">优秀率</option></select></div>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="trChart" height="170"></canvas></div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="trChart2" height="170"></canvas></div>
+  </div>`;
+}
+function renderExamTrendInto() {
+  const subject = document.getElementById('trSubject') && document.getElementById('trSubject').value;
+  const metric = document.getElementById('trMetric') && document.getElementById('trMetric').value;
+  if (!subject) return;
+  const exams = state.examData.exams;
+  const c1 = state.examData.classes[0], c2 = state.examData.classes[1];
+  const pass = 60, good = 85;
+  const labels = exams.map(e => e.name);
+  const get = (cid) => exams.map(e => {
+    if (metric === 'avg') return examAvg(e.id, cid, subject);
+    if (metric === 'pass') return examPassRate(e.id, cid, subject, pass);
+    return examGoodRate(e.id, cid, subject, good);
+  });
+  const d1 = get(c1.id), d2 = get(c2.id);
+  const norm = a => a == null ? null : (metric === 'avg' ? a : a * 100);
+  const draw = (cvId, title, arr1, arr2) => {
+    const cv = document.getElementById(cvId); if (!cv) return;
+    if (window['_tr' + cvId]) try { window['_tr' + cvId].destroy(); } catch(e){}
+    window['_tr' + cvId] = new Chart(cv.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: c1.name, data: arr1.map(norm), borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3 },
+        { label: c2.name, data: arr2.map(norm), borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.1)', fill: true, tension: .3 },
+      ]},
+      options: { responsive: true, plugins: { title: { display: true, text: title } }, scales: { y: { beginAtZero: metric!=='avg' } } }
+    });
+  };
+  draw('trChart', `${subject} · ${metric==='avg'?'平均分走势':metric==='pass'?'及格率走势':'优秀率走势'}`, d1, d2);
+  // 第二张图：两班总平均分（跨科）走势
+  const t1 = exams.map(e => examClassAvg(e.id, c1.id)), t2 = exams.map(e => examClassAvg(e.id, c2.id));
+  draw('trChart2', '两班总平均（全部科目）走势', t1, t2);
+}
+
+// ---------- 个人追踪 ----------
+function renderExamPersonal() {
+  // 列出有成绩的学生姓名
+  const names = [...new Set(state.examData.records.map(r => r.studentName))];
+  if (!names.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">👤</div><div class="font-bold text-gray-800">还没有成绩记录</div></div>`;
+  const subjOpts = examSubjects().map(s => `<option>${esc(s)}</option>`).join('');
+  return `
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
+      <div><label class="block text-xs text-gray-500 mb-1">学生</label><select id="psName" class="border rounded-lg p-2 text-sm" onchange="renderExam()">${names.map(n=>`<option>${esc(n)}</option>`).join('')}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">科目</label><select id="psSubject" class="border rounded-lg p-2 text-sm">${subjOpts || '<option>数学</option>'}</select></div>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="psChart" height="170"></canvas></div>
+    <div id="psSummary" class="bg-white rounded-2xl p-5 shadow-sm text-sm text-gray-600"></div>
+  </div>`;
+}
+function renderExamPersonalInto() {
+  const name = document.getElementById('psName') && document.getElementById('psName').value;
+  const subject = document.getElementById('psSubject') && document.getElementById('psSubject').value;
+  if (!name || !subject) return;
+  const series = studentSubjectSeries(name, subject);
+  const cv = document.getElementById('psChart'); if (!cv) return;
+  if (window._psChart) try { window._psChart.destroy(); } catch(e){}
+  const scores = series.map(s => s.score);
+  window._psChart = new Chart(cv.getContext('2d'), {
+    type: 'line',
+    data: { labels: series.map(s => s.exam), datasets: [{ label: `${name} · ${subject}`, data: scores, borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3 }] },
+    options: { responsive: true, plugins: { title: { display: true, text: `${name} 的 ${subject} 历次成绩` } }, scales: { y: { beginAtZero: false } } }
+  });
+  if (scores.length >= 2) {
+    const first = scores[0], last = scores[scores.length-1];
+    const diff = (last - first).toFixed(1);
+    const el = document.getElementById('psSummary');
+    if (el) el.innerHTML = `共 ${scores.length} 次考试：最高 ${Math.max(...scores)}、最低 ${Math.min(...scores)}、平均 ${(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1)}。较首次 ${diff>=0?'进步':'退步'} <b class="${diff>=0?'text-red-500':'text-emerald-600'}">${diff>=0?'+':''}${diff}</b> 分。`;
+  }
+}
+
+// 在 render() 后渲染图表
+const _origRender = render;
+render = function() {
+  _origRender();
+  setTimeout(() => {
+    if (currentRoute === 'exam') {
+      if (examTab === 'compare') renderExamCompareInto();
+      else if (examTab === 'trend') renderExamTrendInto();
+      else if (examTab === 'personal') renderExamPersonalInto();
+    }
+  }, 0);
+};
+
+
 function renderJobManage() {
   const jobRows = state.points.jobs.map(j => `
     <div class="flex items-center gap-2 p-2 rounded-lg bg-gray-50">
