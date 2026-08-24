@@ -208,6 +208,11 @@ function defaultPoints() {
 }
 
 function migrateState(s) {
+  const ds = defaultState();
+  // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
+  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots'].forEach(k => {
+    if (s[k] == null) s[k] = ds[k];
+  });
   const dp = defaultPoints();
   if (!s.points || typeof s.points !== 'object') s.points = dp;
   if (!Array.isArray(s.points.logs)) s.points.logs = [];
