@@ -1,15 +1,16 @@
 // 班主任工作台 · 后端服务（最小可用版：单用户 + 多设备同步）
-// 依赖: express, better-sqlite3, jsonwebtoken, bcryptjs
+// 数据库使用 sql.js（纯 JavaScript 实现的 SQLite，无需编译原生模块，Railway 等平台 100% 可跑）
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const initSqlJs = require('sql.js');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
 const ROOT = __dirname;
 const PUB = path.join(ROOT, '..'); // workbench 目录（index.html + app.js）
-// 数据库路径：优先用持久卷（Railway 挂载 /data），否则用本地文件
+
+// 数据库文件路径：优先用持久卷（Railway 挂载 /data），否则用本地文件
 let DB_DIR = ROOT;
 if (process.env.DATA_DIR) {
   try {
@@ -22,31 +23,63 @@ if (process.env.DATA_DIR) {
 }
 const DB_PATH = path.join(DB_DIR, 'data.db');
 console.log('[db] 使用数据库路径:', DB_PATH);
+
 const JWT_SECRET = process.env.JWT_SECRET || 'ct-workbench-secret-change-me';
 const PORT = process.env.PORT || 3000;
 
-// ---------- 数据库 ----------
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.prepare(`CREATE TABLE IF NOT EXISTS kv (
-  k TEXT PRIMARY KEY,
-  v TEXT
-)`).run();
-db.prepare(`CREATE TABLE IF NOT EXISTS users (
-  username TEXT PRIMARY KEY,
-  password_hash TEXT
-)`).run();
-
-// 默认账号：admin / admin123（首次启动写入，建议上线后改密码）
-const USERS = db.prepare('SELECT COUNT(*) AS c FROM users');
-if (USERS.get().c === 0) {
-  const hash = bcrypt.hashSync('admin123', 10);
-  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', hash);
-  console.log('[init] 默认账号已创建 -> admin / admin123（请尽快修改密码）');
+// ---------- 启动 sql.js ----------
+let db;
+function loadDb() {
+  if (fs.existsSync(DB_PATH)) {
+    const fileBuffer = fs.readFileSync(DB_PATH);
+    return new SQL.Database(new Uint8Array(fileBuffer));
+  }
+  return new SQL.Database();
+}
+function persist() {
+  const data = db.export();
+  fs.writeFileSync(DB_PATH, Buffer.from(data));
 }
 
-function kvGet(k) { const r = db.prepare('SELECT v FROM kv WHERE k=?').get(k); return r ? r.v : null; }
-function kvSet(k, v) { db.prepare('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)').run(k, v); }
+let SQL;
+initSqlJs().then((SQLModule) => {
+  SQL = SQLModule;
+  db = loadDb();
+  db.run(`CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT)`);
+
+  // 默认账号：admin / admin123（首次启动写入，建议上线后改密码）
+  const cnt = db.exec("SELECT COUNT(*) AS c FROM users");
+  const count = cnt.length ? cnt[0].values[0][0] : 0;
+  if (count === 0) {
+    const hash = bcrypt.hashSync('admin123', 10);
+    db.run('INSERT INTO users (username, password_hash) VALUES (?, ?)', ['admin', hash]);
+    console.log('[init] 默认账号已创建 -> admin / admin123（请尽快修改密码）');
+    persist();
+  }
+  console.log('[db] 数据库初始化完成');
+}).catch(err => {
+  console.error('[fatal] sql.js 初始化失败:', err.stack || err.message);
+  process.exit(1);
+});
+
+function kvGet(k) {
+  const r = db.exec("SELECT v FROM kv WHERE k = '" + k.replace(/'/g, "''") + "'");
+  return r.length ? r[0].values[0][0] : null;
+}
+function kvSet(k, v) {
+  db.run('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [k, v]);
+  persist();
+}
+function getUser(username) {
+  const r = db.exec("SELECT * FROM users WHERE username = '" + username.replace(/'/g, "''") + "'");
+  if (!r.length) return null;
+  const cols = r[0].columns;
+  const row = r[0].values[0];
+  const obj = {};
+  cols.forEach((c, i) => obj[c] = row[i]);
+  return obj;
+}
 
 // ---------- 鉴权 ----------
 function authMiddleware(req, res, next) {
@@ -71,7 +104,7 @@ app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '请输入账号和密码' });
-  const u = db.prepare('SELECT * FROM users WHERE username=?').get(username);
+  const u = getUser(username);
   if (!u || !bcrypt.compareSync(password, u.password_hash)) {
     return res.status(401).json({ error: '账号或密码错误' });
   }
@@ -82,10 +115,11 @@ app.post('/api/login', (req, res) => {
 // 修改密码
 app.post('/api/password', authMiddleware, (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
-  const u = db.prepare('SELECT * FROM users WHERE username=?').get(req.user);
+  const u = getUser(req.user);
   if (!u || !bcrypt.compareSync(oldPassword, u.password_hash)) return res.status(401).json({ error: '原密码错误' });
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: '新密码至少6位' });
-  db.prepare('UPDATE users SET password_hash=? WHERE username=?').run(bcrypt.hashSync(newPassword, 10), req.user);
+  db.run('UPDATE users SET password_hash=? WHERE username=?', [bcrypt.hashSync(newPassword, 10), req.user]);
+  persist();
   res.json({ ok: true });
 });
 
@@ -119,7 +153,8 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // 优雅退出
-process.on('SIGINT', () => { db.close(); process.exit(0); });
+process.on('SIGINT', () => { try { persist(); } catch (e) {} process.exit(0); });
+process.on('SIGTERM', () => { try { persist(); } catch (e) {} process.exit(0); });
 
 // 捕获未处理异常，避免静默崩溃
 process.on('uncaughtException', (err) => { console.error('[fatal] uncaughtException:', err.stack || err.message); process.exit(1); });

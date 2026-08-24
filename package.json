@@ -7,10 +7,10 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "express": "^5.2.1",
-    "better-sqlite3": "^13.0.3",
     "jsonwebtoken": "^9.0.3",
-    "bcryptjs": "^3.0.3"
+    "sql.js": "^1.14.2"
   },
   "engines": {
     "node": ">=18"
