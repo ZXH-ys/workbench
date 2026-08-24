@@ -2055,6 +2055,57 @@ function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !=
 const EXAM_SUBJECT = '数学';
 let examTab = 'analysis'; // analysis | manage
 let examSelectedStudent = ''; // 当前在榜单中选中的学生
+// 公示列开关（仅 UI 偏好，不持久化）
+let examAnalysisColumns = {
+  score: true,
+  classRank: true,
+  gradeRank: false,
+  grade: true,
+  pass: false,
+  good: false,
+  classAvgDiff: false,
+  gradeAvgDiff: false,
+  totalScore: false,
+  totalRank: false,
+};
+function toggleExamCol(key) {
+  if (examAnalysisColumns.hasOwnProperty(key)) examAnalysisColumns[key] = !examAnalysisColumns[key];
+  render();
+}
+function scoreToGrade(score, pass, good) {
+  if (score >= good) return 'A';
+  if (score >= pass + (good - pass) * 0.5) return 'B';
+  if (score >= pass) return 'C';
+  return 'D';
+}
+function scoreToGradeLabel(score, pass, good) {
+  if (score >= good) return '优秀';
+  if (score >= pass + (good - pass) * 0.5) return '良好';
+  if (score >= pass) return '及格';
+  return '待及格';
+}
+function examClassRank(examId, classId, name, subject) {
+  const rs = state.examData.records.filter(r => r.examId === examId && r.classId === classId && r.subject === subject).sort((a, b) => b.score - a.score);
+  const idx = rs.findIndex(r => r.studentName === name);
+  return idx >= 0 ? idx + 1 : null;
+}
+function examGradeRank(examId, name, subject, classIds) {
+  const rs = state.examData.records.filter(r => r.examId === examId && classIds.includes(r.classId) && r.subject === subject).sort((a, b) => b.score - a.score);
+  const idx = rs.findIndex(r => r.studentName === name);
+  return idx >= 0 ? idx + 1 : null;
+}
+function examTotalScore(name, subject) {
+  return state.examData.records.filter(r => r.studentName === name && r.subject === subject).reduce((a, b) => a + (+b.score || 0), 0);
+}
+function examTotalRank(name, subject, classIds) {
+  const names = new Set();
+  state.examData.records.filter(r => classIds.includes(r.classId) && r.subject === subject).forEach(r => names.add(r.studentName));
+  const totals = [...names].map(n => ({ name: n, total: examTotalScore(n, subject) }));
+  totals.sort((a, b) => b.total - a.total);
+  const idx = totals.findIndex(x => x.name === name);
+  return idx >= 0 ? idx + 1 : null;
+}
+
 
 function examClass(id) { return state.examData.classes.find(c => c.id === id); }
 function examById(id) { return state.examData.exams.find(e => e.id === id); }
@@ -2321,6 +2372,10 @@ function renderExamAnalysis() {
   const lastExam = state.examData.exams[state.examData.exams.length - 1];
   const examOpts = state.examData.exams.map(e => `<option value="${e.id}" ${e.id === lastExam.id ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
   const clsChecks = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-sm px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" checked> ${esc(c.name)}</label>`).join('');
+  const colBtn = (key, label, icon) => {
+    const on = examAnalysisColumns[key];
+    return `<button type="button" onclick="toggleExamCol('${key}')" class="text-xs px-2.5 py-1.5 rounded-full border transition ${on ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200 hover:border-primary/50'}">${icon} ${label}</button>`;
+  };
   return `
   <div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm flex flex-wrap gap-3 items-end">
@@ -2330,26 +2385,42 @@ function renderExamAnalysis() {
       <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="anGood" type="number" value="96" class="border rounded-lg p-2 text-sm w-20"></div>
       <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="renderExam()">刷新</button>
     </div>
+
     <div id="anSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="lg:col-span-2 bg-white rounded-2xl p-5 shadow-sm"><canvas id="anCmpChart" height="170"></canvas></div>
       <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="anTrendChart" height="170"></canvas></div>
     </div>
-    <div class="bg-white rounded-2xl p-5 shadow-sm">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">📋 学生榜单</div>
-        <div class="text-xs text-gray-400">点击学生查看个人趋势</div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="font-bold text-gray-800">🧮 插入公示列</div>
+        <div class="text-xs text-gray-400">点选开关在成绩预览表中显示</div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        ${colBtn('score', '原始分', '📝')}
+        ${colBtn('classRank', '班级排名', '🏫')}
+        ${colBtn('gradeRank', '年级排名', '🎓')}
+        ${colBtn('grade', '等级', '🏅')}
+        ${colBtn('pass', '是否及格', '✅')}
+        ${colBtn('good', '是否优秀', '⭐')}
+        ${colBtn('classAvgDiff', '与班均分差', '📐')}
+        ${colBtn('gradeAvgDiff', '与年段均分差', '📏')}
+        ${colBtn('totalScore', '累计总分', '➕')}
+        ${colBtn('totalRank', '累计总分排名', '🏆')}
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
-          <thead><tr class="text-gray-500 border-b text-left"><th class="py-2 w-16">排名</th><th class="py-2">姓名</th><th class="py-2">班级</th><th class="py-2">分数</th><th class="py-2">较上次</th></tr></thead>
-          <tbody id="anRankBody"></tbody>
+          <thead><tr class="text-gray-500 border-b text-left" id="anPreviewHead"></tr></thead>
+          <tbody id="anPreviewBody"></tbody>
         </table>
       </div>
     </div>
+
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="font-bold text-gray-800 mb-3">👤 个人趋势</div>
-      <div id="anPersonalWrap"><p class="text-sm text-gray-400">请在榜单中点击一名学生</p></div>
+      <div id="anPersonalWrap"><p class="text-sm text-gray-400">请在成绩预览表中点击一名学生</p></div>
     </div>
   </div>`;
 }
@@ -2421,32 +2492,77 @@ function renderExamAnalysisInto() {
     });
   }
 
-  // 榜单
-  let rankList = [];
+  // 成绩预览表
+  const classAvgs = {};
+  classes.forEach(c => { classAvgs[c.id] = examAvg(examId, c.id, EXAM_SUBJECT); });
+  const allScores = classes.flatMap(c => examRecords(examId, c.id, EXAM_SUBJECT).map(r => +r.score));
+  const gradeAvg = allScores.length ? (allScores.reduce((a, b) => a + b, 0) / allScores.length) : null;
+  const classIds = classes.map(c => c.id);
+
+  let previewRows = [];
   classes.forEach(c => {
     examRecords(examId, c.id, EXAM_SUBJECT).forEach(r => {
-      const prog = getStudentProgress(r.studentName, examId, EXAM_SUBJECT);
-      rankList.push({ name: r.studentName, classId: c.id, className: c.name, score: +r.score, progress: prog });
+      const score = +r.score;
+      previewRows.push({
+        name: r.studentName,
+        classId: c.id,
+        className: c.name,
+        score,
+        classRank: examClassRank(examId, c.id, r.studentName, EXAM_SUBJECT),
+        gradeRank: examGradeRank(examId, r.studentName, EXAM_SUBJECT, classIds),
+        grade: scoreToGrade(score, pass, good),
+        gradeLabel: scoreToGradeLabel(score, pass, good),
+        pass: score >= pass,
+        good: score >= good,
+        classAvgDiff: classAvgs[c.id] == null ? null : score - classAvgs[c.id],
+        gradeAvgDiff: gradeAvg == null ? null : score - gradeAvg,
+        totalScore: examTotalScore(r.studentName, EXAM_SUBJECT),
+        totalRank: examTotalRank(r.studentName, EXAM_SUBJECT, classIds),
+        progress: getStudentProgress(r.studentName, examId, EXAM_SUBJECT),
+      });
     });
   });
-  rankList.sort((a, b) => b.score - a.score);
-  if (!examSelectedStudent && rankList.length) examSelectedStudent = rankList[0].name;
-  const rankBody = document.getElementById('anRankBody');
-  if (rankBody) rankBody.innerHTML = rankList.map((r, i) => {
+  previewRows.sort((a, b) => b.score - a.score);
+  if (!examSelectedStudent && previewRows.length) examSelectedStudent = previewRows[0].name;
+
+  const headCells = ['<th class="py-2 pl-2">排名</th>', '<th class="py-2">姓名</th>', '<th class="py-2">班级</th>'];
+  if (examAnalysisColumns.score) headCells.push('<th class="py-2">分数</th>');
+  if (examAnalysisColumns.classRank) headCells.push('<th class="py-2">班级排名</th>');
+  if (examAnalysisColumns.gradeRank) headCells.push('<th class="py-2">年级排名</th>');
+  if (examAnalysisColumns.grade) headCells.push('<th class="py-2">等级</th>');
+  if (examAnalysisColumns.pass) headCells.push('<th class="py-2">及格</th>');
+  if (examAnalysisColumns.good) headCells.push('<th class="py-2">优秀</th>');
+  if (examAnalysisColumns.classAvgDiff) headCells.push('<th class="py-2">与班均差</th>');
+  if (examAnalysisColumns.gradeAvgDiff) headCells.push('<th class="py-2">与年段均差</th>');
+  if (examAnalysisColumns.totalScore) headCells.push('<th class="py-2">累计总分</th>');
+  if (examAnalysisColumns.totalRank) headCells.push('<th class="py-2">累计排名</th>');
+  headCells.push('<th class="py-2">较上次</th>');
+  const previewHead = document.getElementById('anPreviewHead');
+  if (previewHead) previewHead.innerHTML = headCells.join('');
+
+  const fmtDiff = d => d == null ? '—' : (d > 0 ? `<span class="text-red-500">+${d.toFixed(1)}</span>` : d < 0 ? `<span class="text-emerald-600">${d.toFixed(1)}</span>` : '0');
+  const previewBody = document.getElementById('anPreviewBody');
+  if (previewBody) previewBody.innerHTML = previewRows.map((r, i) => {
     const selected = r.name === examSelectedStudent ? 'bg-primary/5' : 'hover:bg-gray-50';
     const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `<span class="text-xs text-gray-400">${i + 1}</span>`;
     const progHtml = !r.progress ? '<span class="text-gray-400">—</span>' :
       (r.progress.diff > 0 ? `<span class="text-red-500 font-bold">↑${r.progress.diff}</span>` :
        r.progress.diff < 0 ? `<span class="text-emerald-600 font-bold">↓${-r.progress.diff}</span>` :
        '<span class="text-gray-500">—</span>');
-    return `<tr class="border-b cursor-pointer ${selected}" onclick="selectExamStudent('${esc(r.name)}')">
-      <td class="py-2.5 pl-2">${medal}</td>
-      <td class="py-2.5 font-medium">${esc(r.name)}</td>
-      <td class="py-2.5 text-gray-500">${esc(r.className)}</td>
-      <td class="py-2.5 font-bold">${r.score}</td>
-      <td class="py-2.5">${progHtml}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="5" class="py-6 text-center text-gray-400">暂无成绩记录</td></tr>';
+    const cells = [`<td class="py-2 pl-2">${medal}</td>`, `<td class="py-2 font-medium">${esc(r.name)}</td>`, `<td class="py-2 text-gray-500">${esc(r.className)}</td>`];
+    if (examAnalysisColumns.score) cells.push(`<td class="py-2 font-bold">${r.score}</td>`);
+    if (examAnalysisColumns.classRank) cells.push(`<td class="py-2">${r.classRank ?? '—'}</td>`);
+    if (examAnalysisColumns.gradeRank) cells.push(`<td class="py-2">${r.gradeRank ?? '—'}</td>`);
+    if (examAnalysisColumns.grade) cells.push(`<td class="py-2"><span class="px-1.5 py-0.5 rounded text-xs ${r.grade === 'A' ? 'bg-red-100 text-red-600' : r.grade === 'B' ? 'bg-blue-100 text-blue-600' : r.grade === 'C' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}">${r.gradeLabel}</span></td>`);
+    if (examAnalysisColumns.pass) cells.push(`<td class="py-2">${r.pass ? '<span class="text-green-500">是</span>' : '<span class="text-red-500">否</span>'}</td>`);
+    if (examAnalysisColumns.good) cells.push(`<td class="py-2">${r.good ? '<span class="text-red-500">是</span>' : '<span class="text-gray-400">否</span>'}</td>`);
+    if (examAnalysisColumns.classAvgDiff) cells.push(`<td class="py-2">${fmtDiff(r.classAvgDiff)}</td>`);
+    if (examAnalysisColumns.gradeAvgDiff) cells.push(`<td class="py-2">${fmtDiff(r.gradeAvgDiff)}</td>`);
+    if (examAnalysisColumns.totalScore) cells.push(`<td class="py-2">${r.totalScore || '—'}</td>`);
+    if (examAnalysisColumns.totalRank) cells.push(`<td class="py-2">${r.totalRank ?? '—'}</td>`);
+    cells.push(`<td class="py-2">${progHtml}</td>`);
+    return `<tr class="border-b cursor-pointer ${selected}" onclick="selectExamStudent('${esc(r.name)}')">${cells.join('')}</tr>`;
+  }).join('') || '<tr><td class="py-6 text-center text-gray-400">暂无成绩记录</td></tr>';
 
   // 个人趋势
   renderExamPersonalInto();
