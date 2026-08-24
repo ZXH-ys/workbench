@@ -353,17 +353,40 @@ function bindFileToText(fileId, textId) {
   f.addEventListener('change', () => {
     const file = f.files[0];
     if (!file) return;
+    const t = document.getElementById(textId);
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const isExcel = ['xlsx','xls'].includes(ext);
+    if (isExcel) {
+      if (typeof XLSX === 'undefined') {
+        alert('Excel 解析库尚未加载，请刷新页面后再试');
+        return;
+      }
+      const r = new FileReader();
+      r.onload = e => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const csv = XLSX.utils.sheet_to_csv(firstSheet, { FS: ',', RS: '\n' });
+          if (t) t.value = csv;
+        } catch (err) {
+          alert('解析 Excel 失败：' + (err && err.message ? err.message : '未知错误'));
+        }
+      };
+      r.readAsArrayBuffer(file);
+      return;
+    }
     const r = new FileReader();
-    r.onload = e => { const t = document.getElementById(textId); if (t) t.value = e.target.result; };
+    r.onload = e => { if (t) t.value = e.target.result; };
     r.readAsText(file);
   });
 }
 function openImportStudents() {
   openModal('批量导入学生', `
     <div class="space-y-4">
-      <p class="text-sm text-gray-500 leading-relaxed">支持粘贴或上传 CSV / Excel 导出的文本。每行一个学生，用英文逗号或制表符分隔：<br><code>姓名,性别,班级</code>（性别、班级可留空）。首行若是标题则自动跳过。</p>
+      <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一个学生，用英文逗号或制表符分隔：<br><code>姓名,性别,班级</code>（性别、班级可留空）。首行若是标题则自动跳过。</p>
       <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,高一(3)班&#10;王浩然,男,高一(3)班"></textarea>
-      <div><input id="impStudentFile" type="file" accept=".csv,.txt" class="w-full text-sm"></div>
+      <div><input id="impStudentFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
         <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impStudentText').value='姓名,性别,班级\\n张明轩,男,高一(3)班\\n王浩然,男,高一(3)班'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportStudents()">导入</button>
@@ -393,9 +416,9 @@ function doImportStudents() {
 function openImportScores() {
   openModal('批量导入成绩', `
     <div class="space-y-4">
-      <p class="text-sm text-gray-500 leading-relaxed">每行一条：<code>姓名,班级,科目,考试,分数</code>。首行标题自动跳过。</p>
+      <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一条：<code>姓名,班级,科目,考试,分数</code>。首行标题自动跳过。</p>
       <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,高一(3)班,英语,期中考试,78"></textarea>
-      <div><input id="impScoreFile" type="file" accept=".csv,.txt" class="w-full text-sm"></div>
+      <div><input id="impScoreFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
         <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impScoreText').value='姓名,班级,科目,考试,分数\\n张明轩,高一(3)班,英语,期中考试,78\\n王浩然,高一(3)班,英语,期中考试,92'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportScores()">导入</button>
@@ -2136,9 +2159,10 @@ function renderExamEnter() {
       </div>
       <hr>
       <h3 class="font-bold text-gray-800">批量导入（Excel / CSV）</h3>
-      <p class="text-[11px] text-gray-400">支持两种格式：<br>① 含班级列：<code>姓名,班级,科目,分数</code><br>② 指定考试+班级，仅 <code>姓名,科目,分数</code><br>首行标题自动跳过。</p>
+      <p class="text-[11px] text-gray-400">支持两种格式：<br>① 含班级列：<code>姓名,班级,科目,分数</code><br>② 指定考试+班级，仅 <code>姓名,科目,分数</code><br>首行标题自动跳过。也可直接上传 .xlsx / .xls 文件。</p>
       <textarea id="exImpText" rows="5" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,初三(1)班,数学,88&#10;王浩然,初三(1)班,数学,92"></textarea>
-      <div class="flex gap-2">
+      <div class="mt-2"><input id="exImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
+      <div class="flex gap-2 mt-2">
         <select id="exImpExam" class="flex-1 border rounded-lg p-2 text-sm">${examOpts || '<option value="">（先选考试）</option>'}</select>
         <button class="bg-primary text-white px-4 rounded-lg text-sm hover:bg-primaryDark" onclick="doExamImport()">导入</button>
       </div>
@@ -2352,7 +2376,8 @@ render = function() {
   _origRender();
   setTimeout(() => {
     if (currentRoute === 'exam') {
-      if (examTab === 'compare') renderExamCompareInto();
+      if (examTab === 'enter') bindFileToText('exImpFile', 'exImpText');
+      else if (examTab === 'compare') renderExamCompareInto();
       else if (examTab === 'trend') renderExamTrendInto();
       else if (examTab === 'personal') renderExamPersonalInto();
     }
