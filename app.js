@@ -1719,15 +1719,28 @@ function exportSeatTeacher() {
   for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
   header.push('');
   data.push(header);
-  st.cells.forEach((row, r) => {
+  // 教师视角：站在讲台上从前往后看，第一排（最前，离讲台最近）在表格最下方。
+  // 数据里 r=0 为屏上最上方、seatRowNumber(r)=rows-r，故屏上最下方(r=rows-1)即第一排(标号1)。
+  // 按 r=0→rows-1 顺序写入，最后写入的(最下方)正好是 第一排(标号1)。
+  for (let r = 0; r < st.rows; r++) {
     const rowNum = seatRowNumber(r);
-    data.push([rowNum, ...row.map(sid => seatStudentName(sid)), rowNum]);
-  });
+    data.push([rowNum, ...st.cells[r].map(sid => seatStudentName(sid)), rowNum]);
+  }
   exportSeatToXlsx(data, `${st.name || '座次表'}_教师用.xlsx`);
 }
 function exportSeatStudent() {
   const st = state.seating;
-  const data = st.cells.map(row => row.map(sid => seatStudentName(sid)));
+  const data = [];
+  const header = [''];
+  for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
+  header.push('');
+  data.push(header);
+  // 学生视角：站在下方面对讲台，最后一排（最后，离讲台最远）在表格最下方。
+  // 与教师用上下相反：按 r=rows-1→0 倒序写入，最后写入的(最下方)是 r=0（标号rows=最后一排）。
+  for (let r = st.rows - 1; r >= 0; r--) {
+    const rowNum = seatRowNumber(r);
+    data.push([rowNum, ...st.cells[r].map(sid => seatStudentName(sid)), rowNum]);
+  }
   exportSeatToXlsx(data, `${st.name || '座次表'}_学生用.xlsx`);
 }
 function exportSeatToXlsx(data, filename) {
