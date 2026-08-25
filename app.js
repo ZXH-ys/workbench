@@ -45,6 +45,7 @@ function defaultState() {
         { id: 'album', label: '班级相册', icon: '🖼️' },
         { id: 'seating', label: '座次表', icon: '🪑' },
         { id: 'duty', label: '值日表', icon: '🧹' },
+        { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
       ]},
       { id: 'communication', label: '家校沟通', icon: '💬' },
@@ -58,6 +59,7 @@ function defaultState() {
       ]},
       { id: 'reminders', label: '待办提醒', icon: '🔔' },
     ],
+    positions: defaultPositions(),
     schedule: {
       days: ['周一', '周二', '周三', '周四', '周五'],
       periods: [
@@ -219,12 +221,98 @@ function defaultPoints() {
   };
 }
 
+// 职务与值日管理：职务架构 / 值日生 / 职务积分 / 职务树 / 关联扣分
+function defaultPositions() {
+  const structure = [
+    { id:'banzhang', name:'班长', group:'班委', count:1, pts:5, seat:2, duties:['兼任音乐、美术课代表、心理委员','考勤（早、中、课上）','班级全部工作检查提醒','配合学校工作安排'], req:'品学兼优、以身作则' },
+    { id:'xuexi', name:'学习委员', group:'班委', count:1, pts:3.5, seat:1, duties:['本周课堂学习/违纪汇总（周末汇总周一交）','上周作业检查汇总（周一）','考试整理考场（周三）','班级学习工作检查提醒'], req:'品学兼优、以身作则' },
+    { id:'jilu', name:'记录员', group:'班委', count:1, pts:null, seat:null, duties:['班会内容记录（周一）','本周作业传达（周五晚）','1530 安全记录（每天）'], req:'书写工整' },
+    { id:'shenghuo', name:'生活委员', group:'班委', count:1, pts:3.5, seat:1, duties:['桌椅板凳摆放','整理讲桌','书橱/空桌整理','生活工作检查提醒'], req:'个人生活有条理' },
+    { id:'jiexian', name:'接线员', group:'班委', count:1, pts:null, seat:null, duties:['电脑/电灯/窗帘/空调开关（室内无人就关）'], req:'有时间观念' },
+    { id:'guangbo', name:'广播员', group:'班委', count:1, pts:null, seat:null, duties:['路队古诗（放学）','跑操口号（课间操）'], req:'嗓门大' },
+    { id:'linghang', name:'领航员', group:'班委', count:1, pts:null, seat:null, duties:['举旗/拿旗放旗（课间操）'], req:'体力好、眼神好' },
+    { id:'weisheng', name:'卫生委员', group:'班委', count:1, pts:3.5, seat:1, duties:['全天卫生检查','值日生提醒/替补','卫生工具整理','卫生工作检查提醒'], req:'爱干净' },
+    { id:'jiancha', name:'监察员', group:'班委', count:1, pts:3.5, seat:1, duties:['提醒班委履职','监督班委工作（周末汇总周一报）','提醒组长管课前纪律'], req:'公平公正、遵守纪律' },
+    { id:'jifen', name:'计分员', group:'班委', count:1, pts:null, seat:null, duties:['每周积分汇总汇报','整理积分表格'], req:'仔细、会加减法' },
+    { id:'zuzhang', name:'组长', group:'班委', count:6, pts:3.5, seat:1, duties:['检查小组作业报课代表','管理小组纪律计分','统计吃饭人数'], req:'公平公正、遵守纪律' },
+    { id:'zhiban', name:'值日班长', group:'班委', count:1, pts:null, seat:null, duties:['午休在讲台上值班'], req:'' },
+    { id:'xuehui', name:'学生会', group:'学生会', count:5, pts:null, seat:null, duties:['配合学校学生会工作'], req:'认真负责' },
+  ];
+  const assign = {};
+  structure.forEach(p => assign[p.id] = []);
+  const dutyTree = {
+    id:'banzhang', label:'班长', roleId:'banzhang', children:[
+      { id:'xuexi', label:'学习委员', roleId:'xuexi', children:[
+        { id:'jilu', label:'记录员', roleId:'jilu' },
+        { id:'kedaibiao', label:'课代表', roleId:'kedaibiao' }
+      ]},
+      { id:'shenghuo', label:'生活委员', roleId:'shenghuo', children:[
+        { id:'jiexian', label:'接线员', roleId:'jiexian' },
+        { id:'guangbo', label:'广播员', roleId:'guangbo' },
+        { id:'linghang', label:'领航员', roleId:'linghang' }
+      ]},
+      { id:'weisheng', label:'卫生委员', roleId:'weisheng', children:[
+        { id:'t_zrs', label:'值日生', children:[
+          { id:'t_zrs_hb', label:'黑板', dutyTask:'黑板（全部）' },
+          { id:'t_zrs_sn', label:'室内', dutyTask:'室内走廊' },
+          { id:'t_zrs_sw', label:'室外', dutyTask:'室外走廊（含窗台）' },
+          { id:'t_zrs_lj', label:'垃圾桶', dutyTask:'垃圾桶' },
+          { id:'t_zrs_td', label:'拖地' }
+        ]}
+      ]},
+      { id:'jiancha', label:'监察员', roleId:'jiancha', children:[
+        { id:'zuzhang', label:'组长', roleId:'zuzhang' }
+      ]},
+      { id:'jifen', label:'计分员', roleId:'jifen' },
+      { id:'xuehui', label:'学生会', roleId:'xuehui' },
+      { id:'zhiban', label:'值日班长', roleId:'zhiban' }
+    ]
+  };
+  const deductionKeywords = {
+    'banzhang':['班长'],
+    'xuexi':['学习委员','学习'],
+    'jilu':['记录员','记录'],
+    'kedaibiao':['课代表'],
+    'shenghuo':['生活委员','生活'],
+    'jiexian':['接线员','电脑','电灯','窗帘','空调'],
+    'guangbo':['广播员','广播','路队古诗','跑操口号'],
+    'linghang':['领航员','举旗','拿旗'],
+    'weisheng':['卫生委员','卫生'],
+    'jiancha':['监察员','监察','监督'],
+    'jifen':['计分员','计分','积分'],
+    'zuzhang':['组长'],
+    'zhiban':['值日班长'],
+    'xuehui':['学生会'],
+    't_zrs_hb':['黑板'],
+    't_zrs_sn':['室内','室内走廊'],
+    't_zrs_sw':['室外','室外走廊','窗台'],
+    't_zrs_lj':['垃圾桶','垃圾'],
+    't_zrs_td':['拖地','地面']
+  };
+  return {
+    structure, assign, dutyTree,
+    dutyWeekly:{}, dutyEditMode:{},
+    dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null },
+    deductionKeywords, deductionPoints:1
+  };
+}
+
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
+  // 职务与值日：补全子字段
+  if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
+  if (!Array.isArray(s.positions.structure) || !s.positions.structure.length) s.positions.structure = defaultPositions().structure;
+  if (!s.positions.assign || typeof s.positions.assign !== 'object') s.positions.assign = {};
+  s.positions.structure.forEach(p => { if (!Array.isArray(s.positions.assign[p.id])) s.positions.assign[p.id] = []; });
+  if (!s.positions.dutyTree || typeof s.positions.dutyTree !== 'object') s.positions.dutyTree = defaultPositions().dutyTree;
+  if (!s.positions.dutyWeekly || typeof s.positions.dutyWeekly !== 'object') s.positions.dutyWeekly = {};
+  if (!s.positions.deductionKeywords || typeof s.positions.deductionKeywords !== 'object') s.positions.deductionKeywords = defaultPositions().deductionKeywords;
+  if (typeof s.positions.deductionPoints !== 'number') s.positions.deductionPoints = 1;
+  if (!s.positions.dutyTaskPoints || typeof s.positions.dutyTaskPoints !== 'object') s.positions.dutyTaskPoints = defaultPositions().dutyTaskPoints;
   const dp = defaultPoints();
   if (!s.points || typeof s.points !== 'object') s.points = dp;
   if (!Array.isArray(s.points.logs)) s.points.logs = [];
@@ -332,6 +420,15 @@ function migrateState(s) {
   }
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
   if (!JSON.stringify(s.nav || []).includes('"points"')) s.nav = defaultState().nav;
+  // 确保「职务与值日」入口存在（旧导航可能没有）
+  if (!JSON.stringify(s.nav || []).includes('"positions"')) {
+    s.nav = s.nav.map(g => {
+      if (g && g.section === '日常记录' && Array.isArray(g.items)) {
+        if (!g.items.find(i => i.id === 'positions')) g.items.push({ id:'positions', label:'职务与值日', icon:'📋' });
+      }
+      return g;
+    });
+  }
   return s;
 }
 
@@ -769,6 +866,7 @@ function renderTopBar() {
     album: '班级相册', seating: '座次表', duty: '值日表', classRecord: '课堂记录',
     communication: '家校沟通', homework: '作业管理', templates: '模板库',
     report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
+    positions: '职务与值日管理',
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
@@ -815,7 +913,7 @@ function renderPage() {
     album: renderAlbum, seating: renderSeating, duty: renderDuty, classRecord: renderClassRecord,
     communication: renderCommunication, scores: renderExam, homework: renderHomework,
     templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
-    points: renderPoints, exam: renderExam, attendance: renderAttendance,
+    points: renderPoints, exam: renderExam, attendance: renderAttendance, positions: renderPositions,
   };
   return (map[currentRoute] || renderHome)();
 }
@@ -4348,6 +4446,442 @@ function openModal(title, body, size='md') {
     </div>`;
 }
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+// ===================== 职务与值日管理 =====================
+const pmDays = ['周一','周二','周三','周四','周五'];
+const pmDutyTasks = ['黑板（全部）','室内走廊','垃圾桶','室外走廊（含窗台）'];
+let pmTab = 'roles';
+let pmRolesEdit = false;
+let curCtx = { mode:'role', key:null, day:null, task:null };
+let pmDescId = null;
+let pmTreeDragId = null;
+
+function pmStudentNames(){ return (state.students||[]).filter(s=>s&&s.name).map(s=>s.name); }
+function pmStudentIdByName(name){ const s=(state.students||[]).find(x=>x.name===name); return s?s.id:null; }
+function pmSortPriority(a,b){
+  const ap=(a.pts!=null||a.seat!=null)?1:0;
+  const bp=(b.pts!=null||b.seat!=null)?1:0;
+  if(bp!==ap) return bp-ap;
+  return 0;
+}
+function pmRefreshAll(){ const b=document.getElementById('pm-body'); if(b) b.innerHTML=pmRenderTab(pmTab); }
+
+/* ===== 页面框架 ===== */
+function renderPositions(){
+  const segs=[['roles','职务架构'],['duty','值日生轮换'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
+  const segHtml=segs.map(([id,label])=>`<button class="pm-seg px-4 py-2 rounded-lg text-sm font-medium ${pmTab===id?'active':'text-slate-600 hover:bg-slate-100'}" data-pmtab="${id}" onclick="pmSwitch('${id}')">${label}</button>`).join('');
+  return `<div>
+    <div class="flex gap-1 mb-5 bg-white p-1 rounded-xl shadow-sm w-fit">${segHtml}</div>
+    <div id="pm-body">${pmRenderTab(pmTab)}</div>
+  </div>`;
+}
+function pmRenderTab(tab){
+  if(tab==='duty') return pmRenderDuty();
+  if(tab==='points') return pmRenderPoints();
+  if(tab==='tree') return pmRenderTree();
+  if(tab==='deduct') return pmRenderDeduct();
+  return pmRenderRoles();
+}
+function pmSwitch(tab){
+  pmTab=tab;
+  const body=document.getElementById('pm-body');
+  if(body) body.innerHTML=pmRenderTab(tab);
+  document.querySelectorAll('.pm-seg').forEach(b=>{ const on=b.getAttribute('data-pmtab')===tab; b.className='pm-seg px-4 py-2 rounded-lg text-sm font-medium '+(on?'active':'text-slate-600 hover:bg-slate-100'); });
+}
+
+/* ===== 职务架构 ===== */
+function pmChip(n,i,onRemove){ return `<span class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full border border-indigo-200" onclick="${onRemove}">${esc(n)}<span class="text-indigo-400">×</span></span>`; }
+function pmRenderRoles(){
+  const P=state.positions;
+  const list=P.structure.slice().sort(pmSortPriority);
+  let html=`<div class="flex items-center justify-between mb-3">
+    <div class="text-sm font-semibold text-slate-600">共 ${list.length} 个职务</div>
+    <div class="flex items-center gap-2">
+      ${pmRolesEdit?`<button class="text-sm bg-indigo-600 text-white rounded-lg px-3 py-1.5 hover:bg-indigo-700" onclick="pmAddPosition()">＋ 添加职务</button>`:''}
+      <button class="text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50" onclick="pmToggleRolesEdit()">${pmRolesEdit?'完成':'修改'}</button>
+    </div>
+  </div>`;
+  html+=`<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">`;
+  list.forEach(p=>{
+    const names=P.assign[p.id]||[];
+    const extra=p.pts!=null?('日积 '+p.pts):'';
+    const delBtn=pmRolesEdit?`<button class="text-[11px] text-red-500 hover:text-red-700 ml-2" onclick="pmDeletePosition('${p.id}')">删除</button>`:'';
+    html+=`<div class="bg-white rounded-2xl shadow-sm p-4 border-l-4 ${p.group==='学生会'?'border-purple-400':'border-indigo-400'}">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="font-bold text-slate-800 flex items-center gap-2">${esc(p.name)}<span class="text-xs text-slate-400 font-normal bg-slate-50 px-1.5 py-0.5 rounded">${names.length}人</span></div>
+          <div class="text-[11px] text-slate-400 mt-0.5">${esc(p.req)}</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="text-[11px] text-slate-400 hover:text-indigo-600" onclick="pmOpenDescEdit('${p.id}')">编辑</button>
+          ${delBtn}
+          <div class="text-[11px] text-amber-600 whitespace-nowrap">${extra||'—'}</div>
+        </div>
+      </div>
+      <ul class="text-[11px] text-slate-500 list-disc pl-4 mt-2 space-y-0.5 min-h-[38px]">${p.duties.map(d=>`<li>${esc(d)}</li>`).join('')}</ul>
+      <div class="flex flex-wrap gap-1.5 mt-3 items-center">
+        ${names.map((n,i)=>pmChip(n,i,`pmRemoveRole('${p.id}',${i})`)).join('')}
+        <span class="inline-flex items-center bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAdd('${p.id}')">＋</span>
+      </div>
+    </div>`;
+  });
+  html+=`</div>`;
+  return html;
+}
+function pmToggleRolesEdit(){ pmRolesEdit=!pmRolesEdit; pmRefreshAll(); }
+function pmAddPosition(){
+  const name=prompt('请输入新职务名称：'); if(!name||!name.trim()) return;
+  const id='pos_'+Date.now();
+  state.positions.structure.push({id:id,name:name.trim(),group:'班委',count:1,pts:null,seat:null,duties:[],req:''});
+  state.positions.assign[id]=[];
+  save(); pmRefreshAll();
+}
+function pmDeletePosition(id){
+  if(!confirm('确定删除这个职务吗？')) return;
+  state.positions.structure=state.positions.structure.filter(p=>p.id!==id);
+  delete state.positions.assign[id];
+  save(); pmRefreshAll();
+}
+function pmRemoveRole(id,i){ state.positions.assign[id].splice(i,1); save(); pmRefreshAll(); }
+function pmOpenDescEdit(id){
+  const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
+  pmDescId=id;
+  openModal('编辑职务 · '+p.name, `
+    <div class="space-y-3">
+      <div><label class="block text-xs text-gray-500 mb-1">任职要求</label><input id="pmDescReq" class="w-full border rounded-lg p-2 text-sm" value="${esc(p.req||'')}"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">职责（每行一条）</label><textarea id="pmDescDuties" class="w-full border rounded-lg p-2 text-sm" rows="5">${esc((p.duties||[]).join('\n'))}</textarea></div>
+      <button class="w-full bg-primary text-white py-2 rounded-full text-sm" onclick="pmSaveDescEdit()">保存</button>
+    </div>`);
+}
+function pmSaveDescEdit(){
+  const p=state.positions.structure.find(x=>x.id===pmDescId); if(!p) return;
+  p.req=document.getElementById('pmDescReq').value.trim();
+  const raw=document.getElementById('pmDescDuties').value.trim();
+  p.duties=raw?raw.split('\n').map(s=>s.trim()).filter(Boolean):[];
+  closeModal(); save(); pmRefreshAll();
+}
+
+/* ===== 添加成员弹窗（职务 / 值日生共用） ===== */
+function pmOpenAdd(id){
+  curCtx={mode:'role',key:id,day:null,task:null};
+  const p=state.positions.structure.find(x=>x.id===id);
+  openModal('添加成员 · '+(p?p.name:id), `
+    <div class="text-xs text-gray-400 mb-2" id="pmAssignHint"></div>
+    <div id="pmAssignBody" class="grid grid-cols-3 sm:grid-cols-4 gap-2"></div>
+    <div class="flex justify-end mt-4"><button class="bg-primary text-white px-4 py-2 rounded-full text-sm" onclick="closeModal()">完成</button></div>`);
+  pmBuildAssignBody((state.positions.assign[id]||[]).slice());
+}
+function pmOpenAddDuty(day,task){
+  curCtx={mode:'duty',key:null,day:day,task:task};
+  openModal('添加值日生 · '+day+' · '+task, `
+    <div class="text-xs text-gray-400 mb-2" id="pmAssignHint"></div>
+    <div id="pmAssignBody" class="grid grid-cols-3 sm:grid-cols-4 gap-2"></div>
+    <div class="flex justify-end mt-4"><button class="bg-primary text-white px-4 py-2 rounded-full text-sm" onclick="closeModal()">完成</button></div>`);
+  pmBuildAssignBody(((state.positions.dutyWeekly[day]&&state.positions.dutyWeekly[day][task])||[]).slice());
+}
+function pmBuildAssignBody(selected){
+  const set=new Set(selected.filter(Boolean));
+  const hint=document.getElementById('pmAssignHint'); if(hint) hint.textContent='已选 '+set.size+' 人';
+  const body=document.getElementById('pmAssignBody'); if(!body) return;
+  const names=pmStudentNames();
+  if(!names.length){ body.innerHTML='<div class="col-span-full text-sm text-gray-400">请先在「学生管理」录入学生</div>'; return; }
+  body.innerHTML=names.map(n=>{
+    const on=set.has(n);
+    return `<div class="px-3 py-2 rounded-lg border text-sm text-center ${on?'bg-indigo-600 text-white border-indigo-600':'bg-gray-50 text-gray-700 border-gray-200 cursor-pointer'}" onclick="pmToggleStu('${esc(n)}')">${esc(n)}</div>`;
+  }).join('');
+}
+function pmToggleStu(name){
+  let cur;
+  if(curCtx.mode==='role') cur=(state.positions.assign[curCtx.key]||[]).slice();
+  else cur=((state.positions.dutyWeekly[curCtx.day]&&state.positions.dutyWeekly[curCtx.day][curCtx.task])||[]).slice();
+  const i=cur.indexOf(name);
+  if(i>=0) cur.splice(i,1); else cur.push(name);
+  if(curCtx.mode==='role') state.positions.assign[curCtx.key]=cur;
+  else state.positions.dutyWeekly[curCtx.day][curCtx.task]=cur;
+  pmBuildAssignBody(cur);
+  save(); pmRefreshAll();
+}
+
+/* ===== 值日生轮换 ===== */
+function pmAutoDuty(){
+  const names=pmStudentNames(); state.positions.dutyWeekly={}; let i=0;
+  pmDays.forEach(d=>{ state.positions.dutyWeekly[d]={}; pmDutyTasks.forEach(t=>{ state.positions.dutyWeekly[d][t]=[ names[i%names.length] ]; i++; }); });
+  save(); pmRefreshAll();
+}
+function pmRenderDuty(){
+  const P=state.positions;
+  if(!P.dutyWeekly||!Object.keys(P.dutyWeekly).length){
+    P.dutyWeekly={}; pmDays.forEach(d=>{ P.dutyWeekly[d]={}; pmDutyTasks.forEach(t=>{ P.dutyWeekly[d][t]=[]; }); });
+  }
+  let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="font-bold text-slate-700">值日生轮换（周一~周五 × 任务）</div>
+      <div class="flex gap-2">
+        <button class="text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50" onclick="pmExportDutyXlsx()">⬇ 导出 Excel</button>
+        <button class="text-sm bg-sky-600 text-white rounded-lg px-3 py-1.5 hover:bg-sky-700" onclick="pmAutoDuty()">⚡ 自动排表</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto"><table class="w-full text-sm border-collapse">
+      <thead><tr class="bg-slate-50"><th class="text-left p-2 font-medium text-slate-500">任务 / 日</th>${pmDays.map(d=>`<th class="p-2 font-medium text-slate-500">${d}</th>`).join('')}</tr></thead>
+      <tbody>`;
+  pmDutyTasks.forEach(t=>{
+    html+=`<tr><td class="p-3 font-medium text-slate-600 bg-slate-50 whitespace-nowrap">${t}</td>`;
+    pmDays.forEach(d=>{
+      const names=(P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[];
+      const editing=P.dutyEditMode[d]&&P.dutyEditMode[d][t];
+      const nameRows=names.length?names.map((n,i)=>`<div class="name-col"><span class="inline-flex items-center gap-1 bg-sky-50 text-sky-700 text-sm px-2.5 py-1 rounded border border-sky-200 cursor-pointer" onclick="pmRemoveDuty('${d}','${t}',${i})">${esc(n)}<span class="text-sky-400">×</span></span></div>`).join(''):`<div class="name-col"><span class="text-slate-300 text-sm">空</span></div>`;
+      const addRow=editing?`<div class="name-col"><span class="inline-flex items-center justify-center bg-slate-100 text-slate-500 text-sm px-2 py-1 rounded border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAddDuty('${d}','${t}')">＋</span></div>`:'';
+      const toggle=`<div class="edit-toggle" onclick="pmToggleDutyEdit('${d}','${t}')">${editing?'完成':'修改'}</div>`;
+      html+=`<td class="border cell-edit duty-cell">${nameRows}${addRow}${toggle}</td>`;
+    });
+    html+=`</tr>`;
+  });
+  html+=`</tbody></table></div>
+    <p class="text-xs text-slate-400 mt-3">点击任意格子可添加成员；点姓名上的 × 删除；每天人数随成员增减自动变化。</p>
+  </div>`;
+  return html;
+}
+function pmRemoveDuty(day,task,i){ state.positions.dutyWeekly[day][task].splice(i,1); save(); pmRefreshAll(); }
+function pmToggleDutyEdit(day,task){ state.positions.dutyEditMode[day]=state.positions.dutyEditMode[day]||{}; state.positions.dutyEditMode[day][task]=!state.positions.dutyEditMode[day][task]; pmRefreshAll(); }
+function pmExportDutyXlsx(){
+  if(typeof XLSX==='undefined'){ return alert('导出组件未加载，请刷新后重试'); }
+  const P=state.positions;
+  const rows=[['值日生'].concat(pmDays)];
+  pmDutyTasks.forEach(t=>{ rows.push([t].concat(pmDays.map(d=>{ const ns=(P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[]; return ns.join('、'); }))); });
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'值日生安排');
+  XLSX.writeFile(wb,'值日生安排.xlsx');
+}
+
+/* ===== 职务积分 ===== */
+function pmPointRow(p){
+  return `<tr><td class="p-2 font-medium">${esc(p.name)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${p.pts==null?'':p.pts}" onchange="pmUpdatePoint('${p.id}','pts',this.value)"></td></tr>`;
+}
+function pmDutyPointRow(task){
+  const v=state.positions.dutyTaskPoints[task];
+  return `<tr><td class="p-2 font-medium">${esc(task)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${v==null?'':v}" onchange="pmUpdateDutyPoint('${esc(task)}',this.value)"></td></tr>`;
+}
+function pmRenderPoints(){
+  const P=state.positions;
+  const banWei=P.structure.filter(p=>p.pts!=null);
+  const feiBanWei=P.structure.filter(p=>p.pts==null);
+  let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
+    <div class="font-bold text-slate-700 mb-4">职务积分（修改后同步到职务架构）</div>
+    <div class="grid lg:grid-cols-2 gap-5">
+      <div><div class="text-sm font-semibold text-slate-600 mb-2">班委积分</div>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务</th><th class="text-left p-2">日积分</th></tr></thead>
+          <tbody>${banWei.map(pmPointRow).join('')}</tbody></table></div></div>
+      <div><div class="text-sm font-semibold text-slate-600 mb-2">非班委职务</div>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务 / 值日任务</th><th class="text-left p-2">日积分</th></tr></thead>
+          <tbody>${feiBanWei.map(pmPointRow).join('')}${pmDutyTasks.map(pmDutyPointRow).join('')}</tbody></table></div></div>
+    </div>
+    <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。</p>
+  </div>`;
+  return html;
+}
+function pmUpdatePoint(id,field,val){
+  const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
+  const v=val.trim();
+  if(v==='') p[field]=null; else p[field]=field==='pts'?parseFloat(v):parseInt(v,10);
+  save(); pmRefreshAll();
+}
+function pmUpdateDutyPoint(task,val){
+  const v=val.trim();
+  state.positions.dutyTaskPoints[task]= v===''?null:parseFloat(v);
+  save(); pmRefreshAll();
+}
+
+/* ===== 职务树（横向组织图 + 拖动分支） ===== */
+function pmGetTreeNames(node){
+  let names=[];
+  if(node.id==='t_zrs') return names;
+  if(node.roleId && state.positions.assign[node.roleId]) names=state.positions.assign[node.roleId].slice();
+  else if(node.dutyTask){
+    pmDays.forEach(d=>{ if(state.positions.dutyWeekly[d]&&state.positions.dutyWeekly[d][node.dutyTask]){ state.positions.dutyWeekly[d][node.dutyTask].forEach(n=>{ if(!names.includes(n)) names.push(n); }); } });
+  }
+  return names;
+}
+function pmNamesHtml(names){ if(!names||!names.length) return '<span class="org-empty">未安排</span>'; return names.map(n=>`<span class="name-chip">${esc(n)}</span>`).join(''); }
+function pmTreeNodeClass(node){ if(node.id==='banzhang') return 'root'; if(node.children&&node.children.length) return 'branch'; return 'leaf'; }
+function pmIsDraggableNode(node){ return node.roleId && node.id!=='banzhang'; }
+function pmIsDroppableNode(node){ return node.roleId || node.id==='banzhang'; }
+function pmRenderTreeNode(node){
+  const hasChildren=node.children&&node.children.length;
+  const cls=pmTreeNodeClass(node)+(pmGetTreeNames(node).length===0&&node.id!=='t_zrs'?' empty':'');
+  const names=pmGetTreeNames(node);
+  const draggable=pmIsDraggableNode(node);
+  const droppable=pmIsDroppableNode(node);
+  const dragAttr=draggable?`draggable="true" ondragstart="pmTreeDragStart(event,'${node.id}')"`:'';
+  const dropAttr=droppable?`ondragover="pmTreeDragOver(event,'${node.id}')" ondragleave="pmTreeDragLeave(event,'${node.id}')" ondrop="pmTreeDrop(event,'${node.id}')"`:'';
+  let html=`<li><div id="pm-node-${node.id}" class="org-node ${cls}" ${dragAttr} ${dropAttr}>
+    <div class="title">${esc(node.label)}</div>
+    <div class="names">${pmNamesHtml(names)}</div>
+  </div>`;
+  if(hasChildren) html+=`<ul>${node.children.map(c=>pmRenderTreeNode(c)).join('')}</ul>`;
+  html+=`</li>`;
+  return html;
+}
+function pmFindTreeNode(root,id){ if(root.id===id) return root; if(root.children){ for(const c of root.children){ const f=pmFindTreeNode(c,id); if(f) return f; } } return null; }
+function pmFindTreeParent(root,id){ if(!root.children) return null; for(const c of root.children){ if(c.id===id) return root; } for(const c of root.children){ const p=pmFindTreeParent(c,id); if(p) return p; } return null; }
+function pmIsDescendant(root,id){ if(root.id===id) return true; if(root.children){ for(const c of root.children){ if(pmIsDescendant(c,id)) return true; } } return false; }
+function pmGetRoleIdsInTree(node,set){ set=set||new Set(); if(node.roleId) set.add(node.roleId); if(node.children) node.children.forEach(c=>pmGetRoleIdsInTree(c,set)); return set; }
+function pmPruneTree(node){
+  if(!node.children) return;
+  node.children=node.children.filter(c=>{
+    if(c.roleId && c.id!=='banzhang' && !state.positions.structure.find(p=>p.id===c.roleId)) return false;
+    pmPruneTree(c); return true;
+  });
+}
+function pmGetFreePositions(){ const inTree=pmGetRoleIdsInTree(state.positions.dutyTree); return state.positions.structure.filter(p=>p.id!=='banzhang' && !inTree.has(p.id)); }
+function pmRenderTree(){
+  pmPruneTree(state.positions.dutyTree);
+  const free=pmGetFreePositions();
+  const freeHtml=`<div class="free-zone drop-target" id="pmFreeZone" ondragover="pmTreeDragOver(event,'free')" ondragleave="pmTreeDragLeave(event,'free')" ondrop="pmTreeDrop(event,'free')">
+    <div class="free-zone-title">未分配职务（把树上的职务拖回这里即可取消分支；从「职务架构」新增后会出现在这里）</div>
+    <div class="free-list">${free.length?free.map(p=>`<span class="free-node" draggable="true" ondragstart="pmTreeDragStart(event,'${p.id}')">${esc(p.name)}</span>`).join(''):'<span class="org-empty">暂无未分配职务</span>'}</div>
+  </div>`;
+  let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
+    <div class="flex items-center justify-between mb-4">
+      <div><div class="font-bold text-slate-700">班级职务分工树</div>
+      <div class="text-xs text-slate-400 mt-0.5">拖动职务即可调整分支；职务在「职务架构」增删后这里自动同步</div></div>
+    </div>
+    <div class="org-chart overflow-x-auto pb-4"><ul>${pmRenderTreeNode(state.positions.dutyTree)}</ul></div>
+    ${freeHtml}
+  </div>`;
+  return html;
+}
+function pmTreeDragStart(e,id){ pmTreeDragId=id; e.dataTransfer.setData('text/plain',id); e.dataTransfer.effectAllowed='move'; }
+function pmTreeDragOver(e,id){ e.preventDefault(); if(id===pmTreeDragId) return; if(pmTreeDragId&&id!=='free'&&pmIsDescendant(pmFindTreeNode(state.positions.dutyTree,pmTreeDragId),id)) return; const el=id==='free'?document.getElementById('pmFreeZone'):document.getElementById('pm-node-'+id); if(el) el.classList.add('drag-over'); }
+function pmTreeDragLeave(e,id){ const el=id==='free'?document.getElementById('pmFreeZone'):document.getElementById('pm-node-'+id); if(el) el.classList.remove('drag-over'); }
+function pmTreeDrop(e,id){ e.preventDefault(); pmTreeDragLeave(e,id); const dragId=e.dataTransfer.getData('text/plain')||pmTreeDragId; pmTreeDragId=null; if(!dragId||dragId===id) return; pmMoveTreeNode(dragId,id); }
+function pmMoveTreeNode(nodeId,newParentId){
+  if(nodeId===newParentId) return;
+  if(nodeId==='banzhang') return;
+  const movingNode=pmFindTreeNode(state.positions.dutyTree,nodeId);
+  if(movingNode && newParentId!=='free' && pmIsDescendant(movingNode,newParentId)) return;
+  let node=movingNode;
+  if(!node){ const p=state.positions.structure.find(x=>x.id===nodeId); if(!p) return; node={id:p.id,label:p.name,roleId:p.id,children:[]}; }
+  else { const oldParent=pmFindTreeParent(state.positions.dutyTree,nodeId); if(oldParent) oldParent.children=oldParent.children.filter(c=>c.id!==nodeId); }
+  if(newParentId==='free'){ save(); pmRefreshAll(); return; }
+  const newParent=pmFindTreeNode(state.positions.dutyTree,newParentId);
+  if(newParent){ newParent.children=newParent.children||[]; newParent.children.push(node); }
+  save(); pmRefreshAll();
+}
+
+/* ===== 关联扣分 ===== */
+function pmFlattenTree(node,list){ list=list||[]; list.push(node); if(node.children) node.children.forEach(c=>pmFlattenTree(c,list)); return list; }
+function pmGetNodePath(root,id,path){ path=path||[]; if(root.id===id) return path.concat(root); if(root.children){ for(const c of root.children){ const f=pmGetNodePath(c,id,path.concat(root)); if(f) return f; } } return null; }
+function pmFindTreeNodeById(root,id){ if(root.id===id) return root; if(root.children){ for(const c of root.children){ const f=pmFindTreeNodeById(c,id); if(f) return f; } } return null; }
+function pmCleanDeductionKeywords(){ const valid=new Set(pmFlattenTree(state.positions.dutyTree).map(n=>n.id)); for(const id in state.positions.deductionKeywords) if(!valid.has(id)) delete state.positions.deductionKeywords[id]; }
+function pmExtractDay(text){
+  const days=['周一','周二','周三','周四','周五','周六','周日','星期天','星期日'];
+  for(const d of days) if(text.includes(d)) return d;
+  if(text.includes('今天')||text.includes('今日')){ const labels=['周日','周一','周二','周三','周四','周五','周六']; return labels[new Date().getDay()]; }
+  return null;
+}
+function pmFindNodeByKeyword(text){
+  const lower=text.toLowerCase();
+  for(const id in state.positions.deductionKeywords){ for(const kw of state.positions.deductionKeywords[id]){ if(lower.includes(kw.toLowerCase())) return id; } }
+  return null;
+}
+function pmGetPeopleForNode(node,day){
+  if(node.roleId) return (state.positions.assign[node.roleId]||[]).map(name=>({name,pos:node.label}));
+  if(node.dutyTask){
+    if(day && state.positions.dutyWeekly[day] && state.positions.dutyWeekly[day][node.dutyTask]) return state.positions.dutyWeekly[day][node.dutyTask].map(name=>({name,pos:day+node.label}));
+    const set=new Set(), list=[];
+    pmDays.forEach(d=>{ if(state.positions.dutyWeekly[d]&&state.positions.dutyWeekly[d][node.dutyTask]){ state.positions.dutyWeekly[d][node.dutyTask].forEach(n=>{ if(!set.has(n)){ set.add(n); list.push({name:n,pos:d+node.label}); } }); } });
+    return list;
+  }
+  return [];
+}
+function pmGetDeductionChain(nodeId,day){
+  const path=pmGetNodePath(state.positions.dutyTree,nodeId);
+  if(!path) return [];
+  const people=[], seen=new Set();
+  for(let i=path.length-1;i>=0;i--){ pmGetPeopleForNode(path[i],day).forEach(p=>{ if(!seen.has(p.name)){ seen.add(p.name); people.push(p); } }); }
+  return people;
+}
+function pmDeductionKeywordRow(node){
+  const kws=state.positions.deductionKeywords[node.id]||[];
+  return `<div class="flex items-start gap-2 text-sm border-b border-slate-100 py-2">
+    <div class="font-medium text-slate-700 min-w-[90px] pt-0.5">${esc(node.label)}</div>
+    <div class="flex flex-wrap gap-1 flex-1">
+      ${kws.map((kw,i)=>`<span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 text-xs px-2 py-1 rounded border border-slate-200 cursor-pointer" onclick="pmRemoveDeductKeyword('${node.id}',${i})">${esc(kw)}<span class="text-slate-400">×</span></span>`).join('')}
+      <span class="inline-flex items-center bg-slate-50 text-slate-500 text-xs px-2 py-1 rounded border border-dashed border-slate-300 cursor-pointer" onclick="pmAddDeductKeyword('${node.id}')">＋</span>
+    </div>
+  </div>`;
+}
+function pmRenderDeduct(){
+  pmCleanDeductionKeywords();
+  const nodes=pmFlattenTree(state.positions.dutyTree);
+  const todayLabels=['周日','周一','周二','周三','周四','周五','周六'];
+  const todayLbl=todayLabels[new Date().getDay()];
+  let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
+    <div class="font-bold text-slate-700 mb-4">关联扣分（沿职务树向上追责）</div>
+    <div class="grid lg:grid-cols-2 gap-5">
+      <div><div class="text-sm font-semibold text-slate-600 mb-2">识别关键词设置</div>
+        <div class="space-y-0 max-h-[460px] overflow-y-auto pr-1 border border-slate-100 rounded-xl p-2">
+          ${nodes.map(pmDeductionKeywordRow).join('')}
+        </div>
+        <p class="text-xs text-slate-400 mt-2">在快速记录中输入描述，系统会匹配关键词，并沿职务树向上找到相关人员。</p>
+      </div>
+      <div><div class="text-sm font-semibold text-slate-600 mb-2">快速记录 <span class="text-xs text-gray-400">（今天：${todayLbl}，写“今天”会自动识别）</span></div>
+        <textarea id="pmDeductInput" class="w-full border border-slate-200 rounded-lg p-3 text-sm" rows="3" placeholder="例如：周一垃圾桶不合格；监察员今天没好好干"></textarea>
+        <div class="flex gap-2 mt-2 items-center">
+          <button class="text-sm bg-indigo-600 text-white rounded-lg px-4 py-2 hover:bg-indigo-700" onclick="pmParseDeduct()">识别</button>
+          <input type="number" step="0.5" id="pmDeductPoints" value="${state.positions.deductionPoints}" class="inline-input">
+          <span class="text-sm text-slate-500">分 / 人</span>
+        </div>
+        <div id="pmDeductResult" class="mt-3"></div>
+      </div>
+    </div>
+  </div>`;
+  return html;
+}
+function pmAddDeductKeyword(nodeId){ const kw=prompt('请输入识别关键词：'); if(!kw||!kw.trim()) return; state.positions.deductionKeywords[nodeId]=state.positions.deductionKeywords[nodeId]||[]; state.positions.deductionKeywords[nodeId].push(kw.trim()); save(); pmRefreshAll(); }
+function pmRemoveDeductKeyword(nodeId,i){ state.positions.deductionKeywords[nodeId].splice(i,1); save(); pmRefreshAll(); }
+function pmParseDeduct(){
+  const text=document.getElementById('pmDeductInput').value.trim();
+  const resultEl=document.getElementById('pmDeductResult');
+  if(!text){ resultEl.innerHTML='<p class="text-xs text-slate-400">请输入描述</p>'; return; }
+  const nodeId=pmFindNodeByKeyword(text);
+  if(!nodeId){ resultEl.innerHTML='<p class="text-xs text-red-500">未识别到职务/任务关键词，请在左侧添加关键词</p>'; return; }
+  const day=pmExtractDay(text);
+  const node=pmFindTreeNodeById(state.positions.dutyTree,nodeId);
+  const chain=pmGetDeductionChain(nodeId,day);
+  const path=pmGetNodePath(state.positions.dutyTree,nodeId).map(n=>n.label).join(' → ');
+  const pts=parseFloat(document.getElementById('pmDeductPoints').value)||0;
+  let html=`<div class="bg-slate-50 rounded-lg p-3 text-sm">
+    <div class="text-slate-500 text-xs mb-1">识别路径</div>
+    <div class="font-medium text-indigo-700 mb-2">${esc(path)} ${day?('（'+esc(day)+'）'):''}</div>
+    <div class="text-slate-500 text-xs mb-1">将扣分人员</div>
+    <div class="flex flex-wrap gap-1.5">
+      ${chain.length?chain.map(p=>`<span class="bg-white border border-slate-200 rounded-full px-2.5 py-1 text-xs">${esc(p.name)} <span class="text-slate-400">(${esc(p.pos)})</span></span>`).join(''):'<span class="text-slate-400 text-xs">该路径上未安排人员</span>'}
+    </div>
+    <button class="mt-3 text-xs bg-red-500 text-white rounded-lg px-3 py-1.5 hover:bg-red-600" onclick="pmConfirmDeduct('${nodeId}',${pts})">确认每人扣 ${esc(pts.toString())} 分</button>
+  </div>`;
+  resultEl.innerHTML=html;
+}
+function pmConfirmDeduct(nodeId,pts){
+  const text=document.getElementById('pmDeductInput').value.trim();
+  const day=pmExtractDay(text);
+  const node=pmFindTreeNodeById(state.positions.dutyTree,nodeId);
+  const chain=pmGetDeductionChain(nodeId,day);
+  if(!chain.length) return alert('未识别到可扣分人员');
+  const reason=(day?day+' ':'')+(node?node.label:'')+' 关联扣分';
+  const batchId=uid();
+  let cnt=0;
+  chain.forEach(p=>{
+    const sid=pmStudentIdByName(p.name);
+    if(!sid) return;
+    ptWriteLog(sid,'post',-Math.abs(pts),reason,batchId,'deduct');
+    cnt++;
+  });
+  save(); render();
+  alert('已对 '+cnt+' 人各扣 '+pts+' 分（任职赋分维度，可在积分管理-日志查看/撤销）。');
+}
 
 // ===================== Init =====================
 function showLogin() {
