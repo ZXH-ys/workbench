@@ -1740,7 +1740,7 @@ function exportSeatToXlsx(data, filename) {
   XLSX.writeFile(wb, filename);
 }
 
-// ===================== Album =====================// ===================== Album =====================// ===================== Album =====================
+// ===================== Album =====================
 function renderAlbum() {
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
