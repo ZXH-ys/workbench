@@ -204,38 +204,25 @@ function dimStyle(id) { return DIM_STYLE[id] || DIM_STYLE.daily; }
 function defaultPoints() {
   return {
     rules: [
-      { id: uid(), dim: 'sport', label: '早锻炼打卡', delta: 2 },
-      { id: uid(), dim: 'sport', label: '体育课积极表现', delta: 3 },
-      { id: uid(), dim: 'sport', label: '课间操标准', delta: 1 },
-      { id: uid(), dim: 'sport', label: '无故缺席锻炼', delta: -3 },
-      { id: uid(), dim: 'daily', label: '主动回答问题', delta: 2 },
-      { id: uid(), dim: 'daily', label: '帮助同学', delta: 3 },
-      { id: uid(), dim: 'daily', label: '卫生打扫认真', delta: 2 },
-      { id: uid(), dim: 'daily', label: '作业未交', delta: -3 },
-      { id: uid(), dim: 'daily', label: '迟到', delta: -2 },
-      { id: uid(), dim: 'daily', label: '违反课堂纪律', delta: -5 },
-      { id: uid(), dim: 'exam', label: '班级前10名', delta: 10 },
-      { id: uid(), dim: 'exam', label: '成绩显著进步', delta: 8 },
-      { id: uid(), dim: 'exam', label: '单科第一/满分', delta: 5 },
-      { id: uid(), dim: 'exam', label: '考试退步明显', delta: -3 },
-      { id: uid(), dim: 'post', label: '履职尽责（月度）', delta: 5 },
-      { id: uid(), dim: 'post', label: '组织活动出色', delta: 5 },
-      { id: uid(), dim: 'post', label: '履职不到位', delta: -3 },
+      { id: uid(), dim: 'sport', label: '早锻炼打卡', delta: 2, keywords: ['早锻炼','体育早训'] },
+      { id: uid(), dim: 'sport', label: '体育课积极表现', delta: 3, keywords: ['体育课积极','体育课表现'] },
+      { id: uid(), dim: 'sport', label: '课间操标准', delta: 1, keywords: ['课间操'] },
+      { id: uid(), dim: 'sport', label: '无故缺席锻炼', delta: -3, keywords: ['缺席锻炼','未参加锻炼'] },
+      { id: uid(), dim: 'daily', label: '主动回答问题', delta: 2, keywords: ['主动回答','回答问题'] },
+      { id: uid(), dim: 'daily', label: '帮助同学', delta: 3, keywords: ['帮助同学','助人为乐'] },
+      { id: uid(), dim: 'daily', label: '卫生打扫认真', delta: 2, keywords: ['卫生认真','打扫认真'] },
+      { id: uid(), dim: 'daily', label: '作业未交', delta: -3, keywords: ['作业未交','未交作业','没交作业'] },
+      { id: uid(), dim: 'daily', label: '迟到', delta: -2, keywords: ['迟到'] },
+      { id: uid(), dim: 'daily', label: '违反课堂纪律', delta: -5, keywords: ['违反纪律','课堂纪律'] },
+      { id: uid(), dim: 'exam', label: '班级前10名', delta: 10, keywords: ['班级前10','前十名'] },
+      { id: uid(), dim: 'exam', label: '成绩显著进步', delta: 8, keywords: ['成绩显著进步','显著进步'] },
+      { id: uid(), dim: 'exam', label: '单科第一/满分', delta: 5, keywords: ['单科第一','满分'] },
+      { id: uid(), dim: 'exam', label: '考试退步明显', delta: -3, keywords: ['退步明显'] },
+      { id: uid(), dim: 'post', label: '履职尽责（月度）', delta: 5, keywords: ['履职尽责'] },
+      { id: uid(), dim: 'post', label: '组织活动出色', delta: 5, keywords: ['组织活动出色'] },
+      { id: uid(), dim: 'post', label: '履职不到位', delta: -3, keywords: ['履职不到位','履职不力'] },
     ],
-    jobs: [
-      { id: uid(), name: '班长', daily: 2 },
-      { id: uid(), name: '副班长', daily: 2 },
-      { id: uid(), name: '学习委员', daily: 2 },
-      { id: uid(), name: '纪律委员', daily: 1.5 },
-      { id: uid(), name: '体育委员', daily: 1.5 },
-      { id: uid(), name: '卫生委员', daily: 1.5 },
-      { id: uid(), name: '语文课代表', daily: 1 },
-      { id: uid(), name: '数学课代表', daily: 1 },
-      { id: uid(), name: '英语课代表', daily: 1 },
-      { id: uid(), name: '小组长', daily: 1 },
-    ],
-    assigns: [],
-    jobStartDate: '2026-01-01',
+    calcStartDate: '2026-01-01',
     logs: [],
   };
 }
@@ -345,14 +332,12 @@ function migrateState(s) {
   if (!s.points || typeof s.points !== 'object') s.points = dp;
   if (!Array.isArray(s.points.logs)) s.points.logs = [];
   if (!Array.isArray(s.points.rules) || !s.points.rules.length) s.points.rules = dp.rules;
-  // 旧版 posts（简化职务）迁移为新版 jobs + assigns + 任职起始日
-  if (Array.isArray(s.points.posts)) {
-    s.points.jobs = s.points.posts.map(p => ({ id: p.id || uid(), name: p.name || '职务', daily: +p.score || 0 }));
-    s.points.assigns = s.points.posts.filter(p => p.studentId).map(p => ({ stuId: p.studentId, jobId: p.id }));
+  // 起始日：旧版 jobStartDate 统一迁移为 calcStartDate，作为全局积分计算起始日
+  if (!s.points.calcStartDate) s.points.calcStartDate = s.points.jobStartDate || '2026-01-01';
+  // 规则补全 keywords 字段（积分预设规则改为关键词识别模式）
+  if (Array.isArray(s.points.rules)) {
+    s.points.rules.forEach(r => { if (!Array.isArray(r.keywords)) r.keywords = []; });
   }
-  if (!Array.isArray(s.points.jobs)) s.points.jobs = dp.jobs;
-  if (!Array.isArray(s.points.assigns)) s.points.assigns = [];
-  if (!s.points.jobStartDate) s.points.jobStartDate = '2026-01-01';
   if (!Array.isArray(s.classRecords)) s.classRecords = [];
   if (!Array.isArray(s.classRecordSubjects) || !s.classRecordSubjects.length) s.classRecordSubjects = defaultClassRecordSubjects();
   if (!Array.isArray(s.homeworkKeywords) || !s.homeworkKeywords.length) s.homeworkKeywords = defaultHomeworkKeywords();
@@ -895,7 +880,6 @@ function renderTopBar() {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
       ${menuBtn}<h1 class="text-lg font-bold text-gray-800">积分管理</h1>
       <div class="flex items-center gap-2 flex-wrap justify-end">
-        <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtJobs()">🎖️ 职务</button>
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtRules()">⚙️ 规则</button>
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtLogs()">📜 日志</button>
         <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtBatch()">批量加减分</button>
@@ -948,8 +932,20 @@ function renderHome() {
     if(node.children) node.children.forEach(c=>{ list=list.concat(collect(c)); });
     return list;
   })(dutyTree) : [];
+  const startDate = state.points.calcStartDate || '2026-01-01';
   return `
   <div class="grid grid-cols-12 gap-6">
+    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800">📅 积分计算起始日</div>
+        <span class="text-xs text-gray-400">设置后，所有积分排行与统计均从该日开始计算</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <input id="homeCalcStart" type="date" value="${esc(startDate)}" class="border rounded-lg p-2 text-sm">
+        <button class="bg-primary text-white px-4 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveHomeCalcStart()">保存起始日</button>
+        <span class="text-xs text-gray-400">当前显示：${esc(startDate)} 起的积分</span>
+      </div>
+    </div>
     <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
       <div class="flex items-center justify-between mb-3">
         <div class="font-bold text-gray-800">🧹 今日值日</div>
@@ -2116,6 +2112,40 @@ let pointsMode = 'conv'; // 'conv' 折算分 | 'raw' 原始分
 
 function setPtMode(m) { pointsMode = m; render(); }
 function ptScoreOf(sid) { return pointsMode === 'conv' ? ptConvTotal(sid) : ptRawTotal(sid); }
+function saveHomeCalcStart() {
+  const v = document.getElementById('homeCalcStart').value;
+  if (!v) return alert('请选择有效的起始日期');
+  state.points.calcStartDate = v;
+  save(); render();
+  toast('积分计算起始日已更新：' + v + ' 起的记录才会参与统计');
+}
+
+// 将各种日期字符串解析为 Date（当年）：支持 "8月25日"、"2026-09-01"、"2026/09/01"、"9.1" 等
+function ptParseDate(str) {
+  if (!str) return null;
+  const currentYear = new Date().getFullYear();
+  let m;
+  if ((m = String(str).match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/))) {
+    return new Date(+m[1], +m[2] - 1, +m[3]);
+  }
+  if ((m = String(str).match(/^(\d{1,2})[\.\/月](\d{1,2})[日\s]*$/))) {
+    return new Date(currentYear, +m[1] - 1, +m[2]);
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+function ptCalcStartDate() {
+  return ptParseDate(state.points.calcStartDate) || new Date('2026-01-01');
+}
+function ptIsLogEffective(log) {
+  const start = ptCalcStartDate();
+  const logDate = ptParseDate(log.date);
+  if (!logDate) return true; // 无法解析日期时，默认参与计算
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const logDay = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate());
+  return logDay.getTime() >= startDay.getTime();
+}
+function ptEffectiveLogs(logs) { return logs.filter(ptIsLogEffective); }
 
 function nowStamp() {
   const d = new Date(); const p = n => String(n).padStart(2, '0');
@@ -2123,9 +2153,9 @@ function nowStamp() {
 }
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
 function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId === sid); }
-function ptTotal(sid) { return ptSum(ptStudentLogs(sid)); }
-function ptDimScore(sid, dim) { return ptSum(ptStudentLogs(sid).filter(l => l.dim === dim)); }
-function ptClassSum(dim) { return ptSum(state.points.logs.filter(l => dim === 'all' || l.dim === dim)); }
+function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
+function ptDimScore(sid, dim) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim))); }
+function ptClassSum(dim) { return ptSum(ptEffectiveLogs(state.points.logs.filter(l => dim === 'all' || l.dim === dim))); }
 function ptRanked(dim) {
   const arr = state.students.map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
@@ -2141,7 +2171,6 @@ function ptDeltaBg(d) { return d >= 0 ? 'bg-red-50 text-red-500' : 'bg-emerald-5
 function fmtScore(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
 function ptSigned(d) { return (d >= 0 ? '+' : '') + fmtScore(d); }
 function ptStudentName(sid) { const s = state.students.find(x => x.id === sid); return s ? s.name : '（已删除学生）'; }
-function ptJobsOf(sid) { return state.points.assigns.filter(a => a.stuId === sid).map(a => { const j = state.points.jobs.find(x => x.id === a.jobId); return j ? j.name : ''; }).filter(Boolean); }
 // ===== 折算：各维度原始分 × 比例 = 折算分 =====
 function ptConvDim(sid, dim) { return (ptDimScore(sid, dim) || 0) * (state.convertRatios[dim] != null ? state.convertRatios[dim] : 1); }
 function ptConvTotal(sid) { return POINT_DIMS.reduce((a, d) => a + ptConvDim(sid, d.id), 0); }
@@ -2222,7 +2251,6 @@ function renderPtList() {
       ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = ptDimScore(x.s.id, d.id);
           return `<span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}" title="${d.label}">${d.icon}${fmtScore(v)}</span>`; }).join('')
       : '';
-    const postTags = ptJobsOf(x.s.id).map(n => `<span class="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-600">${esc(n)}</span>`).join('');
     const w = Math.round(Math.abs(x.score) / maxAbs * 100);
     const barCls = dim === 'all' ? 'bg-primary/60' : dimStyle(dim).bar;
     return `
@@ -2232,7 +2260,6 @@ function renderPtList() {
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="font-medium text-gray-800 text-sm cursor-pointer hover:text-primary" onclick="openPtStudent('${x.s.id}')">${esc(x.s.name)}</span>
-          ${postTags}
           <span class="text-[10px] text-gray-400">${esc(x.s.class || '')}</span>
         </div>
         <div class="flex items-center gap-2 mt-1.5">
@@ -2381,10 +2408,13 @@ function openPtRules() {
     return `<div>
       <div class="text-xs font-medium ${st.text} mb-2">${d.icon} ${d.label}</div>
       <div class="space-y-1.5">
-        ${rs.length ? rs.map(r => `<div class="flex items-center gap-2 text-sm p-2 rounded-lg bg-gray-50">
-          <span class="flex-1">${esc(r.label)}</span>
-          <span class="font-bold ${ptDeltaCls(r.delta)}">${ptSigned(r.delta)}</span>
-          <button class="text-gray-300 hover:text-red-500" onclick="deletePtRule('${r.id}')">🗑️</button>
+        ${rs.length ? rs.map(r => `<div class="flex flex-col gap-1 text-sm p-2 rounded-lg bg-gray-50">
+          <div class="flex items-center gap-2">
+            <span class="flex-1">${esc(r.label)}</span>
+            <span class="font-bold ${ptDeltaCls(r.delta)}">${ptSigned(r.delta)}</span>
+            <button class="text-gray-300 hover:text-red-500" onclick="deletePtRule('${r.id}')">🗑️</button>
+          </div>
+          <div class="text-[11px] text-gray-400">识别词：${esc((r.keywords || []).join(' / ') || '无')}</div>
         </div>`).join('') : '<div class="text-xs text-gray-400">暂无</div>'}
       </div>
     </div>`;
@@ -2398,6 +2428,10 @@ function openPtRules() {
           <input id="ruleLabel" class="border rounded-lg p-2 text-sm col-span-1" placeholder="规则名称">
           <input id="ruleDelta" type="number" step="1" value="2" class="border rounded-lg p-2 text-sm" placeholder="分值(可负)">
         </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">识别关键词（每行一个，快速记录识别到后自动按本规则加减分）</div>
+          <textarea id="ruleKeywords" rows="2" class="w-full border rounded-lg p-2 text-sm" placeholder="例如：迟到\n早退"></textarea>
+        </div>
         <button class="w-full bg-primary text-white py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="savePtRule()">+ 添加规则</button>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-5">${grouped}</div>
@@ -2407,137 +2441,15 @@ function savePtRule() {
   const dim = document.getElementById('ruleDim').value;
   const label = document.getElementById('ruleLabel').value.trim();
   const delta = parseInt(document.getElementById('ruleDelta').value, 10);
+  const keywords = (document.getElementById('ruleKeywords').value || '').split(/\n|、|,|\s+/).map(k => k.trim()).filter(Boolean);
   if (!label) return alert('请输入规则名称');
   if (!delta) return alert('分值不能为 0');
-  state.points.rules.push({ id: uid(), dim, label, delta });
+  state.points.rules.push({ id: uid(), dim, label, delta, keywords });
   save(); openPtRules();
 }
 function deletePtRule(id) {
   state.points.rules = state.points.rules.filter(r => r.id !== id);
   save(); openPtRules();
-}
-
-// ---------- 职务（任职赋分） ----------
-// ---------- 职务系统（任职赋分） ----------
-let jobSelStuId = '';
-function jobDays() {
-  const start = new Date(state.points.jobStartDate || '2026-01-01');
-  const today = new Date();
-  const d = Math.floor((today - start) / 86400000);
-  return d < 0 ? 0 : d;
-}
-function openPtJobs() {
-  if (!state.students.length) return alert('请先在「学生管理」录入学生，再来分配职务');
-  if (!jobSelStuId || !state.students.some(s => s.id === jobSelStuId)) jobSelStuId = state.students[0].id;
-  openModal('职务系统 · 任职赋分', `
-    <div class="space-y-4">
-      <div class="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-primary/5 border border-primary/20">
-        <span class="text-sm text-gray-600">任职积分起始日</span>
-        <input id="jobStart" type="date" value="${esc(state.points.jobStartDate || '')}" class="border rounded-lg p-1.5 text-sm">
-        <button class="border border-primary text-primary px-3 py-1.5 rounded-lg text-sm hover:bg-primary/5" onclick="saveJobStart()">保存日期</button>
-        <button class="bg-primary text-white px-3 py-1.5 rounded-lg text-sm hover:bg-primaryDark" onclick="calcJobScores()">🧮 按职务计算任职分</button>
-      </div>
-      <p class="text-[11px] text-gray-400">任职赋分 = （该生所有职务「每日积分」之和）× 自起始日至今的天数。点击按钮即按当前分配自动计算并记录，可随时重算、可逐条撤销。</p>
-      <div class="flex gap-2 text-sm">
-        <button id="jobTabAssignBtn" class="px-4 py-1.5 rounded-full bg-primary text-white" onclick="jobShow('assign')">📋 职务分配</button>
-        <button id="jobTabManageBtn" class="px-4 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200" onclick="jobShow('manage')">⚙️ 管理职务</button>
-      </div>
-      <div id="jobAssignView">${renderJobAssign()}</div>
-      <div id="jobManageView" class="hidden">${renderJobManage()}</div>
-    </div>`, 'lg');
-}
-function jobShow(view) {
-  document.getElementById('jobAssignView').classList.toggle('hidden', view !== 'assign');
-  document.getElementById('jobManageView').classList.toggle('hidden', view !== 'manage');
-  document.getElementById('jobTabAssignBtn').className = 'px-4 py-1.5 rounded-full ' + (view === 'assign' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200');
-  document.getElementById('jobTabManageBtn').className = 'px-4 py-1.5 rounded-full ' + (view === 'manage' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200');
-}
-function renderJobAssign() {
-  const days = jobDays();
-  const stuHtml = state.students.map(s => {
-    const jobs = ptJobsOf(s.id);
-    const active = jobSelStuId === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200';
-    return `<div class="px-2.5 py-1.5 rounded-lg text-sm cursor-pointer ${active} truncate" onclick="jobSelectStu('${s.id}')" title="${esc(jobs.join('、') || '未分配')}">${esc(s.name)}<span class="opacity-70 text-[10px]">${jobs.length ? ' ·' + jobs.length : ''}</span></div>`;
-  }).join('');
-  const selJobs = state.points.jobs.map(j => {
-    const has = state.points.assigns.some(a => a.stuId === jobSelStuId && a.jobId === j.id);
-    return `<label class="flex items-center gap-2 p-2 rounded-lg ${has ? 'bg-emerald-50 border border-emerald-200' : 'bg-gray-50 border border-transparent'} cursor-pointer">
-      <input type="checkbox" class="accent-primary" ${has ? 'checked' : ''} onchange="toggleJobAssign('${j.id}', this.checked)">
-      <span class="flex-1 text-sm">${esc(j.name)}</span>
-      <span class="text-xs text-gray-400">${j.daily}分/日</span>
-    </label>`;
-  }).join('') || '<div class="text-sm text-gray-400">还没有职务，先到「管理职务」添加</div>';
-  return `
-    <div class="grid grid-cols-2 gap-4">
-      <div>
-        <div class="text-xs text-gray-500 mb-2">学生（点击选择）</div>
-        <div class="flex flex-wrap gap-1.5 max-h-52 overflow-y-auto">${stuHtml}</div>
-      </div>
-      <div>
-        <div class="text-xs text-gray-500 mb-2">${esc((state.students.find(s => s.id === jobSelStuId) || {}).name || '')} 的职务</div>
-        <div class="space-y-1.5 max-h-52 overflow-y-auto">${selJobs}</div>
-      </div>
-    </div>
-    <div class="pt-3 border-t">
-      <div class="text-xs text-gray-500 mb-2">分配总览（履职分 = 每日积分之和 × ${days} 天）</div>
-      <div class="space-y-1.5 max-h-44 overflow-y-auto">${jobOverviewHtml(days)}</div>
-    </div>`;
-}
-function jobOverviewHtml(days) {
-  if (!state.students.length) return '<div class="text-sm text-gray-400">暂无学生</div>';
-  const rows = state.students.map(s => {
-    const jobs = state.points.assigns.filter(a => a.stuId === s.id).map(a => state.points.jobs.find(j => j.id === a.jobId)).filter(Boolean);
-    const daily = jobs.reduce((sum, j) => sum + (+j.daily || 0), 0);
-    const lv = daily * days;
-    return `<div class="flex items-center gap-2 text-sm p-2 rounded-lg bg-gray-50">
-      <span class="font-medium text-gray-800 w-16 truncate">${esc(s.name)}</span>
-      <span class="flex-1 text-xs text-gray-500 truncate">${jobs.map(j => esc(j.name)).join('、') || '—'}</span>
-      <span class="text-xs text-gray-400">${daily}分/日</span>
-      <span class="font-bold text-primary w-16 text-right">${lv}</span>
-    </div>`;
-  });
-  return rows.join('');
-}
-function renderJobAssignInto() { const el = document.getElementById('jobAssignView'); if (el) el.innerHTML = renderJobAssign(); }
-function jobSelectStu(id) { jobSelStuId = id; renderJobAssignInto(); }
-function toggleJobAssign(jobId, val) {
-  if (!jobSelStuId) return;
-  if (val) {
-    if (!state.points.assigns.some(a => a.stuId === jobSelStuId && a.jobId === jobId))
-      state.points.assigns.push({ stuId: jobSelStuId, jobId });
-  } else {
-    state.points.assigns = state.points.assigns.filter(a => !(a.stuId === jobSelStuId && a.jobId === jobId));
-  }
-  save(); renderJobAssignInto();
-}
-function saveJobStart() {
-  const v = document.getElementById('jobStart').value;
-  if (!v) return alert('请选择有效的起始日期');
-  state.points.jobStartDate = v; save();
-  renderJobAssignInto(); openPtJobs();
-}
-function calcJobScores() {
-  const days = jobDays();
-  if (days <= 0) return alert('任职积分起始日需早于今天，才能计算任职分');
-  // 先移除上一次自动计算的任职分记录，再按当前分配重新生成
-  state.points.logs = state.points.logs.filter(l => l.auto !== 'job');
-  // 按学生聚合去重职务（学生↔职务应唯一，防止重复分配重复计分）
-  const byStu = {};
-  state.points.assigns.forEach(a => {
-    if (!byStu[a.stuId]) byStu[a.stuId] = new Set();
-    byStu[a.stuId].add(a.jobId);
-  });
-  let count = 0;
-  Object.keys(byStu).forEach(sid => {
-    let daily = 0;
-    byStu[sid].forEach(jid => { const j = state.points.jobs.find(x => x.id === jid); if (j) daily += (+j.daily || 0); });
-    if (!daily) return;
-    const total = daily * days;
-    ptWriteLog(sid, 'post', total, `履职任职分（每日${daily}分 × ${days}天）`, '', 'job');
-    count++;
-  });
-  if (!count) return alert('还没有任何职务分配，请先在「职务分配」勾选');
-  save(); closeModal(); render();
 }
 
 // ===================== 折算设置 =====================
@@ -3858,95 +3770,6 @@ render = function() {
 };
 
 
-function renderJobManage() {
-  const jobRows = state.points.jobs.map(j => `
-    <div class="flex items-center gap-2 p-2 rounded-lg bg-gray-50">
-      <input class="flex-1 border rounded p-1.5 text-sm" value="${esc(j.name)}" data-job="${j.id}" data-field="name">
-      <div class="flex items-center gap-1 text-sm text-gray-500">每日<input class="w-16 border rounded p-1 text-sm" type="number" step="0.5" value="${j.daily}" data-job="${j.id}" data-field="daily">分</div>
-      <button class="text-gray-300 hover:text-red-500" onclick="deleteJob('${j.id}')">🗑️</button>
-    </div>`).join('');
-  return `
-    <div class="space-y-2 max-h-64 overflow-y-auto">${jobRows || '<div class="text-sm text-gray-400">暂无职务</div>'}</div>
-    <div class="flex gap-2 mt-3">
-      <input id="newJobName" class="flex-1 border rounded-lg p-2 text-sm" placeholder="新增职务名称">
-      <input id="newJobDaily" type="number" step="0.5" value="1" class="w-20 border rounded-lg p-2 text-sm" title="每日积分">
-      <button class="border border-primary text-primary px-3 rounded-lg text-sm hover:bg-primary/5" onclick="addJob()">添加</button>
-    </div>
-    <div class="flex gap-2 mt-2">
-      <button class="text-xs text-primary hover:underline" onclick="importJobs()">⬆️ 粘贴导入职务（格式：职务名称,每日积分）</button>
-    </div>`;
-}
-function collectJobs() {
-  document.querySelectorAll('[data-job]').forEach(el => {
-    const j = state.points.jobs.find(x => x.id === el.dataset.job); if (!j) return;
-    const f = el.dataset.field;
-    j[f] = f === 'daily' ? (+el.value || 0) : el.value;
-  });
-}
-function renderJobManageInto() { const el = document.getElementById('jobManageView'); if (el) el.innerHTML = renderJobManage(); }
-function addJob() {
-  collectJobs();
-  const name = document.getElementById('newJobName').value.trim();
-  const daily = +document.getElementById('newJobDaily').value || 0;
-  if (!name) return alert('请输入职务名称');
-  state.points.jobs.push({ id: uid(), name, daily });
-  save(); renderJobManageInto();
-}
-function deleteJob(id) {
-  state.points.jobs = state.points.jobs.filter(j => j.id !== id);
-  state.points.assigns = state.points.assigns.filter(a => a.jobId !== id);
-  save(); renderJobManageInto(); renderJobAssignInto();
-}
-function importJobs() {
-  openModal('批量导入职务（支持 Excel / CSV）', `
-    <div class="space-y-4">
-      <p class="text-xs text-gray-500 leading-relaxed">每行一个职务，格式：<code>职务名称,每日积分</code>（制表符或逗号分隔）。首行若是标题自动跳过。也可上传 .xlsx / .xls / .csv 文件。</p>
-      <textarea id="impJobsText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="班长,2&#10;学习委员,2&#10;体育委员,1.5"></textarea>
-      <div><input id="impJobsFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
-      <div class="flex gap-2">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impJobsText').value='班长,2\\n学习委员,2\\n体育委员,1.5'">填入示例</button>
-        <button class="bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportJobs()">导入</button>
-      </div>
-    </div>`, 'lg');
-  const f = document.getElementById('impJobsFile');
-  if (f) f.addEventListener('change', () => {
-    const file = f.files[0]; if (!file) return;
-    const r = new FileReader();
-    if (/\.xlsx?$/i.test(file.name)) {
-      r.onload = e => {
-        try {
-          const wb = XLSX.read(e.target.result, { type: 'array' });
-          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
-          document.getElementById('impJobsText').value = csv;
-        } catch (err) { alert('Excel 解析失败：' + err.message); }
-      };
-      file.arrayBuffer().then(buf => r.readAsArrayBuffer(new Blob([buf]))).catch(()=>alert('读取文件失败'));
-    } else {
-      r.onload = e => { document.getElementById('impJobsText').value = e.target.result; };
-      r.readAsText(file);
-    }
-  });
-}
-function doImportJobs() {
-  const text = document.getElementById('impJobsText').value.trim();
-  if (!text) return alert('请粘贴或上传职务数据');
-  collectJobs();
-  const rows = parseCSV(text);
-  let start = 0;
-  if (rows.length && /职务|名称|name|职位/.test(rows[0][0])) start = 1;
-  let n = 0;
-  for (let i = start; i < rows.length; i++) {
-    const name = (rows[i][0] || '').trim();
-    if (!name) continue;
-    const daily = parseFloat(rows[i][1]) || 0;
-    if (!state.points.jobs.some(j => j.name === name))
-      state.points.jobs.push({ id: uid(), name, daily });
-    n++;
-  }
-  if (!n) return alert('没有可导入的职务');
-  save(); closeModal(); renderJobManageInto(); renderJobAssignInto();
-}
-
 // ---------- 积分日志 / 撤销 ----------
 let ptLogDim = 'all', ptLogStudent = 'all';
 function openPtLogs() { renderPtLogModal(); }
@@ -4025,7 +3848,7 @@ function openPtStudent(sid) {
       <div class="flex items-center gap-4">
         <img src="${esc(s.avatar)}" class="w-14 h-14 rounded-full bg-gray-100" alt="">
         <div class="flex-1">
-          <div class="font-bold text-lg">${esc(s.name)} ${ptJobsOf(sid).map(n => `<span class="text-xs px-1.5 py-0.5 rounded bg-violet-50 text-violet-600 align-middle">${esc(n)}</span>`).join(' ')}</div>
+          <div class="font-bold text-lg">${esc(s.name)}</div>
           <div class="text-sm text-gray-500">${esc(s.class || '')} · 班级排名第 ${rank} 名</div>
         </div>
         <div class="text-right"><div class="text-3xl font-bold text-primary">${fmtScore(ptTotal(sid))}</div><div class="text-[10px] text-gray-400">总积分</div></div>
@@ -4169,7 +3992,21 @@ function parseQuickRecord(text) {
       }
     }
   });
-  // 5) 识别作业关键词
+  // 5) 识别积分规则关键词
+  const ruleHits = [];
+  const seenRule = new Set();
+  (state.points.rules || []).forEach(rule => {
+    if (!Array.isArray(rule.keywords)) return;
+    for (const kw of rule.keywords) {
+      if (text.includes(kw) && !seenRule.has(rule.id)) {
+        seenRule.add(rule.id);
+        ruleHits.push({ rule, keyword: kw });
+        matched.push({ kind: 'rule', value: kw, rule: rule.label, dim: rule.dim, delta: rule.delta });
+        break;
+      }
+    }
+  });
+  // 6) 识别作业关键词
   let homeworkHit = '';
   (state.homeworkKeywords || []).forEach(kw => {
     if (!homeworkHit && text.includes(kw)) {
@@ -4177,7 +4014,7 @@ function parseQuickRecord(text) {
       matched.push({ kind: 'homework', value: kw });
     }
   });
-  // 6) 内容清洗
+  // 7) 内容清洗
   let content = text;
   studentHits.forEach(h => { content = content.split(h.alias).join(''); });
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
@@ -4188,15 +4025,19 @@ function parseQuickRecord(text) {
   subjectHits.forEach(sub => {
     sub.keywords.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
   });
+  ruleHits.forEach(({ rule, keyword }) => {
+    content = content.split(keyword).join('');
+    (rule.keywords || []).forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
+  });
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
-  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits, homework: !!homeworkHit, homeworkSubject: subjectHits[0] || null };
+  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits, homework: !!homeworkHit, homeworkSubject: subjectHits[0] || null, rules: ruleHits };
 }
 
 let qrDraft = null; // 当前确认草稿
 let qrDeductDraft = null; // 首页快速记录：待确认的关联扣分草稿
 function openQuickRecord() {
-  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），会自动记入「课堂记录」对应科目。\n若出现「作业/布置作业/背诵/默写/练习」等关键词，会自动加入「作业管理」。';
+  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），会自动记入「课堂记录」对应科目。\n若出现「作业/布置作业/背诵/默写/练习」等关键词，会自动加入「作业管理」。\n若命中积分规则关键词（如迟到/作业未交/主动回答等），会自动按规则加减分。';
   openModal('智能快速记录', `
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
@@ -4261,6 +4102,7 @@ function qrRecognize() {
     if (m.kind === 'type') return REC_TYPE_EMOJI[m.type] + ' ' + m.value;
     if (m.kind === 'subject') return '📚 ' + m.value;
     if (m.kind === 'homework') return '📖 ' + m.value;
+    if (m.kind === 'rule') return '📐 ' + m.value + '(' + (m.delta >= 0 ? '+' : '') + m.delta + ')';
     return dimIcon(m.dim) + ' ' + m.value;
   }).join('　') : '未识别到学生或类型，请手动选择');
   const hasScoringType = r.types.some(t => t === 'praise' || t === 'critic');
@@ -4274,6 +4116,14 @@ function qrRecognize() {
         <div class="text-xs font-bold text-amber-700">📖 识别到作业布置</div>
         <div class="text-xs text-amber-600">科目：${esc(r.homeworkSubject ? r.homeworkSubject.name : '未指定')} · 点击「一键记录」后将自动加入「作业管理」</div>
       </div>` : '';
+  const ruleSection = r.rules && r.rules.length ? `
+      <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-3 space-y-1">
+        <div class="text-xs font-bold text-indigo-700">📐 识别到积分规则</div>
+        <div class="flex flex-wrap gap-1.5">
+          ${r.rules.map(({rule,keyword}) => `<span class="text-xs bg-white border border-slate-200 rounded-full px-2 py-1">${esc(rule.label)}（${esc(keyword)} → ${dimIcon(rule.dim)} ${rule.delta>=0?'+':''}${rule.delta}）</span>`).join('')}
+        </div>
+        <div class="text-xs text-indigo-600">点击「一键记录」后将为每个学生自动应用对应规则加减分</div>
+      </div>` : '';
   document.getElementById('qrResult').innerHTML = `
     <div class="rounded-xl border p-4 space-y-4 bg-gray-50">
       ${dedSection}
@@ -4281,7 +4131,7 @@ function qrRecognize() {
       <div><div class="text-xs text-gray-500 mb-1">学生（可增删，默认全选识别到的）</div>
         <div class="flex flex-wrap gap-2">${stuChips}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">记录类型（可多选）</div>
-        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}${homeworkSection}
+        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}${ruleSection}${homeworkSection}
       <div><div class="text-xs text-gray-500 mb-1">记录内容</div>
         <textarea id="qrContent" rows="3" class="w-full border rounded-lg p-3 text-sm">${esc(r.content)}</textarea></div>
       <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
@@ -4342,6 +4192,18 @@ function qrSave() {
       }
     });
   });
+  // 自动应用积分规则（识别到规则关键词时）
+  const ruleMatches = qrDraft.rules || [];
+  if (ruleMatches.length) {
+    ruleMatches.forEach(({ rule }) => {
+      qrDraft.students.forEach(st => {
+        const s = state.students.find(x => x.id === st.id);
+        if (!s) return;
+        ptWriteLog(s.id, rule.dim, rule.delta, `规则·${rule.label}：${content.slice(0, 20)}`, '', 'rule');
+        autoPointLogs.push(`${s.name} ${dimLabel(rule.dim)}${rule.delta >= 0 ? '+' : ''}${rule.delta}`);
+      });
+    });
+  }
   // 自动记入课堂记录（识别到科目时）
   const subjects = qrDraft.subjects || [];
   if (subjects.length) {
@@ -4374,6 +4236,7 @@ function qrSave() {
   save(); closeModal();
   let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
   if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
+  if (ruleMatches.length) msg += `\n（已应用 ${ruleMatches.length} 条积分规则）`;
   if (subjects.length) msg += `\n（已记入课堂记录：${subjects.map(s=>s.name).join('、')}）`;
   if (homeworkAdded) msg += `\n（已加入作业管理：${homeworkAdded}）`;
   toast(msg);
@@ -4502,12 +4365,12 @@ function doImport() {
   reader.readAsText(f);
 }
 // ===================== 从「班级积分管理系统」备份导入 =====================
-// 兼容 E:/code/class_score/backups/*.json 结构：studentList/jobList/assignList/scoreLog/jobScoreStartDate
+// 兼容 E:/code/class_score/backups/*.json 结构：studentList/scoreLog/jobScoreStartDate
 const IMPORT_DIM_MAP = { '体育打卡': 'sport', '日常积分': 'daily', '考试赋分': 'exam', '任职赋分': 'post' };
 function importFromClassScore() {
   openModal('从班级积分备份导入', `
     <div class="space-y-4">
-      <p class="text-sm text-gray-500">选择「班级积分管理系统」导出的备份 JSON（含 studentList / scoreLog 等字段），将把学生、分组、职务、职务分配、任职起算日，以及<b>体育打卡 / 日常积分 / 考试赋分</b>的明细日志合并进当前工作台。<br><span class="text-amber-600">注意：任职赋分由职务系统实时计算，备份中 373 条「自动计算」记录会自动跳过，避免重复计分。</span></p>
+      <p class="text-sm text-gray-500">选择「班级积分管理系统」导出的备份 JSON（含 studentList / scoreLog 等字段），将把学生、分组、积分明细日志合并进当前工作台。<br><span class="text-amber-600">注意：职务与任职赋分已独立到「职务与值日」模块，备份中的职务/分配信息不再导入。</span></p>
       <input id="csFile" type="file" accept="application/json,.json" class="w-full text-sm">
       <div class="flex gap-2">
         <button class="flex-1 bg-gray-100 text-gray-600 py-2 rounded-full hover:bg-gray-200" onclick="closeModal()">取消</button>
@@ -4523,8 +4386,6 @@ function doImportFromClassScore() {
     try {
       const raw = JSON.parse(e.target.result);
       const sl = typeof raw.studentList === 'string' ? JSON.parse(raw.studentList) : (raw.studentList || []);
-      const jl = typeof raw.jobList === 'string' ? JSON.parse(raw.jobList) : (raw.jobList || []);
-      const al = typeof raw.assignList === 'string' ? JSON.parse(raw.assignList) : (raw.assignList || []);
       const logs = typeof raw.scoreLog === 'string' ? JSON.parse(raw.scoreLog) : (raw.scoreLog || []);
       if (!Array.isArray(sl) || !sl.length) return alert('文件中未找到 studentList 学生数据');
 
@@ -4546,32 +4407,11 @@ function doImportFromClassScore() {
         if (s.id) nameToId[s.id] = stu.id;
       });
 
-      // 2) 职务
-      const jobOldToNew = {};
-      jl.forEach(j => {
-        const oldId = j.id;
-        let job = state.points.jobs.find(x => x.name === (j.name || '').trim());
-        if (!job) { job = { id: uid(), name: (j.name || '').trim(), daily: +j.point || +j.daily || 0 }; state.points.jobs.push(job); }
-        jobOldToNew[oldId] = job.id;
-      });
-
-      // 3) 职务分配
-      let newAssign = 0;
-      const seen = new Set(state.points.assigns.map(a => a.stuId + '|' + a.jobId));
-      al.forEach(a => {
-        const sid = nameToId[a.stuId] || a.stuId;
-        const jid = jobOldToNew[a.jobId] || a.jobId;
-        if (!sid || !jid) return;
-        const key = sid + '|' + jid;
-        if (seen.has(key)) return;
-        state.points.assigns.push({ stuId: sid, jobId: jid }); seen.add(key); newAssign++;
-      });
-
-      // 4) 任职起算日（取更早的）
+      // 2) 积分计算起始日（取更早的）
       if (raw.jobScoreStartDate) {
         const incoming = new Date(raw.jobScoreStartDate);
-        const cur = state.points.jobStartDate ? new Date(state.points.jobStartDate) : null;
-        if (!cur || incoming < cur) state.points.jobStartDate = raw.jobScoreStartDate;
+        const cur = state.points.calcStartDate ? new Date(state.points.calcStartDate) : null;
+        if (!cur || incoming < cur) state.points.calcStartDate = raw.jobScoreStartDate;
       }
 
       // 5) 积分日志（跳过任职赋分自动计算，避免与职务系统重复）
@@ -4629,7 +4469,6 @@ function clearAllData() {
     state.reminders = []; state.classRecords = [];
     state.schedule.courses = [];
     state.points.logs = [];
-    state.points.assigns = [];
     save(); render();
   });
 }
