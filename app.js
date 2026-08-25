@@ -260,6 +260,17 @@ function migrateState(s) {
   if (!Array.isArray(s.attendance.logs)) s.attendance.logs = [];
   if (s.attendance.current && typeof s.attendance.current !== 'object') s.attendance.current = null;
   s.attendance.members.forEach(m => { if (!m || typeof m !== 'object') return; if (!Array.isArray(m.weeklyHome)) m.weeklyHome = []; if (typeof m.name !== 'string') m.name = ''; });
+  // 将旧考勤 roster 的固定回家周期合并进「学生管理」（attendance.members 不再作为名册来源）
+  if (Array.isArray(s.attendance.members)) {
+    s.attendance.members.forEach(m => {
+      if (!m || !m.name) return;
+      const st = (s.students || []).find(x => x.name === m.name);
+      if (st && Array.isArray(m.weeklyHome) && (!Array.isArray(st.weeklyHome) || st.weeklyHome.length === 0)) {
+        st.weeklyHome = m.weeklyHome.slice();
+      }
+    });
+  }
+  if (Array.isArray(s.students)) s.students.forEach(st => { if (st && !Array.isArray(st.weeklyHome)) st.weeklyHome = []; });
   // 学生补全 alias 字段
   if (Array.isArray(s.students)) s.students.forEach(st => { if (st && typeof st.alias === 'undefined') st.alias = ''; });
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
@@ -309,7 +320,21 @@ function defaultExamColumns() {
 const ATT_WEEK = ['一','二','三','四','五']; // 固定回家可选的工作日
 function attDateKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function attDayName(d){ return ['日','一','二','三','四','五','六'][d.getDay()]; }
-function attMembers(){ return (state.attendance.members||[]).filter(m=>m&&m.name); }
+function attMembers(){
+  // 班级成员直接取自「学生管理」，保证与学生管理实时一致
+  return (state.students||[]).filter(s=>s&&s.name).map(s=>({
+    name: s.name,
+    gender: s.gender,
+    class: s.class,
+    weeklyHome: Array.isArray(s.weeklyHome) ? s.weeklyHome.slice() : []
+  }));
+}
+function attStudentByName(name){ return (state.students||[]).find(s=>s.name===name); }
+function attRecomputeHome(){
+  const a=state.attendance; if(!a) return;
+  if(!a.current) a.current={date:attDateKey(new Date()),home:{},leave:{}};
+  a.current.home = attDeriveHome();
+}
 function attDeriveHome(){
   const day=attDayName(new Date()); const home={};
   attMembers().forEach(m=>{ if((m.weeklyHome||[]).includes(day)) home[m.name]=true; });
@@ -2369,12 +2394,12 @@ function setAttMode(mode){
 }
 function markAttMember(name){
   const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
-  const day=attDayName(new Date()); const m=a.members.find(x=>x.name===name);
+  const day=attDayName(new Date()); const s=attStudentByName(name);
   if(attMode==='home'){
-    if(!m) return;
-    if(!m.weeklyHome) m.weeklyHome=[];
-    const i=m.weeklyHome.indexOf(day);
-    if(i>-1) m.weeklyHome.splice(i,1); else m.weeklyHome.push(day);
+    if(!s) return;
+    if(!Array.isArray(s.weeklyHome)) s.weeklyHome=[];
+    const i=s.weeklyHome.indexOf(day);
+    if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
     attRecomputeHome();
   } else if(attMode==='leave'){
     if(a.current.leave[name]) delete a.current.leave[name];
@@ -2383,10 +2408,10 @@ function markAttMember(name){
   save(); render();
 }
 function toggleAttDay(name, day){
-  const m=state.attendance.members.find(x=>x.name===name); if(!m) return;
-  if(!m.weeklyHome) m.weeklyHome=[];
-  const i=m.weeklyHome.indexOf(day);
-  if(i>-1) m.weeklyHome.splice(i,1); else m.weeklyHome.push(day);
+  const s=attStudentByName(name); if(!s) return;
+  if(!Array.isArray(s.weeklyHome)) s.weeklyHome=[];
+  const i=s.weeklyHome.indexOf(day);
+  if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
   attRecomputeHome(); save(); render();
 }
 function addLeave(name, reason){
@@ -2418,18 +2443,16 @@ function saveTodayAtt(){
   a.logs.unshift(attBuildLog(cur)); save(); alert('今日考勤已存入历史'); render();
 }
 function openAttMemberModal(){
-  openModal('班级成员管理', `<div class="space-y-4">
-    <p class="text-sm text-gray-500">每行一个姓名；如需预设固定回家周期，可格式「姓名|一,三,五」。</p>
-    <textarea id="attMembers" rows="8" class="w-full border rounded-lg p-2 text-sm" placeholder="张明轩\n李梓涵|一,三,五\n王浩然">${(state.attendance.members||[]).map(m=>m.weeklyHome&&m.weeklyHome.length?`${m.name}|${m.weeklyHome.join(',')}`:m.name).join('\n')}</textarea>
-    <button class="w-full bg-primary text-white py-2 rounded-full" onclick="saveAttMembers()">保存名单</button></div>`);
-}
-function saveAttMembers(){
-  const txt=document.getElementById('attMembers').value;
-  const list=txt.split('\n').map(s=>s.trim()).filter(Boolean).map(line=>{
-    const [name, wk]=line.split('|'); const weeklyHome=(wk||'').split(',').map(x=>x.trim()).filter(x=>ATT_WEEK.includes(x));
-    return { name:name.trim(), weeklyHome };
-  });
-  state.attendance.members=list; attRecomputeHome(); save(); closeModal(); render();
+  const list=(state.students||[]).filter(s=>s&&s.name);
+  const rows = list.map(s=>`<div class="flex items-center justify-between py-2 border-b border-gray-100 text-sm">
+    <span class="font-medium">${esc(s.name)} <span class="text-xs text-gray-400">${esc(s.class||'')}</span></span>
+    <span class="text-xs text-gray-500">${(s.weeklyHome&&s.weeklyHome.length)?('固定回家：'+s.weeklyHome.join('、')):'无周期'}</span>
+  </div>`).join('') || '<div class="text-gray-400 text-sm py-2">暂无学生，请先在「学生管理」中添加。</div>';
+  openModal('班级成员（取自学生管理）', `<div class="space-y-3">
+    <p class="text-sm text-gray-500">班级成员直接同步自「学生管理」，共 <b>${list.length}</b> 人。在此增删或修改学生，考勤将实时更新；固定回家周期可在考勤页内直接勾选。</p>
+    <div class="max-h-60 overflow-y-auto">${rows}</div>
+    <button class="w-full bg-primary text-white py-2 rounded-full" onclick="closeModal();navigate('students')">去学生管理增删成员</button>
+  </div>`);
 }
 function renderAttendance() {
   const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
@@ -2480,7 +2503,7 @@ function renderAttendance() {
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex items-center justify-between mb-4">
         <div class="font-bold text-gray-800">👨‍👩‍👧‍👦 班级成员（点击标记）</div>
-        <button class="text-xs text-primary hover:underline" onclick="openAttMemberModal()">班级成员管理</button>
+        <button class="text-xs text-primary hover:underline" onclick="openAttMemberModal()">班级成员（取自学生管理）</button>
       </div>
       <div class="flex flex-wrap gap-3">${memberChips}</div>
     </div>
