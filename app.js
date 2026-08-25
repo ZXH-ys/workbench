@@ -4051,8 +4051,9 @@ function parseQuickRecord(text) {
 }
 
 let qrDraft = null; // 当前确认草稿
+let qrDeductDraft = null; // 首页快速记录：待确认的关联扣分草稿
 function openQuickRecord() {
-  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。';
+  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。';
   openModal('智能快速记录', `
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
@@ -4074,6 +4075,32 @@ function qrRecognize() {
   if (!text.trim()) return alert('请先输入内容');
   const r = parseQuickRecord(text);
   qrDraft = r;
+  // —— 关联扣分识别（沿职务树向上追责）——
+  let dedSection = '';
+  qrDeductDraft = null;
+  let dedNodeId = null;
+  try { dedNodeId = pmFindNodeByKeyword(text); } catch (e) { dedNodeId = null; }
+  if (dedNodeId) {
+    const day = pmExtractDay(text);
+    const dNode = pmFindTreeNodeById(state.positions.dutyTree, dedNodeId);
+    const dChain = pmGetDeductionChain(dedNodeId, day);
+    const dPath = pmGetNodePath(state.positions.dutyTree, dedNodeId).map(n => n.label).join(' → ');
+    const dPts = state.positions.deductionPoints;
+    qrDeductDraft = { nodeId: dedNodeId, text, pts: dPts };
+    dedSection = `<div class="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4 space-y-2">
+      <div class="text-sm font-bold text-indigo-700">⚠️ 识别到关联扣分（沿职务树向上追责）</div>
+      <div class="text-xs text-slate-500">识别路径</div>
+      <div class="font-medium text-indigo-700 text-sm">${esc(dPath)} ${day ? '（' + esc(day) + '）' : ''}</div>
+      <div class="text-xs text-slate-500">将扣分人员</div>
+      <div class="flex flex-wrap gap-1.5">
+        ${dChain.length ? dChain.map(p => `<span class="bg-white border border-slate-200 rounded-full px-2.5 py-1 text-xs">${esc(p.name)} <span class="text-slate-400">(${esc(p.pos)})</span></span>`).join('') : '<span class="text-slate-400 text-xs">该路径上未安排人员</span>'}
+      </div>
+      <div class="flex items-center gap-2 pt-1">
+        <button class="text-xs bg-red-500 text-white rounded-lg px-3 py-1.5 hover:bg-red-600" onclick="pmConfirmQrDeduct()">确认每人扣 ${dPts} 分</button>
+        ${dChain.length ? `<span class="text-xs text-slate-400">共 ${dChain.length} 人</span>` : ''}
+      </div>
+    </div>`;
+  }
   const typeChips = ['critic', 'praise', 'chat', 'leave'].map(t => {
     const on = r.types.includes(t);
     return `<button type="button" data-qrtype="${t}" onclick="qrToggleType('${t}')" class="qr-type ${on?'qr-on':'qr-off'}">${REC_TYPE_EMOJI[t]} ${REC_TYPE_LABELS[t]}</button>`;
@@ -4099,6 +4126,7 @@ function qrRecognize() {
         <input id="qrPointVal" type="number" value="1" class="w-24 border rounded-lg p-2 text-sm" placeholder="1"></div>` : '';
   document.getElementById('qrResult').innerHTML = `
     <div class="rounded-xl border p-4 space-y-4 bg-gray-50">
+      ${dedSection}
       <div><div class="text-xs text-gray-500 mb-1">识别结果</div><div class="text-xs text-primary">${esc(matchedText)}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">学生（可增删，默认全选识别到的）</div>
         <div class="flex flex-wrap gap-2">${stuChips}</div></div>
@@ -4864,8 +4892,9 @@ function pmParseDeduct(){
   </div>`;
   resultEl.innerHTML=html;
 }
-function pmConfirmDeduct(nodeId,pts){
-  const text=document.getElementById('pmDeductInput').value.trim();
+function pmConfirmDeduct(nodeId,pts,textOverride){
+  const el=document.getElementById('pmDeductInput');
+  const text=textOverride!=null?textOverride:(el?el.value.trim():'');
   const day=pmExtractDay(text);
   const node=pmFindTreeNodeById(state.positions.dutyTree,nodeId);
   const chain=pmGetDeductionChain(nodeId,day);
@@ -4881,6 +4910,15 @@ function pmConfirmDeduct(nodeId,pts){
   });
   save(); render();
   alert('已对 '+cnt+' 人各扣 '+pts+' 分（任职赋分维度，可在积分管理-日志查看/撤销）。');
+}
+// 首页「智能快速记录」中的关联扣分确认
+function pmConfirmQrDeduct(){
+  if(!qrDeductDraft) return;
+  const { nodeId, text, pts } = qrDeductDraft;
+  pmConfirmDeduct(nodeId, pts, text);
+  const box=document.getElementById('qrResult');
+  if(box) box.innerHTML='<div class="rounded-xl border-2 border-green-300 bg-green-50 p-4 text-sm text-green-700">✅ 关联扣分已记录（任职赋分维度，可在积分管理-日志按批次撤销）。如还需记录其他内容，可重新输入并识别。</div>';
+  qrDeductDraft=null;
 }
 
 // ===================== Init =====================
