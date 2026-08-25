@@ -1498,7 +1498,7 @@ function openHomeworkKeywordSettings() {
   const kws = (state.homeworkKeywords || []).join('\n');
   openModal('作业识别关键词设置', `
     <div class="space-y-4">
-      <p class="text-xs text-gray-500">每行一个关键词。首页「智能快速记录」识别到这些词时，会自动将记录加入「作业管理」。默认包含：作业、布置作业、背诵、默写、练习等。</p>
+      <p class="text-xs text-gray-500">每行一个关键词。首页「一句话记录」识别到这些词时，会自动将记录加入「作业管理」。默认包含：作业、布置作业、背诵、默写、练习等。</p>
       <textarea id="hwKeywords" rows="8" class="w-full border rounded-lg p-3 text-sm">${esc(kws)}</textarea>
       <div class="flex gap-2">
         <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveHomeworkKeywords()">保存</button>
@@ -3911,102 +3911,103 @@ function renderHomePointsCard() {
   </div>`;
 }
 
-// ===================== 智能快速记录（自然语言识别） =====================
+// ===================== 一句话记录（自然语言识别） =====================
 // 记录类型：类型标签词（既用于识别、也会从内容中剔除，都是明确的「类型动词」）
 const REC_TYPE_LABELS_WORDS = {
-  critic: ['批评', '罚站', '罚抄', '处罚', '违纪', '迟到', '早退', '打架', '顶撞', '不交', '没交', '未完成', '没完成', '犯错', '扣分', '警告', '处分', '玩手机', '走神', '睡觉', '抄袭', '作弊', '说话'],
-  praise: ['表扬', '夸奖', '夸', '赞', '得奖', '获奖', '奖励', '突出', '满分', '高分', '守纪律', '好人好事'],
-  chat:   ['谈心', '谈话', '沟通', '家访', '约谈', '开导', '安慰', '鼓励', '交流'],
-  leave:  ['请假', '病假', '事假', '请假条', '缺席'],
+  critic: ['批评','罚站','罚抄','处罚','违纪','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话'],
+  praise: ['表扬','夸奖','夸','赞','得奖','获奖','奖励','突出','满分','高分','守纪律','好人好事'],
+  chat:   ['谈心','谈话','沟通','家访','约谈','开导','安慰','鼓励','交流'],
+  leave:  ['请假','病假','事假','请假条','缺席'],
 };
-// 仅用于识别的描述性短语（不剔除，保证正文完整，如「主动帮助同学」「作业优秀」）
+// 仅用于识别的描述性短语（不剔除，保证正文完整）
 const REC_TYPE_DESC = {
-  critic: ['顶撞', '玩手机', '走神', '睡觉', '抄袭', '作弊', '吵架', '打架'],
-  praise: ['主动帮助同学', '帮助同学', '助人为乐', '表现好', '值日认真', '作业优秀', '一等奖', '二等奖', '三等奖', '积极发言', '主动', '认真', '勤奋', '贴心', '懂事', '优秀', '进步', '棒'],
-  chat:   ['心理疏导', '聊天', '聊到', '聊了', '情绪低落'],
-  leave:  ['肚子疼', '不舒服', '生病', '家中有事', '事假'],
+  critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架'],
+  praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒'],
+  chat:   ['心理疏导','聊天','聊到','聊了','情绪低落'],
+  leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
 };
 // 识别/剔除用的「引出词」（如「提出表扬」的「提出」）
-const REC_LEADIN = ['提出', '给予', '予以', '进行', '做了', '被'];
-const REC_TYPE_LABELS = { critic: '批评', praise: '表扬', chat: '谈心', leave: '请假' };
-const REC_TYPE_EMOJI  = { critic: '⚠️', praise: '👍', chat: '💬', leave: '🏥' };
+const REC_LEADIN = ['提出','给予','予以','进行','做了','被'];
+const REC_TYPE_LABELS = { critic:'批评', praise:'表扬', chat:'谈心', leave:'请假' };
+const REC_TYPE_EMOJI  = { critic:'⚠️', praise:'👍', chat:'💬', leave:'🏥' };
 function recordTypeLabel(t){ return REC_TYPE_LABELS[t] || '记录'; }
 function recordTypeClass(t){ return t==='critic'?'tag-critic':t==='praise'?'tag-praise':t==='leave'?'tag-leave':'tag-chat'; }
 function recordTypeEmoji(t){ return REC_TYPE_EMOJI[t] || '📝'; }
 // 积分维度识别：根据关键词自动判断所属模块
 const QR_DIM_KWS = {
-  sport: ['体育', '早训', '早操', '课间操', '锻炼', '运动会', '跑步', '跳绳', '体测', '体育课', '篮球', '足球', '排球', '乒乓球', '游泳', '体能'],
-  exam:  ['考试', '测验', '月考', '期中', '期末', '满分', '高分', '成绩', '排名', '进步', '退步', '各科', '数学', '英语', '语文', '物理', '化学'],
-  post:  ['班长', '课代表', '委员', '组长', '履职', '职务', '负责', '收发作业', '班干部', '团支书'],
-  daily: ['课堂', '纪律', '作业', '值日', '卫生', '主动', '帮助', '迟到', '早退', '校服', '红领巾', '文明'],
+  sport: ['体育','早训','早操','课间操','锻炼','运动会','跑步','跳绳','体测','体育课','篮球','足球','排球','乒乓球','游泳','体能'],
+  exam:  ['考试','测验','月考','期中','期末','满分','高分','成绩','排名','进步','退步','各科'],
+  post:  ['班长','课代表','委员','组长','履职','职务','负责','收发作业','班干部','团支书'],
+  daily: ['课堂','纪律','作业','值日','卫生','主动','帮助','迟到','早退','校服','红领巾','文明'],
 };
+const QR_CONNECTORS = /(?:且|并且|又|还|同时|接着|随后|另外|此外|以及|然后|再|最后)/;
+const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
 
-// 智能解析：返回 { students:[{id,name}], types:[...], content, matched:[], autoDim, subjects:[{id,name,keywords}] }
+// 智能解析：返回 { raw, segments:[{student:{id,name}, items:[{text,content,subjects,homework,rules,recType,dim,pointDelta,enabled}]}], matched:[] }
 function parseQuickRecord(text) {
   text = (text || '').trim();
   const matched = [];
-  // 1) 识别学生
+  // 1) 识别所有学生，按出现位置排序
   const studentHits = [];
-  const cand = state.students.map(s => {
+  state.students.forEach(s => {
     const aliases = [s.name].concat((s.alias || '').split(/\s+/).filter(Boolean));
-    return { s, aliases };
-  });
-  cand.forEach(({ s, aliases }) => {
     aliases.sort((a, b) => b.length - a.length);
     for (const a of aliases) {
       if (a && text.includes(a)) {
-        studentHits.push({ id: s.id, name: s.name, alias: a, len: a.length });
+        studentHits.push({ id: s.id, name: s.name, alias: a, len: a.length, pos: text.indexOf(a) });
         matched.push({ kind: 'student', value: s.name });
         break;
       }
     }
   });
-  // 2) 识别记录类型（多个）
-  const types = [];
-  for (const t of ['critic', 'praise', 'chat', 'leave']) {
-    let hitKw = '';
-    for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (text.includes(kw)) { hitKw = kw; break; } }
-    if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw)) { hitKw = kw; break; } }
-    if (hitKw) { types.push(t); matched.push({ kind: 'type', value: hitKw, type: t }); }
-  }
-  // 3) 识别积分维度
-  let autoDim = 'daily';
-  const dimOrder = ['sport', 'post', 'exam', 'daily']; // 命中顺序：体育/职务/考试优先，否则日常
-  for (const dim of dimOrder) {
-    for (const kw of QR_DIM_KWS[dim]) {
-      if (text.includes(kw)) { autoDim = dim; matched.push({ kind: 'dim', value: kw, dim }); break; }
+  studentHits.sort((a, b) => a.pos - b.pos);
+  // 2) 按学生拆分句子
+  const segments = [];
+  if (!studentHits.length) {
+    segments.push({ student: null, text });
+  } else {
+    for (let i = 0; i < studentHits.length; i++) {
+      const start = studentHits[i].pos + studentHits[i].len;
+      const end = i + 1 < studentHits.length ? studentHits[i + 1].pos : text.length;
+      segments.push({ student: studentHits[i], text: text.slice(start, end).trim() });
     }
-    if (autoDim !== 'daily') break;
   }
-  // 4) 识别课堂记录科目
-  const subjectHits = [];
+  // 3) 每个学生片段再按连接词/标点拆分为多个记录项
+  const result = { raw: text, segments: [], matched };
+  segments.forEach(seg => {
+    const segment = { student: seg.student, items: [] };
+    const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
+    const clauses = [];
+    rawClauses.forEach(rc => {
+      rc.split(QR_CONNECTORS).map(s => s.trim()).filter(Boolean).forEach(c => clauses.push(c));
+    });
+    if (!clauses.length) clauses.push(seg.text);
+    clauses.forEach(clause => {
+      const item = recognizeClause(clause, matched);
+      if (item) segment.items.push(item);
+    });
+    if (segment.items.length) result.segments.push(segment);
+  });
+  return result;
+}
+
+function recognizeClause(text, matched) {
+  if (!text) return null;
+  // 识别科目
+  const subjects = [];
   const seenSubj = new Set();
   (state.classRecordSubjects || []).forEach(sub => {
     if (!Array.isArray(sub.keywords)) return;
     for (const kw of sub.keywords) {
       if (text.includes(kw) && !seenSubj.has(sub.id)) {
         seenSubj.add(sub.id);
-        subjectHits.push(sub);
+        subjects.push(sub);
         matched.push({ kind: 'subject', value: kw, subject: sub });
         break;
       }
     }
   });
-  // 5) 识别积分规则关键词
-  const ruleHits = [];
-  const seenRule = new Set();
-  (state.points.rules || []).forEach(rule => {
-    if (!Array.isArray(rule.keywords)) return;
-    for (const kw of rule.keywords) {
-      if (text.includes(kw) && !seenRule.has(rule.id)) {
-        seenRule.add(rule.id);
-        ruleHits.push({ rule, keyword: kw });
-        matched.push({ kind: 'rule', value: kw, rule: rule.label, dim: rule.dim, delta: rule.delta });
-        break;
-      }
-    }
-  });
-  // 6) 识别作业关键词
+  // 识别作业关键词
   let homeworkHit = '';
   (state.homeworkKeywords || []).forEach(kw => {
     if (!homeworkHit && text.includes(kw)) {
@@ -4014,233 +4015,247 @@ function parseQuickRecord(text) {
       matched.push({ kind: 'homework', value: kw });
     }
   });
-  // 7) 内容清洗
+  // 识别积分规则
+  const rules = [];
+  const seenRule = new Set();
+  (state.points.rules || []).forEach(rule => {
+    if (!Array.isArray(rule.keywords)) return;
+    for (const kw of rule.keywords) {
+      if (text.includes(kw) && !seenRule.has(rule.id)) {
+        seenRule.add(rule.id);
+        rules.push({ rule, keyword: kw });
+        matched.push({ kind: 'rule', value: kw, rule: rule.label, dim: rule.dim, delta: rule.delta });
+        break;
+      }
+    }
+  });
+  // 识别记录类型
+  let recType = '';
+  for (const t of ['critic', 'praise', 'chat', 'leave']) {
+    let hitKw = '';
+    for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (text.includes(kw)) { hitKw = kw; break; } }
+    if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw)) { hitKw = kw; break; } }
+    if (hitKw) { recType = t; matched.push({ kind: 'type', value: hitKw, type: t }); break; }
+  }
+  // 未明确类型时，根据情感/规则推断
+  if (!recType) {
+    if (rules.some(r => r.rule.delta < 0) || /未完成|没交|未做|迟到|说话|违纪|不合格|捣乱|走神|睡觉|抄袭|作弊|打架/.test(text)) recType = 'critic';
+    else if (rules.some(r => r.rule.delta > 0) || /完成|满分|优秀|帮助|主动|认真|进步|棒|突出|优秀|得奖/.test(text)) recType = 'praise';
+    else if (/请假|病假|事假/.test(text)) recType = 'leave';
+    else recType = 'chat';
+  }
+  // 清洗内容：保留原始语义，仅剔除高频类型词与引出词
   let content = text;
-  studentHits.forEach(h => { content = content.split(h.alias).join(''); });
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
     for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (content.includes(kw)) content = content.split(kw).join(''); }
   }
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
-  if (homeworkHit) content = content.split(homeworkHit).join('');
-  subjectHits.forEach(sub => {
-    sub.keywords.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
-  });
-  ruleHits.forEach(({ rule, keyword }) => {
-    content = content.split(keyword).join('');
-    (rule.keywords || []).forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
-  });
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
-  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits, homework: !!homeworkHit, homeworkSubject: subjectHits[0] || null, rules: ruleHits };
+  // 维度
+  let dim = 'daily';
+  if (rules.length) dim = rules[0].rule.dim;
+  else {
+    const dimOrder = ['sport', 'post', 'exam', 'daily'];
+    for (const d of dimOrder) {
+      for (const kw of QR_DIM_KWS[d]) {
+        if (text.includes(kw)) { dim = d; matched.push({ kind: 'dim', value: kw, dim: d }); break; }
+      }
+      if (dim !== 'daily') break;
+    }
+  }
+  const pointDelta = (recType === 'praise' ? 1 : recType === 'critic' ? -1 : 0);
+  return { text, content, subjects, homework: !!homeworkHit, homeworkKeyword: homeworkHit, rules, recType, dim, pointDelta, enabled: true };
 }
 
 let qrDraft = null; // 当前确认草稿
-let qrDeductDraft = null; // 首页快速记录：待确认的关联扣分草稿
+let qrDeductDraft = null; // 一句话记录：待确认的关联扣分草稿
 function openQuickRecord() {
-  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），会自动记入「课堂记录」对应科目。\n若出现「作业/布置作业/背诵/默写/练习」等关键词，会自动加入「作业管理」。\n若命中积分规则关键词（如迟到/作业未交/主动回答等），会自动按规则加减分。';
-  openModal('智能快速记录', `
+  const tip = '输入一句话即可自动识别多名学生、多个事件。例如：\n「张明轩参加体育早训，提出表扬；秦梦茹月考满分，提出表扬；王浩然迟到批评」\n系统会按学生拆分为多条记录，并自动识别科目、作业、积分规则、类型等。你可以在识别结果中编辑或删除不满意的分项。';
+  openModal('一句话记录', `
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
-      <textarea id="qrText" rows="3" class="w-full border rounded-lg p-3 text-sm" placeholder="输入一句话，例如：张明轩今天主动帮助同学，提出表扬"></textarea>
-      <div class="flex gap-2">
-        <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrRecognize()">🔍 识别</button>
-        <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="qrFillExample()">填充示例</button>
-      </div>
+      <textarea id="qrText" rows="3" class="w-full border rounded-lg p-3 text-sm" placeholder="输入一句话，例如：赵吉晨数学作业未完成且上语文课说话"></textarea>
+      <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrRecognize()">🔍 识别并预览</button>
       <div id="qrResult"></div>
     </div>`, 'lg');
 }
-function qrFillExample() {
-  const ta = document.getElementById('qrText');
-  if (ta) ta.value = '孙中杰参加体育早训，提出表扬；秦梦茹数学月考满分，表扬；王浩然迟到批评';
-  qrRecognize();
-}
+
 function qrRecognize() {
   const text = document.getElementById('qrText').value;
   if (!text.trim()) return alert('请先输入内容');
-  const r = parseQuickRecord(text);
-  qrDraft = r;
-  // —— 关联扣分识别（沿职务树向上追责）——
-  let dedSection = '';
+  qrDraft = parseQuickRecord(text);
+  // 关联扣分识别（沿职务树向上追责）
   qrDeductDraft = null;
   let dedNodeId = null;
   try { dedNodeId = pmFindNodeByKeyword(text); } catch (e) { dedNodeId = null; }
   if (dedNodeId) {
     const day = pmExtractDay(text);
-    const dNode = pmFindTreeNodeById(state.positions.dutyTree, dedNodeId);
-    const dChain = pmGetDeductionChain(dedNodeId, day);
-    const dPath = pmGetNodePath(state.positions.dutyTree, dedNodeId).map(n => n.label).join(' → ');
-    const dPts = state.positions.deductionPoints;
-    qrDeductDraft = { nodeId: dedNodeId, text, pts: dPts };
-    dedSection = `<div class="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4 space-y-2">
-      <div class="text-sm font-bold text-indigo-700">⚠️ 识别到关联扣分（沿职务树向上追责）</div>
-      <div class="text-xs text-slate-500">识别路径</div>
-      <div class="font-medium text-indigo-700 text-sm">${esc(dPath)} ${day ? '（' + esc(day) + '）' : ''}</div>
-      <div class="text-xs text-slate-500">将扣分人员</div>
-      <div class="flex flex-wrap gap-1.5">
-        ${dChain.length ? dChain.map(p => `<span class="bg-white border border-slate-200 rounded-full px-2.5 py-1 text-xs">${esc(p.name)} <span class="text-slate-400">(${esc(p.pos)})</span></span>`).join('') : '<span class="text-slate-400 text-xs">该路径上未安排人员</span>'}
-      </div>
-      <div class="flex items-center gap-2 pt-1">
-        <button class="text-xs bg-red-500 text-white rounded-lg px-3 py-1.5 hover:bg-red-600" onclick="pmConfirmQrDeduct()">确认每人扣 ${dPts} 分</button>
-        ${dChain.length ? `<span class="text-xs text-slate-400">共 ${dChain.length} 人</span>` : ''}
-      </div>
+    qrDeductDraft = { nodeId: dedNodeId, text, pts: state.positions.deductionPoints, day };
+  }
+  qrRenderDraft();
+}
+
+function qrRenderDraft() {
+  const resultEl = document.getElementById('qrResult');
+  if (!resultEl) return;
+  if (!qrDraft || !qrDraft.segments.length) {
+    resultEl.innerHTML = '<div class="text-sm text-gray-500 text-center py-4">未识别到可记录的内容，请检查学生姓名或补充描述。</div>';
+    return;
+  }
+  let dedHtml = '';
+  if (qrDeductDraft) {
+    const dPath = pmGetNodePath(state.positions.dutyTree, qrDeductDraft.nodeId).map(n => n.label).join(' → ');
+    const chain = pmGetDeductionChain(qrDeductDraft.nodeId, qrDeductDraft.day);
+    dedHtml = `<div class="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4 space-y-2 mb-3">
+      <div class="text-sm font-bold text-indigo-700">⚠️ 识别到关联扣分</div>
+      <div class="font-medium text-indigo-700 text-sm">${esc(dPath)} ${qrDeductDraft.day ? '（' + esc(qrDeductDraft.day) + '）' : ''}</div>
+      <div class="flex flex-wrap gap-1.5">${chain.length ? chain.map(p => `<span class="bg-white border border-slate-200 rounded-full px-2.5 py-1 text-xs">${esc(p.name)} <span class="text-slate-400">(${esc(p.pos)})</span></span>`).join('') : '<span class="text-slate-400 text-xs">该路径上未安排人员</span>'}</div>
+      <button class="text-xs bg-red-500 text-white rounded-lg px-3 py-1.5 hover:bg-red-600" onclick="pmConfirmQrDeduct()">确认每人扣 ${qrDeductDraft.pts} 分</button>
     </div>`;
   }
-  const typeChips = ['critic', 'praise', 'chat', 'leave'].map(t => {
-    const on = r.types.includes(t);
-    return `<button type="button" data-qrtype="${t}" onclick="qrToggleType('${t}')" class="qr-type ${on?'qr-on':'qr-off'}">${REC_TYPE_EMOJI[t]} ${REC_TYPE_LABELS[t]}</button>`;
-  }).join('');
-  const stuChips = state.students.map(s => {
-    const on = r.students.some(x => x.id === s.id);
-    return `<button type="button" data-qrstu="${s.id}" onclick="qrToggleStu('${s.id}')" class="qr-stu ${on?'qr-on':'qr-off'}">${esc(s.name)}</button>`;
-  }).join('');
-  const dimChips = POINT_DIMS.map(d => {
-    const on = r.autoDim === d.id;
-    return `<button type="button" data-qrdim="${d.id}" onclick="qrSetDim('${d.id}')" class="qr-type ${on?'qr-on':'qr-off'}">${d.icon} ${d.label}</button>`;
-  }).join('');
-  const matchedText = (r.matched.length ? r.matched.map(m => {
-    if (m.kind === 'student') return '👤 ' + m.value;
-    if (m.kind === 'type') return REC_TYPE_EMOJI[m.type] + ' ' + m.value;
-    if (m.kind === 'subject') return '📚 ' + m.value;
-    if (m.kind === 'homework') return '📖 ' + m.value;
-    if (m.kind === 'rule') return '📐 ' + m.value + '(' + (m.delta >= 0 ? '+' : '') + m.delta + ')';
-    return dimIcon(m.dim) + ' ' + m.value;
-  }).join('　') : '未识别到学生或类型，请手动选择');
-  const hasScoringType = r.types.some(t => t === 'praise' || t === 'critic');
-  const scoringSection = hasScoringType ? `
-      <div><div class="text-xs text-gray-500 mb-1">自动积分模块（可修改）</div>
-        <div class="flex flex-wrap gap-2">${dimChips}</div></div>
-      <div><div class="text-xs text-gray-500 mb-1">自动分值（表扬为正，批评为负，谈心/请假不计）</div>
-        <input id="qrPointVal" type="number" value="1" class="w-24 border rounded-lg p-2 text-sm" placeholder="1"></div>` : '';
-  const homeworkSection = r.homework ? `
-      <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-1">
-        <div class="text-xs font-bold text-amber-700">📖 识别到作业布置</div>
-        <div class="text-xs text-amber-600">科目：${esc(r.homeworkSubject ? r.homeworkSubject.name : '未指定')} · 点击「一键记录」后将自动加入「作业管理」</div>
-      </div>` : '';
-  const ruleSection = r.rules && r.rules.length ? `
-      <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-3 space-y-1">
-        <div class="text-xs font-bold text-indigo-700">📐 识别到积分规则</div>
-        <div class="flex flex-wrap gap-1.5">
-          ${r.rules.map(({rule,keyword}) => `<span class="text-xs bg-white border border-slate-200 rounded-full px-2 py-1">${esc(rule.label)}（${esc(keyword)} → ${dimIcon(rule.dim)} ${rule.delta>=0?'+':''}${rule.delta}）</span>`).join('')}
-        </div>
-        <div class="text-xs text-indigo-600">点击「一键记录」后将为每个学生自动应用对应规则加减分</div>
-      </div>` : '';
-  document.getElementById('qrResult').innerHTML = `
-    <div class="rounded-xl border p-4 space-y-4 bg-gray-50">
-      ${dedSection}
-      <div><div class="text-xs text-gray-500 mb-1">识别结果</div><div class="text-xs text-primary">${esc(matchedText)}</div></div>
-      <div><div class="text-xs text-gray-500 mb-1">学生（可增删，默认全选识别到的）</div>
-        <div class="flex flex-wrap gap-2">${stuChips}</div></div>
-      <div><div class="text-xs text-gray-500 mb-1">记录类型（可多选）</div>
-        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}${ruleSection}${homeworkSection}
-      <div><div class="text-xs text-gray-500 mb-1">记录内容</div>
-        <textarea id="qrContent" rows="3" class="w-full border rounded-lg p-3 text-sm">${esc(r.content)}</textarea></div>
-      <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
-      <div class="flex gap-2 pt-1">
-        <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
-        <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal(); openFabDefault()">取消</button>
+  let totalItems = 0;
+  qrDraft.segments.forEach(seg => totalItems += seg.items.length);
+  const list = qrDraft.segments.map((seg, si) => {
+    const stuName = seg.student ? seg.student.name : '未识别学生';
+    return `<div class="rounded-xl border p-3 space-y-2 bg-white">
+      <div class="flex items-center justify-between">
+        <div class="font-medium text-sm">👤 ${esc(stuName)}</div>
+        <span class="text-xs text-gray-400">${seg.items.filter(i => i.enabled).length}/${seg.items.length} 项生效</span>
       </div>
+      ${seg.items.map((item, ii) => qrItemCard(item, si, ii)).join('')}
     </div>`;
+  }).join('');
+  resultEl.innerHTML = dedHtml + `<div class="space-y-3">
+    <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。可在卡片内修改文本、删除或停用。</div>
+    ${list}
+    <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+    <div class="flex gap-2 pt-1">
+      <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
+      <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal(); openFabDefault()">取消</button>
+    </div>
+  </div>`;
 }
-function qrSetDim(dim) {
-  qrDraft.autoDim = dim;
-  document.querySelectorAll('[data-qrdim]').forEach(b => {
-    if (b.dataset.qrdim === dim) { b.classList.add('qr-on'); b.classList.remove('qr-off'); }
-    else { b.classList.remove('qr-on'); b.classList.add('qr-off'); }
-  });
+
+function qrItemCard(item, si, ii) {
+  const chips = [];
+  if (item.recType) chips.push(`${recordTypeEmoji(item.recType)} ${recordTypeLabel(item.recType)}`);
+  item.subjects.forEach(sub => chips.push(`📚 ${sub.name}`));
+  item.rules.forEach(({ rule }) => chips.push(`📐 ${rule.label}${rule.delta >= 0 ? '+' : ''}${rule.delta}`));
+  if (item.homework) chips.push(`📖 作业`);
+  if (item.pointDelta !== 0 && !item.rules.length) chips.push(`${dimIcon(item.dim)} ${item.pointDelta >= 0 ? '+' : ''}${item.pointDelta}`);
+  const actions = [];
+  if (item.recType && item.recType !== 'leave') actions.push('学生记录');
+  if (item.recType === 'leave') actions.push('请假');
+  item.subjects.forEach(() => actions.push('课堂记录'));
+  item.rules.forEach(() => actions.push('积分规则'));
+  if (item.homework && !/未完成|没交|未做|不交/.test(item.content)) actions.push('作业管理');
+  if (item.pointDelta !== 0 && !item.rules.length) actions.push('积分');
+  const disabledClass = item.enabled ? '' : 'opacity-50 grayscale';
+  return `<div class="rounded-lg border border-gray-200 p-3 space-y-2 ${disabledClass}" data-qr-item="${si}-${ii}">
+    <div class="flex flex-wrap gap-1.5">${chips.map(c => `<span class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">${esc(c)}</span>`).join('')}</div>
+    <textarea rows="2" class="w-full border rounded-lg p-2 text-sm" onchange="qrReparseItem(${si},${ii},this.value)">${esc(item.content)}</textarea>
+    <div class="flex items-center justify-between">
+      <div class="text-xs text-gray-400">将生成：${actions.join('、')}</div>
+      <div class="flex items-center gap-2">
+        <label class="text-xs flex items-center gap-1"><input type="checkbox" ${item.enabled ? 'checked' : ''} onchange="qrToggleItem(${si},${ii})"> 启用</label>
+        <button class="text-xs text-red-500 hover:underline" onclick="qrRemoveItem(${si},${ii})">删除</button>
+      </div>
+    </div>
+  </div>`;
 }
-function qrToggleType(t) {
-  const btn = document.querySelector(`[data-qrtype="${t}"]`);
-  const on = btn.classList.contains('qr-on');
-  if (on) { qrDraft.types = qrDraft.types.filter(x => x !== t); btn.classList.remove('qr-on'); btn.classList.add('qr-off'); }
-  else { qrDraft.types.push(t); btn.classList.add('qr-on'); btn.classList.remove('qr-off'); }
+
+function qrReparseItem(si, ii, newText) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  const fresh = recognizeClause(newText.trim(), []);
+  if (!fresh) return;
+  fresh.enabled = qrDraft.segments[si].items[ii].enabled;
+  qrDraft.segments[si].items[ii] = fresh;
+  qrRenderDraft();
 }
-function qrToggleStu(id) {
-  const btn = document.querySelector(`[data-qrstu="${id}"]`);
-  const on = btn.classList.contains('qr-on');
-  if (on) { qrDraft.students = qrDraft.students.filter(x => x.id !== id); btn.classList.remove('qr-on'); btn.classList.add('qr-off'); }
-  else { const s = state.students.find(x => x.id === id); qrDraft.students.push({ id: s.id, name: s.name }); btn.classList.add('qr-on'); btn.classList.remove('qr-off'); }
+
+function qrToggleItem(si, ii) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  qrDraft.segments[si].items[ii].enabled = !qrDraft.segments[si].items[ii].enabled;
+  qrRenderDraft();
 }
-// 快速记录：识别后按对应模块自动加减分，表扬+ / 批评- / 谈心0 / 请假同步考勤
+
+function qrRemoveItem(si, ii) {
+  if (!qrDraft || !qrDraft.segments[si]) return;
+  qrDraft.segments[si].items.splice(ii, 1);
+  if (!qrDraft.segments[si].items.length) qrDraft.segments.splice(si, 1);
+  qrRenderDraft();
+}
+
+// 一句话记录：按学生×分项自动写入学生记录、课堂记录、积分、作业、请假
 function qrSave() {
-  const content = document.getElementById('qrContent').value.trim();
   const date = document.getElementById('qrDate').value.trim() || todayLabel;
-  const pointInput = document.getElementById('qrPointVal');
-  const pointVal = pointInput ? Math.abs(parseFloat(pointInput.value) || 1) : 1;
-  if (!qrDraft.students.length) return alert('请至少选择一个学生');
-  if (!qrDraft.types.length) return alert('请至少选择一个记录类型');
-  if (!content) return alert('请输入记录内容');
-  let n = 0;
+  if (!qrDraft || !qrDraft.segments.length) return alert('请先识别内容');
+  let nRecord = 0, nPoint = 0, nClass = 0, nHomework = 0, nLeave = 0;
   const autoPointLogs = [];
-  qrDraft.students.forEach(st => {
-    qrDraft.types.forEach(t => {
-      const s = state.students.find(x => x.id === st.id);
-      if (!s) return;
-      s.records.unshift({ id: uid(), type: t, date, content }); n++;
-      // 请假同步到今日考勤，不重复写入班级日志（由下方统一写入）
-      if (t === 'leave') {
+  qrDraft.segments.forEach(seg => {
+    const s = state.students.find(x => x.id === seg.student.id);
+    if (!s) return;
+    seg.items.forEach(item => {
+      if (!item.enabled) return;
+      const { recType, subjects, rules, homework, content, dim, pointDelta } = item;
+      // 学生行为记录 / 请假
+      if (recType === 'leave') {
         addLeave(s.name, content || '请假', true);
+        nLeave++;
+      } else if (recType) {
+        s.records.unshift({ id: uid(), type: recType, date, content });
+        nRecord++;
       }
-      // 自动按对应模块加减分
-      let delta = 0;
-      if (t === 'praise') delta = +pointVal;
-      else if (t === 'critic') delta = -pointVal;
-      // 谈心 / 请假 / 未识别类型不计分
-      if (delta !== 0) {
-        const dim = qrDraft.autoDim || 'daily';
-        ptWriteLog(s.id, dim, delta, `快速记录·${REC_TYPE_LABELS[t]}：${content.slice(0, 20)}`);
-        autoPointLogs.push(`${s.name} ${dimLabel(dim)}${delta>=0?'+':''}${delta}`);
+      // 基础积分（表扬+1 / 批评-1）
+      if (pointDelta !== 0) {
+        ptWriteLog(s.id, dim, pointDelta, `一句话记录·${recordTypeLabel(recType)}：${content.slice(0, 20)}`);
+        nPoint++;
+        autoPointLogs.push(`${s.name} ${dimLabel(dim)}${pointDelta >= 0 ? '+' : ''}${pointDelta}`);
       }
-    });
-  });
-  // 自动应用积分规则（识别到规则关键词时）
-  const ruleMatches = qrDraft.rules || [];
-  if (ruleMatches.length) {
-    ruleMatches.forEach(({ rule }) => {
-      qrDraft.students.forEach(st => {
-        const s = state.students.find(x => x.id === st.id);
-        if (!s) return;
+      // 规则积分
+      rules.forEach(({ rule }) => {
         ptWriteLog(s.id, rule.dim, rule.delta, `规则·${rule.label}：${content.slice(0, 20)}`, '', 'rule');
+        nPoint++;
         autoPointLogs.push(`${s.name} ${dimLabel(rule.dim)}${rule.delta >= 0 ? '+' : ''}${rule.delta}`);
       });
-    });
-  }
-  // 自动记入课堂记录（识别到科目时）
-  const subjects = qrDraft.subjects || [];
-  if (subjects.length) {
-    subjects.forEach(sub => {
-      qrDraft.students.forEach(st => {
-        const s = state.students.find(x => x.id === st.id);
-        if (!s) return;
+      // 课堂记录
+      subjects.forEach(sub => {
         state.classRecords.unshift({ id: uid(), date, subject: sub.name, studentId: s.id, studentName: s.name, content, auto: 'quick' });
+        nClass++;
       });
+      // 作业管理（仅当内容像布置/发布作业，而非未完成/未交）
+      if (homework && !/未完成|没交|未做|不交/.test(content)) {
+        const hwSubject = subjects[0]?.name || '未指定';
+        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: '', due: date });
+        nHomework++;
+      }
     });
-  }
-  // 自动加入作业管理（识别到作业关键词时，不依赖学生）
-  let homeworkAdded = null;
-  if (qrDraft.homework) {
-    const hwSubject = (qrDraft.homeworkSubject && qrDraft.homeworkSubject.name) || '未指定';
-    const hwTitle = content || '作业布置';
-    const hwEntry = { id: uid(), subject: hwSubject, title: hwTitle, class: '', due: date };
-    state.homework.unshift(hwEntry);
-    homeworkAdded = hwSubject;
-  }
-  lastRecordContent = content;
-
-  // 同步写入班级日志：汇总显示学生、类型、内容及自动积分
-  const typeText = qrDraft.types.map(t => REC_TYPE_LABELS[t]).join('/');
-  const stuText = qrDraft.students.map(st => st.name).join('、');
-  let logContent = `快速记录【${typeText}】${stuText}：${content}`;
+  });
+  // 班级日志汇总
+  let logContent = `一句话记录：${qrDraft.raw}`;
   if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
   state.classLogs.unshift({ id: uid(), date, content: logContent });
-
+  lastRecordContent = qrDraft.raw;
   save(); closeModal();
-  let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
-  if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
-  if (ruleMatches.length) msg += `\n（已应用 ${ruleMatches.length} 条积分规则）`;
-  if (subjects.length) msg += `\n（已记入课堂记录：${subjects.map(s=>s.name).join('、')}）`;
-  if (homeworkAdded) msg += `\n（已加入作业管理：${homeworkAdded}）`;
+  let msg = '已记录';
+  if (nRecord) msg += ` ${nRecord} 条行为`;
+  if (nLeave) msg += ` ${nLeave} 条请假`;
+  if (nPoint) msg += ` ${nPoint} 笔积分`;
+  if (nClass) msg += ` ${nClass} 条课堂记录`;
+  if (nHomework) msg += ` ${nHomework} 条作业`;
   toast(msg);
   render();
+}
+
+// 一句话记录中的关联扣分确认
+function pmConfirmQrDeduct() {
+  if (!qrDeductDraft) return;
+  const { nodeId, text, pts } = qrDeductDraft;
+  pmConfirmDeduct(nodeId, pts, text);
+  const box = document.getElementById('qrResult');
+  if (box) box.innerHTML = '<div class="rounded-xl border-2 border-green-300 bg-green-50 p-4 text-sm text-green-700">✅ 关联扣分已记录（任职赋分维度，可在积分管理-日志按批次撤销）。如还需记录其他内容，可重新输入并识别。</div>';
+  qrDeductDraft = null;
 }
 // 轻量提示
 function toast(text) {
@@ -4263,7 +4278,7 @@ function toast(text) {
 function openFabDefault() {
   openModal('快速记录', `
     <div class="space-y-4">
-      <button class="w-full text-left p-4 rounded-xl bg-primary/10 hover:bg-primary/20 font-medium" onclick="closeModal(); openQuickRecord()">🤖 智能记录（输入一句话自动识别）</button>
+      <button class="w-full text-left p-4 rounded-xl bg-primary/10 hover:bg-primary/20 font-medium" onclick="closeModal(); openQuickRecord()">🤖 一句话记录</button>
       <button class="w-full text-left p-4 rounded-xl bg-primary/5 hover:bg-primary/10" onclick="closeModal(); openPtAdjust(null,'daily',1)">🏆 积分加分 / 扣分</button>
       <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openPtBatch()">👥 批量加减分</button>
       <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openStudentForm(null)">👤 新建学生</button>
@@ -4922,7 +4937,7 @@ function pmConfirmDeduct(nodeId,pts,textOverride){
   save(); render();
   alert('已对 '+cnt+' 人各扣 '+pts+' 分（任职赋分维度，可在积分管理-日志查看/撤销）。');
 }
-// 首页「智能快速记录」中的关联扣分确认
+// 首页「一句话记录」中的关联扣分确认
 function pmConfirmQrDeduct(){
   if(!qrDeductDraft) return;
   const { nodeId, text, pts } = qrDeductDraft;
