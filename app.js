@@ -50,6 +50,7 @@ function defaultState() {
       { id: 'communication', label: '家校沟通', icon: '💬' },
       { section: '减负工具', items: [
         { id: 'exam', label: '成绩管理', icon: '📊' },
+        { id: 'attendance', label: '考勤管理', icon: '✅' },
         { id: 'homework', label: '作业管理', icon: '📚' },
         { id: 'templates', label: '模板库', icon: '📋' },
         { id: 'report', label: '周报月报', icon: '📰' },
@@ -146,6 +147,12 @@ function defaultState() {
     },
     // ===== 积分折算比例（各维度 × 比例 = 折算分）=====
     convertRatios: { sport: 1, daily: 1, exam: 1, post: 1 },
+    // ===== 考勤管理 =====
+    attendance: {
+      members: [],   // [{name, weeklyHome:['一','三','五']}] 固定回家周期（长期保留，跨日不清空）
+      current: null, // {date:'YYYY-MM-DD', home:{}, leave:{}}  home 由周期派生；leave 为当天临时请假
+      logs: [],      // 历史每日 [{id,date,dateLabel,total,home:[],leave:[{name,reason}],present,rate}]
+    },
     // ===== 历史快照（按日期回看积分榜）=====
     snapshots: [],        // [{id,date,type,ranking:[{name,score,conv}]}]
   };
@@ -210,7 +217,7 @@ function defaultPoints() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   const dp = defaultPoints();
@@ -247,6 +254,12 @@ function migrateState(s) {
   if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
   ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 1; });
   if (!Array.isArray(s.snapshots)) s.snapshots = [];
+  // 考勤管理
+  if (!s.attendance || typeof s.attendance !== 'object') s.attendance = { members: [], current: null, logs: [] };
+  if (!Array.isArray(s.attendance.members)) s.attendance.members = [];
+  if (!Array.isArray(s.attendance.logs)) s.attendance.logs = [];
+  if (s.attendance.current && typeof s.attendance.current !== 'object') s.attendance.current = null;
+  s.attendance.members.forEach(m => { if (!m || typeof m !== 'object') return; if (!Array.isArray(m.weeklyHome)) m.weeklyHome = []; if (typeof m.name !== 'string') m.name = ''; });
   // 学生补全 alias 字段
   if (Array.isArray(s.students)) s.students.forEach(st => { if (st && typeof st.alias === 'undefined') st.alias = ''; });
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
@@ -292,8 +305,52 @@ function defaultExamColumns() {
   return EXAM_COLUMNS_DEFAULT.map(c => ({ key: c.key, type: c.type, enabled: true }));
 }
 
+// ===================== 考勤管理：核心逻辑（含跨日自动归档）=====================
+const ATT_WEEK = ['一','二','三','四','五']; // 固定回家可选的工作日
+function attDateKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function attDayName(d){ return ['日','一','二','三','四','五','六'][d.getDay()]; }
+function attMembers(){ return (state.attendance.members||[]).filter(m=>m&&m.name); }
+function attDeriveHome(){
+  const day=attDayName(new Date()); const home={};
+  attMembers().forEach(m=>{ if((m.weeklyHome||[]).includes(day)) home[m.name]=true; });
+  return home;
+}
+function attStats(){
+  const cur=(state.attendance.current)||{home:{},leave:{}};
+  const total=attMembers().length;
+  const homeKeys=Object.keys(cur.home||{}), leaveKeys=Object.keys(cur.leave||{});
+  const absent=new Set([...homeKeys,...leaveKeys]);
+  return { total, home:homeKeys.length, leave:leaveKeys.length, present:Math.max(0,total-absent.size),
+           rate:total?Math.round((total-absent.size)/total*1000)/10:0 };
+}
+function attBuildLog(cur){
+  return { id:uid(), date:cur.date, dateLabel:cur.date, total:attStats().total,
+    home:Object.keys(cur.home||{}),
+    leave:Object.entries(cur.leave||{}).map(([name,reason])=>({name,reason:reason===true?'':reason})),
+    present:attStats().present, rate:attStats().rate };
+}
+function archiveCurrentAttendance(cur){
+  const a=state.attendance; if(!cur||!cur.date) return;
+  a.logs.unshift(attBuildLog(cur));
+  Object.entries(cur.leave||{}).forEach(([name,reason])=>{
+    const r=reason===true?'':reason;
+    state.classLogs.unshift({ id:uid(), date:cur.date, content:`【考勤】${name} 请假${r?('（'+r+'）'):''}` });
+  });
+}
+// 第二天打开（首次加载）时：归档前一天快照、清空请假、固定回家按周期保留
+function autoArchiveAttendance(){
+  const a=state.attendance; if(!a) return;
+  const today=attDateKey(new Date());
+  if(!a.current){ a.current={ date:today, home:attDeriveHome(), leave:{} }; return; }
+  if(a.current.date !== today){
+    archiveCurrentAttendance(a.current);            // 自动保存前一天考勤到历史
+    a.current={ date:today, home:attDeriveHome(), leave:{} }; // 固定回家由周期重新派生（保留），请假清空
+    save();
+  }
+}
 
 let state = loadState();
+autoArchiveAttendance();   // ★ 跨日自动归档：打开即把前一天考勤存入历史并重置当天
 let currentRoute = 'home';
 
 // ===================== Helpers =====================
@@ -669,7 +726,7 @@ function renderPage() {
     album: renderAlbum, seating: renderSeating, duty: renderDuty, classRecord: renderClassRecord,
     communication: renderCommunication, scores: renderExam, homework: renderHomework,
     templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
-    points: renderPoints, exam: renderExam,
+    points: renderPoints, exam: renderExam, attendance: renderAttendance,
   };
   return (map[currentRoute] || renderHome)();
 }
@@ -686,6 +743,21 @@ function renderHome() {
         <button class="text-xs text-gray-400 hover:text-primary" onclick="navigate('duty')">去设置 →</button>
       </div>
       ${dutyToday.length ? `<div class="flex flex-wrap gap-2">${dutyToday.map(n=>`<span class="text-sm bg-primary/10 text-primary px-3 py-1 rounded-full">${esc(n)}</span>`).join('')}</div>` : `<div class="text-sm text-gray-500">还没有设置值日分组，点「去设置」按每组人数自动排班。</div>`}
+    </div>
+    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800">✅ 今日考勤</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('attendance')">考勤管理</button>
+      </div>
+      ${(() => {
+        const st = attStats(); const a = state.attendance; const cur = a.current || {home:{},leave:{}};
+        const leave = Object.entries(cur.leave||{});
+        return `<div class="text-sm text-gray-600 mb-2">应到 ${st.total} · 实到 ${st.present} · 固定回家 ${st.home} · 请假 ${st.leave}</div>
+          <div class="flex flex-wrap items-center gap-2">
+            ${leave.length ? leave.map(([n,r])=>`<span class="text-xs px-2 py-1 rounded-full bg-red-50 text-red-600">${esc(n)}${r?('·'+esc(r)):''}</span>`).join('') : '<span class="text-xs text-gray-400">今日暂无请假</span>'}
+            <button class="text-xs px-2 py-1 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="openAddLeaveModal()">+ 记请假</button>
+          </div>`;
+      })()}
     </div>
     ${renderHomePointsCard()}
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
@@ -2282,6 +2354,156 @@ function getStudentProgress(studentName, examId, subject) {
     if (prev) return { diff: (+current.score) - (+prev.score), prevScore: +prev.score };
   }
   return null;
+}
+
+// ===================== 考勤管理：页面与交互 =====================
+let attMode = 'home';   // 'home' | 'leave' | null
+function attChipClass(name){
+  const cur=(state.attendance.current)||{home:{},leave:{}};
+  const h=!!cur.home[name], l=!!cur.leave[name];
+  if(h&&l) return 'both'; if(h) return 'home'; if(l) return 'leave'; return '';
+}
+function setAttMode(mode){
+  attMode = (attMode===mode)? null : mode;
+  render();
+}
+function markAttMember(name){
+  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  const day=attDayName(new Date()); const m=a.members.find(x=>x.name===name);
+  if(attMode==='home'){
+    if(!m) return;
+    if(!m.weeklyHome) m.weeklyHome=[];
+    const i=m.weeklyHome.indexOf(day);
+    if(i>-1) m.weeklyHome.splice(i,1); else m.weeklyHome.push(day);
+    attRecomputeHome();
+  } else if(attMode==='leave'){
+    if(a.current.leave[name]) delete a.current.leave[name];
+    else a.current.leave[name]='';
+  } else return;
+  save(); render();
+}
+function toggleAttDay(name, day){
+  const m=state.attendance.members.find(x=>x.name===name); if(!m) return;
+  if(!m.weeklyHome) m.weeklyHome=[];
+  const i=m.weeklyHome.indexOf(day);
+  if(i>-1) m.weeklyHome.splice(i,1); else m.weeklyHome.push(day);
+  attRecomputeHome(); save(); render();
+}
+function addLeave(name, reason){
+  name=(name||'').trim(); if(!name) return false;
+  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  a.current.leave[name]=reason||'';
+  const dk=attDateKey(new Date());
+  state.classLogs.unshift({ id:uid(), date:dk, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+  save(); return true;
+}
+function openAddLeaveModal(){
+  openModal('添加请假', `<div class="space-y-4">
+    <div><label class="block text-xs text-gray-500 mb-1">学生姓名</label><input id="lvName" class="w-full border rounded-lg p-2 text-sm" placeholder="如：王浩然"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">请假原因（可选）</label><input id="lvReason" class="w-full border rounded-lg p-2 text-sm" placeholder="如：病假 / 事假"></div>
+    <button class="w-full bg-primary text-white py-2 rounded-full" onclick="submitAddLeave()">保存</button></div>`);
+}
+function submitAddLeave(){
+  const n=document.getElementById('lvName').value.trim();
+  const r=document.getElementById('lvReason').value.trim();
+  if(!n) return alert('请输入学生姓名');
+  addLeave(n,r); closeModal(); render();
+}
+function removeLeave(name){
+  delete state.attendance.current.leave[name]; save(); render();
+}
+function saveTodayAtt(){
+  const a=state.attendance, cur=a.current; if(!cur) return;
+  if(a.logs.some(l=>l.date===cur.date)){ alert('今日考勤已存于历史记录'); return; }
+  a.logs.unshift(attBuildLog(cur)); save(); alert('今日考勤已存入历史'); render();
+}
+function openAttMemberModal(){
+  openModal('班级成员管理', `<div class="space-y-4">
+    <p class="text-sm text-gray-500">每行一个姓名；如需预设固定回家周期，可格式「姓名|一,三,五」。</p>
+    <textarea id="attMembers" rows="8" class="w-full border rounded-lg p-2 text-sm" placeholder="张明轩\n李梓涵|一,三,五\n王浩然">${(state.attendance.members||[]).map(m=>m.weeklyHome&&m.weeklyHome.length?`${m.name}|${m.weeklyHome.join(',')}`:m.name).join('\n')}</textarea>
+    <button class="w-full bg-primary text-white py-2 rounded-full" onclick="saveAttMembers()">保存名单</button></div>`);
+}
+function saveAttMembers(){
+  const txt=document.getElementById('attMembers').value;
+  const list=txt.split('\n').map(s=>s.trim()).filter(Boolean).map(line=>{
+    const [name, wk]=line.split('|'); const weeklyHome=(wk||'').split(',').map(x=>x.trim()).filter(x=>ATT_WEEK.includes(x));
+    return { name:name.trim(), weeklyHome };
+  });
+  state.attendance.members=list; attRecomputeHome(); save(); closeModal(); render();
+}
+function renderAttendance() {
+  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  const st=attStats();
+  const homeNames=Object.keys(a.current.home), leaveNames=Object.keys(a.current.leave);
+  const leaveList=Object.entries(a.current.leave).map(([n,r])=>({name:n,reason:r===true?'':r}));
+  const conclusion = `应到 ${st.total} 人，实到 ${st.present} 人。固定回家 ${st.home} 人（${homeNames.join('、')||'无'}），请假 ${st.leave} 人（${leaveNames.join('、')||'无'}）。`;
+
+  const memberChips = attMembers().map(m=>{
+    const cls=attChipClass(m.name);
+    return `<div class="member-chip ${cls}" onclick="markAttMember('${m.name.replace(/'/g,"")}')">${esc(m.name)}</div>`;
+  }).join('') || '<div class="text-sm text-gray-400">还没有班级成员，点「班级成员管理」导入名单。</div>';
+
+  const homeRows = attMembers().map(m=>`<tr>
+    <td>${esc(m.name)}</td>
+    <td><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay('${m.name.replace(/'/g,"")}','${d}')">${d}</span>`).join('')}</div></td>
+    <td>${(m.weeklyHome||[]).includes(attDayName(new Date()))?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400">暂无成员</td></tr>';
+
+  const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave('${l.name.replace(/'/g,"")}')">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
+
+  const historyRows = a.logs.slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${l.home.length}</td><td>${l.leave.length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
+
+  return `<div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div><div class="text-xs text-gray-400 mb-1">当前考勤时间</div><div class="text-2xl font-bold text-gray-800">${formatDate(now)}</div></div>
+        <div class="flex items-center gap-2">
+          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='home'?'bg-blue-100 border-blue-300 text-blue-700':'bg-white text-gray-600'}" onclick="setAttMode('home')">🏠 固定回家${attMode==='home'?' · 工作中':''}</button>
+          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='leave'?'bg-red-100 border-red-300 text-red-700':'bg-white text-gray-600'}" onclick="setAttMode('leave')">🏥 请假${attMode==='leave'?' · 工作中':''}</button>
+          <button class="px-4 py-2 rounded-lg text-sm text-white" style="background:linear-gradient(135deg,#f472b6,#ec4899)" onclick="saveTodayAtt()">💾 保存今日考勤</button>
+        </div>
+      </div>
+      <p class="text-xs text-gray-400 mt-3">操作：先点上方按钮进入对应工作状态（再点一次退出），再点学生姓名标记；固定回家按周期保留，请假每天清空。</p>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="bg-white rounded-2xl p-4 text-center shadow-sm"><div class="text-2xl font-bold">${st.total}</div><div class="text-xs text-gray-400 mt-1">应到人数</div></div>
+      <div class="bg-white rounded-2xl p-4 text-center shadow-sm"><div class="text-2xl font-bold text-blue-600">${st.home}</div><div class="text-xs text-gray-400 mt-1">固定回家</div></div>
+      <div class="bg-white rounded-2xl p-4 text-center shadow-sm"><div class="text-2xl font-bold text-red-500">${st.leave}</div><div class="text-xs text-gray-400 mt-1">请假</div></div>
+      <div class="bg-white rounded-2xl p-4 text-center shadow-sm"><div class="text-2xl font-bold text-green-600">${st.present}</div><div class="text-xs text-gray-400 mt-1">实到人数</div></div>
+    </div>
+
+    <div class="rounded-2xl p-5 shadow-sm" style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;color:#1e40af;">
+      <div class="font-bold text-[15px] mb-1">📋 今日考勤</div>
+      <div class="text-[13px] leading-6">${conclusion}</div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-4">
+        <div class="font-bold text-gray-800">👨‍👩‍👧‍👦 班级成员（点击标记）</div>
+        <button class="text-xs text-primary hover:underline" onclick="openAttMemberModal()">班级成员管理</button>
+      </div>
+      <div class="flex flex-wrap gap-3">${memberChips}</div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="bg-white rounded-2xl p-5 shadow-sm">
+        <div class="font-bold text-gray-800 mb-3">🏠 固定回家成员（每周周期，可多选不连续日）</div>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">固定周期</th><th class="text-left text-gray-500 font-medium pb-2">今日</th></tr></thead><tbody>${homeRows}</tbody></table></div>
+      </div>
+      <div class="bg-white rounded-2xl p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <div class="font-bold text-gray-800">🏥 请假记录（自动写入班级日志）</div>
+          <button class="text-xs text-primary hover:underline" onclick="openAddLeaveModal()">+ 添加请假</button>
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">时间</th><th class="text-left text-gray-500 font-medium pb-2">原因</th><th></th></tr></thead><tbody>${leaveRows}</tbody></table></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">📚 历史考勤情况（每日自动保存）</div>
+      <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">日期</th><th class="text-left text-gray-500 font-medium pb-2">应到</th><th class="text-left text-gray-500 font-medium pb-2">实到</th><th class="text-left text-gray-500 font-medium pb-2">固定回家</th><th class="text-left text-gray-500 font-medium pb-2">请假</th><th class="text-left text-gray-500 font-medium pb-2">出勤率</th><th></th></tr></thead><tbody>${historyRows}</tbody></table></div>
+    </div>
+  </div>`;
 }
 
 function renderExam() {
