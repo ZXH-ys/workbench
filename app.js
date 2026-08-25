@@ -31,6 +31,25 @@ function pushSync() {
 }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function defaultClassRecordSubjects() {
+  return [
+    { id:'yuwen', name:'语文', keywords:['语文'] },
+    { id:'shuxue', name:'数学', keywords:['数学'] },
+    { id:'yingyu', name:'英语', keywords:['英语'] },
+    { id:'zhengzhi', name:'政治', keywords:['政治'] },
+    { id:'lishi', name:'历史', keywords:['历史'] },
+    { id:'wuli', name:'物理', keywords:['物理'] },
+    { id:'huaxue', name:'化学', keywords:['化学'] },
+    { id:'shengwu', name:'生物', keywords:['生物'] },
+    { id:'dili', name:'地理', keywords:['地理'] },
+    { id:'tiyu', name:'体育', keywords:['体育'] },
+    { id:'yinyue', name:'音乐', keywords:['音乐'] },
+    { id:'meishu', name:'美术', keywords:['美术'] },
+    { id:'xinxi', name:'信息', keywords:['信息'] },
+    { id:'banhui', name:'班会', keywords:['班会'] },
+    { id:'qita', name:'其他', keywords:[] }
+  ];
+}
 
 function defaultState() {
   return {
@@ -44,7 +63,6 @@ function defaultState() {
         { id: 'classLog', label: '班级日志', icon: '📓' },
         { id: 'album', label: '班级相册', icon: '🖼️' },
         { id: 'seating', label: '座次表', icon: '🪑' },
-        { id: 'duty', label: '值日表', icon: '🧹' },
         { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
       ]},
@@ -60,6 +78,7 @@ function defaultState() {
       { id: 'reminders', label: '待办提醒', icon: '🔔' },
     ],
     positions: defaultPositions(),
+    classRecordSubjects: defaultClassRecordSubjects(),
     schedule: {
       days: ['周一', '周二', '周三', '周四', '周五'],
       periods: [
@@ -121,7 +140,6 @@ function defaultState() {
       { id: uid(), parent: '张明轩妈妈', student: '张明轩', status: '待跟进', content: '迟到问题沟通，需要后续跟进。' },
       { id: uid(), parent: '王浩然爸爸', student: '王浩然', status: '已沟通', content: '课堂状态反馈，家长表示会配合。' },
     ],
-    duty: { groupSize: 4, groups: [] },
     homework: [
       { id: uid(), subject: '英语', title: 'Unit 1 单词默写', class: '高一(3)班', due: '8月25日' },
     ],
@@ -300,9 +318,17 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','duty','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
+  // 移除已废弃的「值日表」菜单项
+  if (Array.isArray(s.nav)) {
+    s.nav.forEach(item => {
+      if (item.id === 'duty') item._del = true;
+      if (Array.isArray(item.items)) item.items = item.items.filter(i => i.id !== 'duty');
+    });
+    s.nav = s.nav.filter(item => !item._del);
+  }
   // 职务与值日：补全子字段
   if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
   if (!Array.isArray(s.positions.structure) || !s.positions.structure.length) s.positions.structure = defaultPositions().structure;
@@ -326,6 +352,8 @@ function migrateState(s) {
   if (!Array.isArray(s.points.assigns)) s.points.assigns = [];
   if (!s.points.jobStartDate) s.points.jobStartDate = '2026-01-01';
   if (!Array.isArray(s.classRecords)) s.classRecords = [];
+  if (!Array.isArray(s.classRecordSubjects) || !s.classRecordSubjects.length) s.classRecordSubjects = defaultClassRecordSubjects();
+  s.classRecords.forEach(r => { if (!r.studentId && r.studentId !== null) r.studentId = null; if (typeof r.studentName !== 'string') r.studentName = ''; });
   if (!s.user || typeof s.user !== 'object') s.user = { name: '班主任', role: '' };
   // 成绩分析 / 折算 / 快照
   if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}], exams: [], records: [], subjects: [] };
@@ -863,7 +891,7 @@ function saveUser() {
 function renderTopBar() {
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
-    album: '班级相册', seating: '座次表', duty: '值日表', classRecord: '课堂记录',
+    album: '班级相册', seating: '座次表', classRecord: '课堂记录',
     communication: '家校沟通', homework: '作业管理', templates: '模板库',
     report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
     positions: '职务与值日管理',
@@ -910,7 +938,7 @@ function renderFab() {
 function renderPage() {
   const map = {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
-    album: renderAlbum, seating: renderSeating, duty: renderDuty, classRecord: renderClassRecord,
+    album: renderAlbum, seating: renderSeating, classRecord: renderClassRecord,
     communication: renderCommunication, scores: renderExam, homework: renderHomework,
     templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
     points: renderPoints, exam: renderExam, attendance: renderAttendance, positions: renderPositions,
@@ -921,15 +949,25 @@ function renderPage() {
 // ===================== Home =====================
 function renderHome() {
   const todayCourses = state.schedule.courses.filter(c => c.day === todayIndex).sort((a,b)=>a.period-b.period);
-  const dutyToday = getDutyForDay(todayIndex);
+  const todayWeekday = ['周一','周二','周三','周四','周五','周六','周日'][todayIndex];
+  const dutyTree = state.positions && state.positions.dutyTree;
+  const dutyTasks = dutyTree ? (function collect(node){
+    let list=[];
+    if(node.dutyTask){
+      const names = (state.positions.dutyWeekly[todayWeekday] && state.positions.dutyWeekly[todayWeekday][node.dutyTask]) || [];
+      if(names.length) list.push({label:node.label, names});
+    }
+    if(node.children) node.children.forEach(c=>{ list=list.concat(collect(c)); });
+    return list;
+  })(dutyTree) : [];
   return `
   <div class="grid grid-cols-12 gap-6">
     <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
       <div class="flex items-center justify-between mb-3">
         <div class="font-bold text-gray-800">🧹 今日值日</div>
-        <button class="text-xs text-gray-400 hover:text-primary" onclick="navigate('duty')">去设置 →</button>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('positions')">职务与值日</button>
       </div>
-      ${dutyToday.length ? `<div class="flex flex-wrap gap-2">${dutyToday.map(n=>`<span class="text-sm bg-primary/10 text-primary px-3 py-1 rounded-full">${esc(n)}</span>`).join('')}</div>` : `<div class="text-sm text-gray-500">还没有设置值日分组，点「去设置」按每组人数自动排班。</div>`}
+      ${dutyTasks.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">${dutyTasks.map(t=>`<div class="p-3 rounded-xl bg-gray-50"><div class="text-xs font-medium text-gray-600 mb-1">${esc(t.label)}</div><div class="flex flex-wrap gap-1">${t.names.map(n=>`<span class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">${esc(n)}</span>`).join('')}</div></div>`).join('')}</div>` : `<div class="text-sm text-gray-500">今天还没有安排值日生，可在「职务与值日」中设置。</div>`}
     </div>
     <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
       <div class="flex items-center justify-between mb-3">
@@ -1587,42 +1625,6 @@ function deleteReminder(id) {
 }
 
 // ===================== Duty =====================
-function getDutyForDay(dayIdx) {
-  if(!state.duty.groups || !state.duty.groups.length) return [];
-  return state.duty.groups[dayIdx % state.duty.groups.length] || [];
-}
-function renderDuty() {
-  const has = state.duty.groups && state.duty.groups.length;
-  const week = ['周一','周二','周三','周四','周五'];
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">值日安排</div>
-      <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openDutySetting()">设置分组</button>
-    </div>
-    ${has ? `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      ${week.map((d,i)=>`<div class="p-4 rounded-xl bg-gray-50"><div class="font-medium text-gray-700 text-sm mb-2 ${i===todayIndex?'text-primary':''}">${d}${i===todayIndex?'（今天）':''}</div><div class="space-y-1">${(state.duty.groups[i]||[]).map(n=>`<div class="text-xs text-gray-600">${esc(n)}</div>`).join('') || '<div class="text-xs text-gray-400">休息</div>'}</div></div>`).join('')}
-    </div>` : `<div class="text-sm text-gray-500">还没有设置值日分组，点「设置分组」按每组人数自动排班。</div>`}
-  </div>`;
-}
-function openDutySetting() {
-  openModal('设置值日分组', `
-    <div class="space-y-4">
-      <p class="text-sm text-gray-500">按每组人数把全班同学自动轮流排到周一至周五。</p>
-      <div><label class="block text-xs text-gray-500 mb-1">每组人数</label><input id="dutySize" type="number" class="w-full border rounded-lg p-2 text-sm" value="${state.duty.groupSize||4}"></div>
-      <div class="max-h-48 overflow-y-auto space-y-1 text-sm">${state.students.map(s=>`<div class="text-gray-600">${esc(s.name)}（${esc(s.class)}）</div>`).join('') || '<div class="text-gray-400">暂无学生，请先在「学生管理」中添加</div>'}</div>
-      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveDuty()">生成排班</button>
-    </div>`);
-}
-function saveDuty() {
-  const size = parseInt(document.getElementById('dutySize').value) || 1;
-  const names = state.students.map(s=>s.name);
-  if(!names.length) return alert('请先添加学生');
-  const groups = [];
-  for(let i=0;i<names.length;i+=size) groups.push(names.slice(i,i+size));
-  state.duty = { groupSize: size, groups };
-  save(); closeModal(); render();
-}
-
 // ===================== Seating =====================
 let seatDragSrc = null;
 function makeSeatCells(rows, cols) {
@@ -1902,38 +1904,139 @@ function deleteAlbum(id) {
 }
 
 // ===================== Class Record =====================
+let crFilterSubject = ''; // '' = 全部
+let crSearchName = '';
+function crSetSubjectFilter(id){ crFilterSubject = id || ''; render(); }
+function crSetSearch(v){ crSearchName = (v || '').trim(); render(); }
 function renderClassRecord() {
   if(!state.classRecords) state.classRecords = [];
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">课堂记录</div>
-      <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openClassRecordForm()">+ 添加记录</button>
+  const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
+  const nameQ = crSearchName.toLowerCase();
+  const filtered = state.classRecords.filter(r => {
+    const subjOk = !crFilterSubject || (r.subject && subjects.some(s=>s.id===crFilterSubject && s.name===r.subject));
+    const nameOk = !nameQ || (r.studentName && r.studentName.toLowerCase().includes(nameQ)) || (r.content && r.content.toLowerCase().includes(nameQ));
+    return subjOk && nameOk;
+  });
+  const subjectCounts = {};
+  state.classRecords.forEach(r => { subjectCounts[r.subject] = (subjectCounts[r.subject] || 0) + 1; });
+  const subjTabs = [{id:'', name:'全部'}].concat(subjects).map(s => {
+    const active = crFilterSubject === s.id;
+    const count = s.id ? (subjectCounts[s.name] || 0) : state.classRecords.length;
+    return `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${active?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="crSetSubjectFilter('${s.id}')">${esc(s.name)} ${count}</button>`;
+  }).join('');
+  const recordsHtml = filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
+    <div class="flex-1">
+      <div class="flex items-center gap-2 mb-1 flex-wrap">
+        <span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span>
+        ${r.studentName ? `<span class="text-xs font-medium text-gray-700">${esc(r.studentName)}</span>` : ''}
+        <span class="text-xs text-gray-400">${esc(r.date)}</span>
+        ${r.auto ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-600">快速记录</span>' : ''}
+      </div>
+      <div class="text-sm text-gray-700">${esc(r.content)}</div>
     </div>
-    <div class="space-y-3">${state.classRecords.map(r=>`<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start"><div><div class="text-xs text-gray-400 mb-1">${esc(r.date)} · ${esc(r.subject)}</div><div class="text-sm text-gray-700">${esc(r.content)}</div></div><button class="text-gray-300 hover:text-red-500" onclick="deleteClassRecord('${r.id}')">🗑️</button></div>`).join('') || '<div class="text-gray-400 text-sm">暂无课堂记录</div>'}</div>
+    <button class="text-gray-300 hover:text-red-500 ml-3" onclick="deleteClassRecord('${r.id}')">🗑️</button>
+  </div>`).join('');
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex items-center justify-between">
+      <div class="font-bold text-gray-800">课堂记录</div>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-full text-xs border border-gray-300 text-gray-600 hover:bg-gray-50" onclick="openClassRecordSubjectSettings()">⚙️ 识别关键词</button>
+        <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openClassRecordForm()">+ 添加记录</button>
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-2">${subjTabs}</div>
+    <div class="relative">
+      <input id="crSearch" value="${esc(crSearchName)}" placeholder="按学生姓名搜索…" oninput="crSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
+    </div>
+    <div class="space-y-3">${recordsHtml || '<div class="text-gray-400 text-sm">暂无匹配记录</div>'}</div>
   </div>`;
 }
 function openClassRecordForm() {
+  const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
+  const subjOptions = subjects.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+  const stuOptions = state.students.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  const defaultSubj = crFilterSubject ? (subjects.find(s=>s.id===crFilterSubject)||{}).name : (subjects[0] && subjects[0].name) || '其他';
   openModal('添加课堂记录', `
     <div class="space-y-4">
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="crDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
-        <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="crSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">科目</label><select id="crSubject" class="w-full border rounded-lg p-2 text-sm">${subjOptions}</select></div>
       </div>
+      <div><label class="block text-xs text-gray-500 mb-1">学生</label><select id="crStudent" class="w-full border rounded-lg p-2 text-sm"><option value="">请选择学生</option>${stuOptions}</select></div>
       <div><label class="block text-xs text-gray-500 mb-1">内容（课堂表现 / 纪律情况）</label><textarea id="crContent" rows="4" class="w-full border rounded-lg p-2 text-sm"></textarea></div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveClassRecord()">保存</button>
     </div>`);
+  setTimeout(()=>{
+    const sel = document.getElementById('crSubject');
+    if(sel) sel.value = defaultSubj;
+  },0);
 }
 function saveClassRecord() {
   if(!state.classRecords) state.classRecords = [];
   const content = document.getElementById('crContent').value.trim();
   if(!content) return alert('请输入内容');
-  state.classRecords.unshift({ id: uid(), date: document.getElementById('crDate').value.trim()||todayLabel, subject: document.getElementById('crSubject').value.trim()||'—', content });
+  const sid = document.getElementById('crStudent').value;
+  const s = sid ? state.students.find(x=>x.id===sid) : null;
+  state.classRecords.unshift({
+    id: uid(),
+    date: document.getElementById('crDate').value.trim()||todayLabel,
+    subject: document.getElementById('crSubject').value.trim()||'—',
+    studentId: s ? s.id : null,
+    studentName: s ? s.name : '',
+    content
+  });
   save(); closeModal(); render();
 }
 function deleteClassRecord(id) {
   const r = state.classRecords.find(x=>x.id===id);
   if(!r) return;
   doDelete(()=>state.classRecords, id, (r.content || '课堂记录').slice(0,12));
+}
+// 课堂记录科目识别关键词设置
+function openClassRecordSubjectSettings() {
+  const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
+  const rows = subjects.map((s,i) => `<div class="border-b border-gray-100 py-3">
+    <div class="flex items-center gap-2 mb-2">
+      <input class="w-20 border rounded p-1 text-sm font-medium" value="${esc(s.name)}" onchange="crRenameSubject(${i},this.value)">
+      <button class="text-xs text-red-500 hover:text-red-600" onclick="crRemoveSubject(${i})">删除</button>
+    </div>
+    <div class="flex flex-wrap gap-1 pl-1">
+      ${(s.keywords||[]).map((kw,ki)=>`<span class="inline-flex items-center gap-1 bg-slate-100 text-slate-600 text-xs px-2 py-1 rounded border border-slate-200">${esc(kw)}<button class="text-slate-400 hover:text-red-500" onclick="crRemoveKeyword(${i},${ki})">×</button></span>`).join('')}
+      <button class="inline-flex items-center bg-slate-50 text-slate-500 text-xs px-2 py-1 rounded border border-dashed border-slate-300" onclick="crAddKeyword(${i})">＋关键词</button>
+    </div>
+  </div>`).join('');
+  openModal('课堂记录识别关键词', `
+    <div class="space-y-1 max-h-[60vh] overflow-y-auto pr-1">
+      ${rows || '<div class="text-sm text-gray-400 py-4">暂无科目</div>'}
+    </div>
+    <button class="mt-4 w-full border border-primary text-primary py-2 rounded-full text-sm hover:bg-primary/5" onclick="crAddSubject()">＋ 添加科目</button>
+    <p class="text-xs text-gray-400 mt-3">快速记录会匹配这些关键词，自动把相关内容记入对应科目的课堂记录。</p>`);
+}
+function crAddSubject(){
+  const name = prompt('请输入科目名称：'); if(!name||!name.trim()) return;
+  state.classRecordSubjects.push({ id: uid(), name: name.trim(), keywords: [name.trim()] });
+  save(); render();
+}
+function crRemoveSubject(i){
+  if(!confirm('确定删除这个科目及其关键词吗？对应的课堂记录不会删除。')) return;
+  state.classRecordSubjects.splice(i,1);
+  save(); render();
+}
+function crRenameSubject(i,name){
+  if(!name||!name.trim()) return;
+  state.classRecordSubjects[i].name = name.trim();
+  save(); render();
+}
+function crAddKeyword(i){
+  const kw = prompt('请输入识别关键词：'); if(!kw||!kw.trim()) return;
+  state.classRecordSubjects[i].keywords = state.classRecordSubjects[i].keywords || [];
+  state.classRecordSubjects[i].keywords.push(kw.trim());
+  save(); render();
+}
+function crRemoveKeyword(i,ki){
+  state.classRecordSubjects[i].keywords.splice(ki,1);
+  save(); render();
 }
 
 // ===================== Report =====================
@@ -4001,7 +4104,7 @@ const QR_DIM_KWS = {
   daily: ['课堂', '纪律', '作业', '值日', '卫生', '主动', '帮助', '迟到', '早退', '校服', '红领巾', '文明'],
 };
 
-// 智能解析：返回 { students:[{id,name}], types:[...], content, matched:[], autoDim }
+// 智能解析：返回 { students:[{id,name}], types:[...], content, matched:[], autoDim, subjects:[{id,name,keywords}] }
 function parseQuickRecord(text) {
   text = (text || '').trim();
   const matched = [];
@@ -4038,7 +4141,21 @@ function parseQuickRecord(text) {
     }
     if (autoDim !== 'daily') break;
   }
-  // 4) 内容清洗
+  // 4) 识别课堂记录科目
+  const subjectHits = [];
+  const seenSubj = new Set();
+  (state.classRecordSubjects || []).forEach(sub => {
+    if (!Array.isArray(sub.keywords)) return;
+    for (const kw of sub.keywords) {
+      if (text.includes(kw) && !seenSubj.has(sub.id)) {
+        seenSubj.add(sub.id);
+        subjectHits.push(sub);
+        matched.push({ kind: 'subject', value: kw, subject: sub });
+        break;
+      }
+    }
+  });
+  // 5) 内容清洗
   let content = text;
   studentHits.forEach(h => { content = content.split(h.alias).join(''); });
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
@@ -4047,13 +4164,13 @@ function parseQuickRecord(text) {
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
-  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim };
+  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits };
 }
 
 let qrDraft = null; // 当前确认草稿
 let qrDeductDraft = null; // 首页快速记录：待确认的关联扣分草稿
 function openQuickRecord() {
-  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。';
+  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），还会自动记入「课堂记录」对应科目。';
   openModal('智能快速记录', `
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
@@ -4116,6 +4233,7 @@ function qrRecognize() {
   const matchedText = (r.matched.length ? r.matched.map(m => {
     if (m.kind === 'student') return '👤 ' + m.value;
     if (m.kind === 'type') return REC_TYPE_EMOJI[m.type] + ' ' + m.value;
+    if (m.kind === 'subject') return '📚 ' + m.value;
     return dimIcon(m.dim) + ' ' + m.value;
   }).join('　') : '未识别到学生或类型，请手动选择');
   const hasScoringType = r.types.some(t => t === 'praise' || t === 'critic');
@@ -4192,6 +4310,17 @@ function qrSave() {
       }
     });
   });
+  // 自动记入课堂记录（识别到科目时）
+  const subjects = qrDraft.subjects || [];
+  if (subjects.length) {
+    subjects.forEach(sub => {
+      qrDraft.students.forEach(st => {
+        const s = state.students.find(x => x.id === st.id);
+        if (!s) return;
+        state.classRecords.unshift({ id: uid(), date, subject: sub.name, studentId: s.id, studentName: s.name, content, auto: 'quick' });
+      });
+    });
+  }
   lastRecordContent = content;
 
   // 同步写入班级日志：汇总显示学生、类型、内容及自动积分
@@ -4204,6 +4333,7 @@ function qrSave() {
   save(); closeModal();
   let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
   if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
+  if (subjects.length) msg += `\n（已记入课堂记录：${subjects.map(s=>s.name).join('、')}）`;
   toast(msg);
   render();
 }
@@ -4452,7 +4582,7 @@ function confirmModal(message, onYes, yesText, noText) {
 function clearAllData() {
   confirmModal('确定清空所有数据吗？此操作不可恢复（建议先导出备份）。', function(){
     state.students = []; state.todos = []; state.templates = []; state.classLogs = [];
-    state.communications = []; state.duty = { groupSize: 4, groups: [] }; state.homework = [];
+    state.communications = []; state.homework = [];
     state.scores = []; state.album = []; state.seating = { rows: 6, cols: 7, seats: {} };
     state.reminders = []; state.classRecords = [];
     state.schedule.courses = [];
