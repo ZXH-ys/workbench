@@ -588,10 +588,13 @@ function finishOnboard() { onboarded = '1'; localStorage.setItem('ct_onboarded',
 
 
 // ===================== Render =====================
+let lastRenderRoute = null;
 function render() {
   const app = document.getElementById('app');
   const nav = app && app.querySelector('aside nav');
-  const savedScrollTop = nav ? nav.scrollTop : 0;
+  const main = document.getElementById('main-content');
+  const savedNavScroll = nav ? nav.scrollTop : 0;
+  const savedMainScroll = (main && currentRoute === lastRenderRoute) ? main.scrollTop : 0;
   app.innerHTML = `
     ${renderSidebar()}
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -603,7 +606,10 @@ function render() {
     </main>`;
   attachSidebarEvents();
   const newNav = app.querySelector('aside nav');
-  if (newNav) newNav.scrollTop = savedScrollTop;
+  if (newNav) newNav.scrollTop = savedNavScroll;
+  const newMain = document.getElementById('main-content');
+  if (newMain && currentRoute === lastRenderRoute) newMain.scrollTop = savedMainScroll;
+  lastRenderRoute = currentRoute;
   if (currentRoute === 'schedule') {
     const btnP = document.querySelector('[data-periods]');
     if (btnP) btnP.addEventListener('click', openPeriodSetting);
@@ -2471,18 +2477,14 @@ function renderAttendance() {
   }).join('') || '<div class="text-sm text-gray-400">还没有班级成员，点「班级成员管理」导入名单。</div>';
 
   const todayDay = attDayName(new Date());
-  const homeRows = attMembers().filter(m => (m.weeklyHome||[]).includes(todayDay)).map(m=>`<tr>
-    <td>${esc(m.name)}</td>
-    <td><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay('${m.name.replace(/'/g,"")}','${d}')">${d}</span>`).join('')}</div></td>
-    <td>${(m.weeklyHome||[]).includes(todayDay)?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400">今日无固定回家成员</td></tr>';
+  const homeRows = attMembers().map(m=>`<tr>
+    <td class="py-2">${esc(m.name)}</td>
+    <td class="py-2"><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay('${m.name.replace(/'/g,"")}','${d}')">${d}</span>`).join('')}</div></td>
+    <td class="py-2">${(m.weeklyHome||[]).includes(todayDay)?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400 py-3">还没有班级成员，点「班级成员管理」导入名单。</td></tr>';
 
   const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave('${l.name.replace(/'/g,"")}')">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
 
   const historyRows = a.logs.slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${l.home.length}</td><td>${l.leave.length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
-
-  const homeSection = attMode==='home'
-    ? `<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">固定周期</th><th class="text-left text-gray-500 font-medium pb-2">今日</th></tr></thead><tbody>${homeRows}</tbody></table></div>`
-    : `<div class="text-sm text-gray-400 py-3">点上方「🏠 固定回家」进入工作状态后，可在此勾选每位学生的固定回家周期（可多选不连续日）。</div>`;
 
   return `<div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
@@ -2494,7 +2496,7 @@ function renderAttendance() {
           <button class="px-4 py-2 rounded-lg text-sm text-white" style="background:linear-gradient(135deg,#f472b6,#ec4899)" onclick="saveTodayAtt()">💾 保存今日考勤</button>
         </div>
       </div>
-      <p class="text-xs text-gray-400 mt-3">操作：先点上方按钮进入对应工作状态（再点一次退出），再点学生姓名标记；固定回家按周期保留，请假每天清空。</p>
+      <p class="text-xs text-gray-400 mt-3">操作：点击学生姓名可快速标记固定回家/请假；下方可直接勾选每位学生的固定回家周期；固定回家按周期保留，请假每天清空。</p>
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -2520,7 +2522,7 @@ function renderAttendance() {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="bg-white rounded-2xl p-5 shadow-sm">
         <div class="font-bold text-gray-800 mb-3">🏠 固定回家成员（每周周期，可多选不连续日）</div>
-        ${homeSection}
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">固定周期</th><th class="text-left text-gray-500 font-medium pb-2">今日</th></tr></thead><tbody>${homeRows}</tbody></table></div>
       </div>
       <div class="bg-white rounded-2xl p-5 shadow-sm">
         <div class="flex items-center justify-between mb-3">
