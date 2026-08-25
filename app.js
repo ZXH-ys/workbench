@@ -2386,7 +2386,7 @@ function getStudentProgress(studentName, examId, subject) {
 let attMode = null;   // 'home' | 'leave' | null
 function attChipClass(name){
   const cur=(state.attendance.current)||{home:{},leave:{}};
-  const h=!!cur.home[name], l=!!cur.leave[name];
+  const h=Object.prototype.hasOwnProperty.call(cur.home,name), l=Object.prototype.hasOwnProperty.call(cur.leave,name);
   if(h&&l) return 'both'; if(h) return 'home'; if(l) return 'leave'; return '';
 }
 function setAttMode(mode){
@@ -2403,8 +2403,8 @@ function markAttMember(name){
     if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
     attRecomputeHome();
   } else if(attMode==='leave'){
-    if(a.current.leave[name]) delete a.current.leave[name];
-    else a.current.leave[name]='';
+    if(Object.prototype.hasOwnProperty.call(a.current.leave, name)) delete a.current.leave[name];
+    else a.current.leave[name]=true;
   } else return;
   save(); render();
 }
@@ -2418,7 +2418,7 @@ function toggleAttDay(name, day){
 function addLeave(name, reason, skipClassLog){
   name=(name||'').trim(); if(!name) return false;
   const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
-  a.current.leave[name]=reason||'';
+  a.current.leave[name]=reason||true;
   if(!skipClassLog){
     const dk=attDateKey(new Date());
     state.classLogs.unshift({ id:uid(), date:dk, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
@@ -2480,6 +2480,10 @@ function renderAttendance() {
 
   const historyRows = a.logs.slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${l.home.length}</td><td>${l.leave.length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
 
+  const homeSection = attMode==='home'
+    ? `<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">固定周期</th><th class="text-left text-gray-500 font-medium pb-2">今日</th></tr></thead><tbody>${homeRows}</tbody></table></div>`
+    : `<div class="text-sm text-gray-400 py-3">点上方「🏠 固定回家」进入工作状态后，可在此勾选每位学生的固定回家周期（可多选不连续日）。</div>`;
+
   return `<div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -2516,7 +2520,7 @@ function renderAttendance() {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="bg-white rounded-2xl p-5 shadow-sm">
         <div class="font-bold text-gray-800 mb-3">🏠 固定回家成员（每周周期，可多选不连续日）</div>
-        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">姓名</th><th class="text-left text-gray-500 font-medium pb-2">固定周期</th><th class="text-left text-gray-500 font-medium pb-2">今日</th></tr></thead><tbody>${homeRows}</tbody></table></div>
+        ${homeSection}
       </div>
       <div class="bg-white rounded-2xl p-5 shadow-sm">
         <div class="flex items-center justify-between mb-3">
