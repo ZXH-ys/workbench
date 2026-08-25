@@ -1735,11 +1735,13 @@ function exportSeatStudent() {
   for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
   header.push('');
   data.push(header);
-  // 学生视角：站在下方面对讲台，最后一排（最后，离讲台最远）在表格最下方。
-  // 与教师用上下相反：按 r=rows-1→0 倒序写入，最后写入的(最下方)是 r=0（标号rows=最后一排）。
+  // 学生视角：站在教室后边（最后一排一侧）面对讲台看，最后一排（离讲台最远）在表格最下方。
+  // 与教师用上下相反：按 r=rows-1→0 倒序写入，最下方是最后一排。
+  // 同时，从后边看时左右与从前边看相反（前看左=后看右），故每行姓名左右镜像，
+  // 使「列1」对应学生的左侧（即教师视角的右侧）。
   for (let r = st.rows - 1; r >= 0; r--) {
     const rowNum = seatRowNumber(r);
-    data.push([rowNum, ...st.cells[r].map(sid => seatStudentName(sid)), rowNum]);
+    data.push([rowNum, ...st.cells[r].map(sid => seatStudentName(sid)).reverse(), rowNum]);
   }
   exportSeatToXlsx(data, `${st.name || '座次表'}_学生用.xlsx`);
 }
