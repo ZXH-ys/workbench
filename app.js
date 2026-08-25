@@ -61,24 +61,24 @@ function defaultState() {
     schedule: {
       days: ['周一', '周二', '周三', '周四', '周五'],
       periods: [
-        { id: 1, time: '08:00', label: '第1节' },
-        { id: 2, time: '08:55', label: '第2节' },
-        { id: 3, time: '10:00', label: '第3节' },
-        { id: 4, time: '10:55', label: '第4节' },
-        { id: 5, time: '14:00', label: '第5节' },
-        { id: 6, time: '14:55', label: '第6节' },
+        { id: 1, label: '第1节', start: '08:00', end: '08:45' },
+        { id: 2, label: '第2节', start: '08:55', end: '09:40' },
+        { id: 3, label: '第3节', start: '10:00', end: '10:45' },
+        { id: 4, label: '第4节', start: '10:55', end: '11:40' },
+        { id: 5, label: '第5节', start: '14:00', end: '14:45' },
+        { id: 6, label: '第6节', start: '14:55', end: '15:40' },
       ],
       courses: [
-        { day: 0, period: 1, className: '高一(3)班', subject: '英语', room: '3-201' },
-        { day: 2, period: 1, className: '高一(3)班', subject: '英语', room: '3-201' },
-        { day: 4, period: 1, className: '高一(3)班', subject: '英语', room: '3-201' },
-        { day: 1, period: 2, className: '高一(3)班', subject: '英语', room: '3-207' },
-        { day: 3, period: 2, className: '高一(3)班', subject: '英语', room: '3-201' },
-        { day: 0, period: 3, className: '高一(1)班', subject: '英语', room: '1-305' },
-        { day: 4, period: 3, className: '高一(3)班', subject: '英语', room: '3-201' },
-        { day: 3, period: 4, className: '高一(1)班', subject: '英语', room: '1-305' },
-        { day: 2, period: 5, className: '高一(2)班', subject: '英语', room: '2-110' },
-        { day: 3, period: 6, className: '高一(2)班', subject: '英语', room: '2-110' },
+        { day: 0, period: 1, subject: '英语' },
+        { day: 2, period: 1, subject: '英语' },
+        { day: 4, period: 1, subject: '英语' },
+        { day: 1, period: 2, subject: '英语' },
+        { day: 3, period: 2, subject: '英语' },
+        { day: 0, period: 3, subject: '英语' },
+        { day: 4, period: 3, subject: '英语' },
+        { day: 3, period: 4, subject: '英语' },
+        { day: 2, period: 5, subject: '英语' },
+        { day: 3, period: 6, subject: '英语' },
       ]
     },
     students: [
@@ -273,6 +273,22 @@ function migrateState(s) {
   if (Array.isArray(s.students)) s.students.forEach(st => { if (st && !Array.isArray(st.weeklyHome)) st.weeklyHome = []; });
   // 学生补全 alias 字段
   if (Array.isArray(s.students)) s.students.forEach(st => { if (st && typeof st.alias === 'undefined') st.alias = ''; });
+  // 课程表：旧节次只有 time，迁移为 start/end；旧课程含 className/room，去掉后只保留 subject
+  if (s.schedule && Array.isArray(s.schedule.periods)) {
+    s.schedule.periods = s.schedule.periods.map((p, i, arr) => {
+      if (p && typeof p.time === 'string' && (typeof p.start !== 'string' || typeof p.end !== 'string')) {
+        const start = p.time;
+        const [h, m] = start.split(':').map(x => parseInt(x, 10) || 0);
+        const endDate = new Date(2000, 0, 1, h, m + 45);
+        const end = `${String(endDate.getHours()).padStart(2,'0')}:${String(endDate.getMinutes()).padStart(2,'0')}`;
+        return { id: p.id || i + 1, label: p.label || `第${p.id || i + 1}节`, start, end };
+      }
+      return { id: p.id || i + 1, label: p.label || `第${p.id || i + 1}节`, start: p.start || '', end: p.end || '' };
+    });
+  }
+  if (s.schedule && Array.isArray(s.schedule.courses)) {
+    s.schedule.courses = s.schedule.courses.map(c => ({ day: c.day, period: c.period, subject: c.subject || c.className || '' })).filter(c => c.subject);
+  }
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
   if (!JSON.stringify(s.nav || []).includes('"points"')) s.nav = defaultState().nav;
   return s;
@@ -797,14 +813,17 @@ function renderHome() {
         <button class="text-xs text-primary hover:underline" onclick="navigate('schedule')">课程表</button>
       </div>
       <div class="space-y-3">
-        ${todayCourses.length ? todayCourses.map(c => `
+        ${todayCourses.length ? todayCourses.map(c => {
+          const p = state.schedule.periods.find(x=>x.id===c.period);
+          return `
           <div class="flex items-start gap-3 p-3 rounded-xl course-card cursor-pointer" onclick="editCourse(${c.day},${c.period})">
             <div class="text-center min-w-[3rem]">
-              <div class="text-xs font-bold text-primary">第${c.period}节</div>
-              <div class="text-xs text-gray-500">${state.schedule.periods.find(p=>p.id===c.period)?.time}</div>
+              <div class="text-xs font-bold text-primary">${p ? (p.label || `第${p.id}节`) : `第${c.period}节`}</div>
+              <div class="text-xs text-gray-500">${p ? ((p.start||'') + (p.end?'-'+p.end:'')) : ''}</div>
             </div>
-            <div><div class="font-bold text-gray-800">${esc(c.className)} · ${esc(c.subject)}</div><div class="text-xs text-gray-500">📍 ${esc(c.room)}</div></div>
-          </div>`).join('') : '<div class="text-sm text-gray-400">今天没有课程安排</div>'}
+            <div><div class="font-bold text-gray-800">${esc(c.subject)}</div></div>
+          </div>`;
+        }).join('') : '<div class="text-sm text-gray-400">今天没有课程安排</div>'}
       </div>
     </div>
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
@@ -855,7 +874,7 @@ function renderSchedule() {
         <tbody>
           ${state.schedule.periods.map(p => `
             <tr>
-              <td class="p-3 text-center text-sm text-gray-500 bg-gray-50 border-b"><div>第${p.id}节</div><div class="text-xs text-gray-400">${p.time}</div></td>
+              <td class="p-3 text-center text-sm text-gray-500 bg-gray-50 border-b"><div>${p.label || `第${p.id}节`}</div><div class="text-xs text-gray-400">${p.start||''}${p.end?'-'+p.end:''}</div></td>
               ${[0,1,2,3,4].map(d => renderScheduleCell(d, p.id)).join('')}
             </tr>`).join('')}
         </tbody>
@@ -863,34 +882,68 @@ function renderSchedule() {
     </div>
   </div>`;
 }
+let dragCourseSrc = null;
 function renderScheduleCell(day, period) {
   const course = state.schedule.courses.find(c => c.day === day && c.period === period);
   const isToday = day === todayIndex;
   if (course) {
-    return `<td class="p-2 border-b ${isToday?'bg-primary/5':''}"><div class="course-card p-3 rounded-lg cursor-pointer hover:shadow transition" onclick="editCourse(${day},${period})"><div class="font-bold text-primary text-sm">${esc(course.className)}</div><div class="text-xs text-gray-600">${esc(course.subject)}</div><div class="text-[10px] text-gray-400 mt-1">${esc(course.room)}</div></div></td>`;
+    return `<td class="p-2 border-b ${isToday?'bg-primary/5':''}"><div class="course-card p-3 rounded-lg cursor-pointer hover:shadow transition text-center" draggable="true" ondragstart="dragCourse(event,${day},${period})" ondrop="dropCourse(event,${day},${period})" ondragover="allowDropCourse(event)" ondragleave="leaveDropZone(event)" onclick="editCourse(${day},${period})"><div class="font-bold text-primary text-sm">${esc(course.subject)}</div></div></td>`;
   }
-  return `<td class="p-2 border-b ${isToday?'bg-primary/5':''} empty-cell" onclick="addCourseTo(${day},${period})"><div class="h-full min-h-[70px] flex items-center justify-center text-gray-300 text-xl">+</div></td>`;
+  return `<td class="p-2 border-b ${isToday?'bg-primary/5':''} empty-cell" ondrop="dropCourse(event,${day},${period})" ondragover="allowDropCourse(event)" ondragleave="leaveDropZone(event)" onclick="addCourseTo(${day},${period})"><div class="h-full min-h-[70px] flex items-center justify-center text-gray-300 text-xl">+</div></td>`;
+}
+function dragCourse(ev, day, period) {
+  dragCourseSrc = { day, period };
+  ev.dataTransfer.effectAllowed = 'move';
+  ev.target.classList.add('opacity-50');
+}
+function leaveDropZone(ev) {
+  const td = ev.currentTarget.closest ? ev.currentTarget.closest('td') : ev.currentTarget;
+  if (td) td.classList.remove('drag-over');
+}
+function allowDropCourse(ev) {
+  ev.preventDefault();
+  const td = ev.currentTarget.closest ? ev.currentTarget.closest('td') : ev.currentTarget;
+  if (td) td.classList.add('drag-over');
+}
+function dropCourse(ev, targetDay, targetPeriod) {
+  ev.preventDefault();
+  const src = dragCourseSrc;
+  dragCourseSrc = null;
+  document.querySelectorAll('.opacity-50').forEach(el => el.classList.remove('opacity-50'));
+  document.querySelectorAll('td').forEach(el => el.classList.remove('drag-over'));
+  if (!src || (src.day === targetDay && src.period === targetPeriod)) return;
+  const srcCourse = state.schedule.courses.find(c => c.day === src.day && c.period === src.period);
+  if (!srcCourse) return;
+  const targetCourse = state.schedule.courses.find(c => c.day === targetDay && c.period === targetPeriod);
+  if (targetCourse) {
+    // 两节课互换
+    const tempDay = srcCourse.day, tempPeriod = srcCourse.period;
+    srcCourse.day = targetCourse.day; srcCourse.period = targetCourse.period;
+    targetCourse.day = tempDay; targetCourse.period = tempPeriod;
+  } else {
+    // 拖到空位：移动
+    srcCourse.day = targetDay; srcCourse.period = targetPeriod;
+  }
+  save(); render();
 }
 
 let editingCourse = null;
 function openCourseModal() { editingCourse = null; renderCourseForm(); }
-function addCourseTo(day, period) { editingCourse = { day, period }; renderCourseForm(); }
+function addCourseTo(day, period) { editingCourse = { day, period, subject: '' }; renderCourseForm(); }
 function editCourse(day, period) {
   const c = state.schedule.courses.find(x => x.day===day && x.period===period);
-  editingCourse = { ...c }; renderCourseForm();
+  editingCourse = c ? { ...c } : { day, period, subject: '' }; renderCourseForm();
 }
 function renderCourseForm() {
-  const c = editingCourse || { day: 0, period: 1, className: '', subject: '', room: '' };
-  const isEdit = editingCourse && editingCourse.className;
+  const c = editingCourse || { day: 0, period: 1, subject: '' };
+  const isEdit = editingCourse && editingCourse.subject;
   openModal(isEdit ? '编辑课程' : '添加课程', `
     <div class="space-y-4">
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">星期</label><select id="courseDay" class="w-full border rounded-lg p-2 text-sm">${state.schedule.days.map((d,i)=>`<option value="${i}" ${c.day===i?'selected':''}>${d}</option>`).join('')}</select></div>
-        <div><label class="block text-xs text-gray-500 mb-1">节次</label><select id="coursePeriod" class="w-full border rounded-lg p-2 text-sm">${state.schedule.periods.map(p=>`<option value="${p.id}" ${c.period===p.id?'selected':''}>第${p.id}节</option>`).join('')}</select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">节次</label><select id="coursePeriod" class="w-full border rounded-lg p-2 text-sm">${state.schedule.periods.map(p=>`<option value="${p.id}" ${c.period===p.id?'selected':''}>${p.label || `第${p.id}节`}</option>`).join('')}</select></div>
       </div>
-      <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="courseClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(c.className)}" placeholder="如：高一(3)班"></div>
       <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="courseSubject" class="w-full border rounded-lg p-2 text-sm" value="${esc(c.subject)}" placeholder="如：英语"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">教室</label><input id="courseRoom" class="w-full border rounded-lg p-2 text-sm" value="${esc(c.room)}" placeholder="如：3-201"></div>
       <div class="flex gap-3">
         ${isEdit?`<button class="flex-1 border border-red-200 text-red-500 py-2 rounded-full hover:bg-red-50" onclick="removeCourse()">删除</button>`:''}
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveCourse()">保存</button>
@@ -900,12 +953,10 @@ function renderCourseForm() {
 function saveCourse() {
   const day = +document.getElementById('courseDay').value;
   const period = +document.getElementById('coursePeriod').value;
-  const className = document.getElementById('courseClass').value.trim();
   const subject = document.getElementById('courseSubject').value.trim();
-  const room = document.getElementById('courseRoom').value.trim();
-  if(!className||!subject) return alert('请填写班级和科目');
+  if(!subject) return alert('请填写科目');
   state.schedule.courses = state.schedule.courses.filter(c => !(c.day===day && c.period===period));
-  state.schedule.courses.push({ day, period, className, subject, room });
+  state.schedule.courses.push({ day, period, subject });
   save(); closeModal(); render();
 }
 function removeCourse() {
@@ -916,9 +967,9 @@ function removeCourse() {
 function openPeriodSetting() {
   openModal('设置节次', `
     <div class="space-y-3">
-      <p class="text-sm text-gray-500">当前共 ${state.schedule.periods.length} 节课。可添加或删除节次。</p>
+      <p class="text-sm text-gray-500">当前共 ${state.schedule.periods.length} 节课。可自定义名称、起止时间。</p>
       <div id="periodList" class="space-y-2">
-        ${state.schedule.periods.map(p => `<div class="flex gap-2 items-center"><input class="flex-1 border rounded p-1.5 text-sm" value="第${p.id}节" data-pid="${p.id}" data-field="label"><input class="w-24 border rounded p-1.5 text-sm" value="${p.time}" data-pid="${p.id}" data-field="time"><button class="text-red-500 text-sm" onclick="removePeriod(${p.id})">删除</button></div>`).join('')}
+        ${state.schedule.periods.map(p => `<div class="flex gap-2 items-center" data-row="${p.id}"><input class="flex-1 border rounded p-1.5 text-sm" value="${esc(p.label || `第${p.id}节`)}" data-pid="${p.id}" data-field="label"><input class="w-20 border rounded p-1.5 text-sm" value="${esc(p.start)}" placeholder="开始" data-pid="${p.id}" data-field="start"><input class="w-20 border rounded p-1.5 text-sm" value="${esc(p.end)}" placeholder="结束" data-pid="${p.id}" data-field="end"><button class="text-red-500 text-sm" onclick="removePeriod(${p.id})">删除</button></div>`).join('')}
       </div>
       <button class="w-full border border-dashed border-gray-300 rounded py-2 text-sm text-gray-500 hover:border-primary hover:text-primary" onclick="addPeriod()">+ 添加节次</button>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="savePeriods()">保存</button>
@@ -926,15 +977,17 @@ function openPeriodSetting() {
 }
 function addPeriod() {
   const list = document.getElementById('periodList');
-  const nextId = state.schedule.periods.length + 1;
+  const existing = Array.from(list.querySelectorAll('[data-pid]')).map(el => +el.dataset.pid).filter(Boolean);
+  const nextId = existing.length ? Math.max(...existing) + 1 : 1;
   const div = document.createElement('div');
   div.className = 'flex gap-2 items-center';
-  div.innerHTML = `<input class="flex-1 border rounded p-1.5 text-sm" value="第${nextId}节" data-pid="${nextId}" data-field="label"><input class="w-24 border rounded p-1.5 text-sm" value="--:--" data-pid="${nextId}" data-field="time"><button class="text-red-500 text-sm" onclick="removePeriod(${nextId})">删除</button>`;
+  div.setAttribute('data-row', nextId);
+  div.innerHTML = `<input class="flex-1 border rounded p-1.5 text-sm" value="第${nextId}节" data-pid="${nextId}" data-field="label"><input class="w-20 border rounded p-1.5 text-sm" value="" placeholder="开始" data-pid="${nextId}" data-field="start"><input class="w-20 border rounded p-1.5 text-sm" value="" placeholder="结束" data-pid="${nextId}" data-field="end"><button class="text-red-500 text-sm" onclick="removePeriod(${nextId})">删除</button>`;
   list.appendChild(div);
 }
 function removePeriod(pid) {
-  const el = document.querySelector('[data-pid="'+pid+'"][data-field="label"]');
-  if(el && el.parentElement) el.parentElement.remove();
+  const el = document.querySelector('[data-row="'+pid+'"]');
+  if(el) el.remove();
 }
 function savePeriods() {
   const inputs = document.querySelectorAll('#periodList input');
@@ -944,8 +997,13 @@ function savePeriods() {
     if(!map[pid]) map[pid] = { id: parseInt(pid) };
     map[pid][field] = inp.value.trim();
   });
-  const periods = Object.values(map).sort((a,b)=>a.id-b.id).map(p=>({ id: p.id, label: p.label, time: p.time }));
-  if(periods.length) { state.schedule.periods = periods; save(); }
+  const periods = Object.values(map).sort((a,b)=>a.id-b.id).map(p=>({ id: p.id, label: p.label || `第${p.id}节`, start: p.start || '', end: p.end || '' }));
+  if(periods.length) {
+    const keptIds = new Set(periods.map(p => p.id));
+    state.schedule.periods = periods;
+    state.schedule.courses = state.schedule.courses.filter(c => keptIds.has(c.period));
+    save();
+  }
   closeModal(); render();
 }
 
