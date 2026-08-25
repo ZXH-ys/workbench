@@ -50,6 +50,9 @@ function defaultClassRecordSubjects() {
     { id:'qita', name:'其他', keywords:[] }
   ];
 }
+function defaultHomeworkKeywords() {
+  return ['作业','布置作业','交作业','写作业','完成作业','背诵','默写','练习','抄写','预习','复习','试卷','卷子','学案','同步','练习册','课后题'];
+}
 
 function defaultState() {
   return {
@@ -66,19 +69,17 @@ function defaultState() {
         { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
       ]},
-      { id: 'communication', label: '家校沟通', icon: '💬' },
       { section: '减负工具', items: [
         { id: 'exam', label: '成绩管理', icon: '📊' },
         { id: 'attendance', label: '考勤管理', icon: '✅' },
         { id: 'homework', label: '作业管理', icon: '📚' },
-        { id: 'templates', label: '模板库', icon: '📋' },
         { id: 'report', label: '周报月报', icon: '📰' },
-        { id: 'ppt', label: '班会PPT', icon: '🖥️' },
       ]},
       { id: 'reminders', label: '待办提醒', icon: '🔔' },
     ],
     positions: defaultPositions(),
     classRecordSubjects: defaultClassRecordSubjects(),
+    homeworkKeywords: defaultHomeworkKeywords(),
     schedule: {
       days: ['周一', '周二', '周三', '周四', '周五'],
       periods: [
@@ -318,14 +319,15 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
-  // 移除已废弃的「值日表」菜单项
+  // 移除已废弃的菜单项（值日表、家校沟通、模板库、班会PPT、成绩分析/成绩管理重复项 scores）
   if (Array.isArray(s.nav)) {
+    const removedIds = new Set(['duty', 'communication', 'templates', 'ppt', 'scores']);
     s.nav.forEach(item => {
-      if (item.id === 'duty') item._del = true;
-      if (Array.isArray(item.items)) item.items = item.items.filter(i => i.id !== 'duty');
+      if (removedIds.has(item.id)) item._del = true;
+      if (Array.isArray(item.items)) item.items = item.items.filter(i => !removedIds.has(i.id));
     });
     s.nav = s.nav.filter(item => !item._del);
   }
@@ -353,6 +355,7 @@ function migrateState(s) {
   if (!s.points.jobStartDate) s.points.jobStartDate = '2026-01-01';
   if (!Array.isArray(s.classRecords)) s.classRecords = [];
   if (!Array.isArray(s.classRecordSubjects) || !s.classRecordSubjects.length) s.classRecordSubjects = defaultClassRecordSubjects();
+  if (!Array.isArray(s.homeworkKeywords) || !s.homeworkKeywords.length) s.homeworkKeywords = defaultHomeworkKeywords();
   s.classRecords.forEach(r => { if (!r.studentId && r.studentId !== null) r.studentId = null; if (typeof r.studentName !== 'string') r.studentName = ''; });
   if (!s.user || typeof s.user !== 'object') s.user = { name: '班主任', role: '' };
   // 成绩分析 / 折算 / 快照
@@ -806,25 +809,13 @@ function render() {
     const b = document.querySelector('[data-newstudent]');
     if (b) b.addEventListener('click', openStudentForm);
   }
-  if (currentRoute === 'templates') {
-    const b = document.querySelector('[data-newtemplate]');
-    if (b) b.addEventListener('click', () => openTemplateForm(null));
-  }
   if (currentRoute === 'classLog') {
     const b = document.querySelector('[data-newlog]');
     if (b) b.addEventListener('click', openClassLogForm);
   }
-  if (currentRoute === 'communication') {
-    const b = document.querySelector('[data-newcomm]');
-    if (b) b.addEventListener('click', openCommForm);
-  }
   if (currentRoute === 'homework') {
     const b = document.querySelector('[data-newhw]');
     if (b) b.addEventListener('click', openHomeworkForm);
-  }
-  if (currentRoute === 'scores') {
-    const b = document.querySelector('[data-newscore]');
-    if (b) b.addEventListener('click', openScoreForm);
   }
   if (currentRoute === 'reminders') {
     const b = document.querySelector('[data-newreminder]');
@@ -892,8 +883,7 @@ function renderTopBar() {
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     album: '班级相册', seating: '座次表', classRecord: '课堂记录',
-    communication: '家校沟通', homework: '作业管理', templates: '模板库',
-    report: '周报月报', ppt: '班会PPT', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
+    homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
     positions: '职务与值日管理',
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
@@ -917,12 +907,11 @@ function renderTopBar() {
   if (currentRoute === 'home') extra = `<button data-home-new class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">+ 快速记录</button>`;
   else if (currentRoute === 'schedule') extra = `<button data-periods class="text-sm text-gray-500 hover:text-primary mr-2">⚙️ 设置节次</button><button data-addcourse class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark">+ 添加课程</button>`;
   else if (currentRoute === 'seating') extra = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openSeatConfig()">⚙️ 布局</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5 mr-2" onclick="exportSeatTeacher()">👩‍🏫 教师用</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="exportSeatStudent()">🎒 学生用</button>`;
-  else if (['students','templates','classLog','communication','homework','scores','reminders'].includes(currentRoute)) {
-    const labels = { students:'+ 新建学生', templates:'+ 新建模板', classLog:'+ 写日志', communication:'+ 新增沟通', homework:'+ 布置作业', scores:'+ 录成绩', reminders:'+ 新建提醒' };
-    const data = { students:'data-newstudent', templates:'data-newtemplate', classLog:'data-newlog', communication:'data-newcomm', homework:'data-newhw', scores:'data-newscore', reminders:'data-newreminder' };
+  else if (['students','classLog','homework','reminders'].includes(currentRoute)) {
+    const labels = { students:'+ 新建学生', classLog:'+ 写日志', homework:'+ 布置作业', reminders:'+ 新建提醒' };
+    const data = { students:'data-newstudent', classLog:'data-newlog', homework:'data-newhw', reminders:'data-newreminder' };
     let importBtn = '';
     if (currentRoute === 'students') importBtn = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openImportStudents()">⬆️ 批量导入</button>`;
-    if (currentRoute === 'scores') importBtn = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openImportScores()">⬆️ 批量导入</button>`;
     extra = importBtn + `<button ${data[currentRoute]} class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">${labels[currentRoute]}</button>`;
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
@@ -939,8 +928,7 @@ function renderPage() {
   const map = {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
     album: renderAlbum, seating: renderSeating, classRecord: renderClassRecord,
-    communication: renderCommunication, scores: renderExam, homework: renderHomework,
-    templates: renderTemplates, report: renderReport, ppt: renderPPT, reminders: renderReminders,
+    homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, attendance: renderAttendance, positions: renderPositions,
   };
   return (map[currentRoute] || renderHome)();
@@ -1468,12 +1456,20 @@ function deleteComm(id) {
 
 // ===================== Homework =====================
 function renderHomework() {
+  const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <div class="font-bold text-gray-800">作业管理</div>
+        <div class="text-xs text-gray-500 mt-1">快速记录识别词：${esc(kwList)}${(state.homeworkKeywords || []).length > 6 ? '…' : ''}</div>
+      </div>
+      <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
+    </div>
     <div class="grid gap-4">${state.homework.map(h => `
       <div class="p-4 rounded-xl bg-gray-50 flex justify-between items-center">
         <div><div class="font-bold text-gray-800 text-sm">${esc(h.title)}</div><div class="text-xs text-gray-500 mt-1">${esc(h.class)} · ${esc(h.subject)}</div></div>
         <div class="flex items-center gap-3"><div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full">截止 ${esc(h.due)}</div><button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button></div>
-      </div>`).join('')}</div>
+      </div>`).join('') || '<div class="text-gray-400 text-sm">暂无作业，可点击「+ 布置作业」或在首页快速记录中输入「布置语文作业：背诵课文」自动添加。</div>'}</div>
   </div>`;
 }
 function openHomeworkForm() {
@@ -1501,6 +1497,24 @@ function deleteHomework(id) {
   const h = state.homework.find(x=>x.id===id);
   if(!h) return;
   doDelete(()=>state.homework, id, h.title || '作业');
+}
+function openHomeworkKeywordSettings() {
+  const kws = (state.homeworkKeywords || []).join('\n');
+  openModal('作业识别关键词设置', `
+    <div class="space-y-4">
+      <p class="text-xs text-gray-500">每行一个关键词。首页「智能快速记录」识别到这些词时，会自动将记录加入「作业管理」。默认包含：作业、布置作业、背诵、默写、练习等。</p>
+      <textarea id="hwKeywords" rows="8" class="w-full border rounded-lg p-3 text-sm">${esc(kws)}</textarea>
+      <div class="flex gap-2">
+        <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveHomeworkKeywords()">保存</button>
+        <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal()">取消</button>
+      </div>
+    </div>`);
+}
+function saveHomeworkKeywords() {
+  const raw = document.getElementById('hwKeywords').value;
+  const kws = raw.split(/\n|、|,|\s+/).map(k => k.trim()).filter(Boolean);
+  state.homeworkKeywords = kws.length ? kws : defaultHomeworkKeywords();
+  save(); closeModal(); render();
 }
 
 // ===================== Scores =====================
@@ -4155,22 +4169,34 @@ function parseQuickRecord(text) {
       }
     }
   });
-  // 5) 内容清洗
+  // 5) 识别作业关键词
+  let homeworkHit = '';
+  (state.homeworkKeywords || []).forEach(kw => {
+    if (!homeworkHit && text.includes(kw)) {
+      homeworkHit = kw;
+      matched.push({ kind: 'homework', value: kw });
+    }
+  });
+  // 6) 内容清洗
   let content = text;
   studentHits.forEach(h => { content = content.split(h.alias).join(''); });
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
     for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (content.includes(kw)) content = content.split(kw).join(''); }
   }
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
+  if (homeworkHit) content = content.split(homeworkHit).join('');
+  subjectHits.forEach(sub => {
+    sub.keywords.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
+  });
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
-  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits };
+  return { students: studentHits, types: Array.from(new Set(types)), content, matched, autoDim, subjects: subjectHits, homework: !!homeworkHit, homeworkSubject: subjectHits[0] || null };
 }
 
 let qrDraft = null; // 当前确认草稿
 let qrDeductDraft = null; // 首页快速记录：待确认的关联扣分草稿
 function openQuickRecord() {
-  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），还会自动记入「课堂记录」对应科目。';
+  const tip = '示例：「张明轩参加体育早训，表扬；秦梦茹月考满分，表扬；王浩然迟到批评」\n系统会自动识别 学生、类型、积分模块，确认后一键记录并加减分。\n也支持「关联扣分」：输入如「周一垃圾桶不合格」「监察员今天没好好干」，会自动沿职务树向上追责并给出扣分确认。\n若文本里出现科目关键词（如语文/数学/英语），会自动记入「课堂记录」对应科目。\n若出现「作业/布置作业/背诵/默写/练习」等关键词，会自动加入「作业管理」。';
   openModal('智能快速记录', `
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
@@ -4234,6 +4260,7 @@ function qrRecognize() {
     if (m.kind === 'student') return '👤 ' + m.value;
     if (m.kind === 'type') return REC_TYPE_EMOJI[m.type] + ' ' + m.value;
     if (m.kind === 'subject') return '📚 ' + m.value;
+    if (m.kind === 'homework') return '📖 ' + m.value;
     return dimIcon(m.dim) + ' ' + m.value;
   }).join('　') : '未识别到学生或类型，请手动选择');
   const hasScoringType = r.types.some(t => t === 'praise' || t === 'critic');
@@ -4242,6 +4269,11 @@ function qrRecognize() {
         <div class="flex flex-wrap gap-2">${dimChips}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">自动分值（表扬为正，批评为负，谈心/请假不计）</div>
         <input id="qrPointVal" type="number" value="1" class="w-24 border rounded-lg p-2 text-sm" placeholder="1"></div>` : '';
+  const homeworkSection = r.homework ? `
+      <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-1">
+        <div class="text-xs font-bold text-amber-700">📖 识别到作业布置</div>
+        <div class="text-xs text-amber-600">科目：${esc(r.homeworkSubject ? r.homeworkSubject.name : '未指定')} · 点击「一键记录」后将自动加入「作业管理」</div>
+      </div>` : '';
   document.getElementById('qrResult').innerHTML = `
     <div class="rounded-xl border p-4 space-y-4 bg-gray-50">
       ${dedSection}
@@ -4249,7 +4281,7 @@ function qrRecognize() {
       <div><div class="text-xs text-gray-500 mb-1">学生（可增删，默认全选识别到的）</div>
         <div class="flex flex-wrap gap-2">${stuChips}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">记录类型（可多选）</div>
-        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}
+        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}${homeworkSection}
       <div><div class="text-xs text-gray-500 mb-1">记录内容</div>
         <textarea id="qrContent" rows="3" class="w-full border rounded-lg p-3 text-sm">${esc(r.content)}</textarea></div>
       <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
@@ -4321,6 +4353,15 @@ function qrSave() {
       });
     });
   }
+  // 自动加入作业管理（识别到作业关键词时，不依赖学生）
+  let homeworkAdded = null;
+  if (qrDraft.homework) {
+    const hwSubject = (qrDraft.homeworkSubject && qrDraft.homeworkSubject.name) || '未指定';
+    const hwTitle = content || '作业布置';
+    const hwEntry = { id: uid(), subject: hwSubject, title: hwTitle, class: '', due: date };
+    state.homework.unshift(hwEntry);
+    homeworkAdded = hwSubject;
+  }
   lastRecordContent = content;
 
   // 同步写入班级日志：汇总显示学生、类型、内容及自动积分
@@ -4334,6 +4375,7 @@ function qrSave() {
   let msg = `已为 ${qrDraft.students.length} 名学生 × ${qrDraft.types.length} 种类型，共记录 ${n} 条`;
   if (autoPointLogs.length) msg += `\n（自动积分：${autoPointLogs.join('、')}）`;
   if (subjects.length) msg += `\n（已记入课堂记录：${subjects.map(s=>s.name).join('、')}）`;
+  if (homeworkAdded) msg += `\n（已加入作业管理：${homeworkAdded}）`;
   toast(msg);
   render();
 }
