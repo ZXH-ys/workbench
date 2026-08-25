@@ -132,10 +132,7 @@ function defaultState() {
       name: '座次表',
       rows: 7,
       cols: 6,
-      groupCols: 2,
-      showTeacherDesk: true,
-      showPodium: true,
-      cells: Array.from({ length: 7 }, () => Array.from({ length: 6 }, () => ({ type: 'seat', studentId: '' })))
+      cells: Array.from({ length: 7 }, () => Array.from({ length: 6 }, () => ''))
     },
     reminders: [
       { id: uid(), title: '明天下午开班会', time: '2026-08-25 14:30' },
@@ -300,9 +297,10 @@ function migrateState(s) {
   // 座次表：旧版是 flat seats 对象，迁移为二维 cells
   if (s.seating && typeof s.seating === 'object') {
     if (!Array.isArray(s.seating.cells)) {
+      // 最旧版：flat seats 对象
       const rows = +s.seating.rows || 6;
       const cols = +s.seating.cols || 7;
-      const cells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => ({ type: 'seat', studentId: '' })));
+      const cells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''));
       const oldSeats = s.seating.seats || {};
       Object.entries(oldSeats).forEach(([key, sid]) => {
         const m = key.match(/^s(\d+)$/);
@@ -310,23 +308,25 @@ function migrateState(s) {
         const idx = +m[1];
         const r = Math.floor(idx / cols);
         const c = idx % cols;
-        if (r < rows && c < cols) cells[r][c] = { type: 'seat', studentId: sid };
+        if (r < rows && c < cols) cells[r][c] = sid;
       });
-      s.seating = { name: '座次表', rows, cols, groupCols: 2, showTeacherDesk: true, showPodium: true, cells };
+      s.seating = { name: '座次表', rows, cols, cells };
     }
     if (typeof s.seating.name !== 'string') s.seating.name = '座次表';
     if (!Number.isFinite(s.seating.rows) || s.seating.rows < 1) s.seating.rows = 7;
     if (!Number.isFinite(s.seating.cols) || s.seating.cols < 1) s.seating.cols = 6;
-    if (!Number.isFinite(s.seating.groupCols) || s.seating.groupCols < 1) s.seating.groupCols = 2;
-    if (typeof s.seating.showTeacherDesk !== 'boolean') s.seating.showTeacherDesk = true;
-    if (typeof s.seating.showPodium !== 'boolean') s.seating.showPodium = true;
-    // 补齐/截断 cells 维度
+    // 兼容旧对象数组：全部转换为字符串数组
     const targetRows = s.seating.rows;
     const targetCols = s.seating.cols;
-    while (s.seating.cells.length < targetRows) s.seating.cells.push(Array.from({ length: targetCols }, () => ({ type: 'seat', studentId: '' })));
+    while (s.seating.cells.length < targetRows) s.seating.cells.push(Array.from({ length: targetCols }, () => ''));
     s.seating.cells = s.seating.cells.slice(0, targetRows).map(row => {
-      const r = (row || []).map(cell => (cell && typeof cell === 'object') ? { type: cell.type === 'aisle' || cell.type === 'blank' ? cell.type : 'seat', studentId: String(cell.studentId || '') } : { type: 'seat', studentId: '' });
-      while (r.length < targetCols) r.push({ type: 'seat', studentId: '' });
+      const r = (row || []).map(cell => {
+        if (!cell) return '';
+        if (typeof cell === 'string') return cell;
+        // 旧版对象：过道/空白转为空座位；seat 保留 studentId
+        return String(cell.studentId || '');
+      });
+      while (r.length < targetCols) r.push('');
       return r.slice(0, targetCols);
     });
   }
@@ -1528,11 +1528,11 @@ function saveDuty() {
 // ===================== Seating =====================
 let seatDragSrc = null;
 function makeSeatCells(rows, cols) {
-  return Array.from({ length: rows }, () => Array.from({ length: cols }, () => ({ type: 'seat', studentId: '' })));
+  return Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''));
 }
 function seatAssignedIds() {
   const ids = new Set();
-  (state.seating.cells || []).forEach(row => row.forEach(cell => { if (cell && cell.type === 'seat' && cell.studentId) ids.add(cell.studentId); }));
+  (state.seating.cells || []).forEach(row => row.forEach(sid => { if (sid) ids.add(sid); }));
   return ids;
 }
 function seatStudentName(sid) {
@@ -1544,80 +1544,61 @@ function seatPendingStudents() {
   const assigned = seatAssignedIds();
   return state.students.filter(s => !assigned.has(s.id));
 }
-function seatCellClass(cell, isDragging) {
-  if (!cell || cell.type === 'blank') return 'seat-cell seat-blank';
-  if (cell.type === 'aisle') return 'seat-cell seat-aisle';
-  const has = cell.studentId;
+function seatCellClass(sid, isDragging) {
+  const has = !!sid;
   const base = has ? 'bg-primary/10 border-primary text-primary' : 'bg-gray-50 border-gray-200 text-gray-300';
   return `seat-cell seat-seat ${base} ${isDragging ? 'opacity-50' : ''}`;
 }
 function seatRowNumber(r) { return state.seating.rows - r; }
 function seatColNumber(c) { return c + 1; }
-function seatIsAisleCol(c) {
-  const g = state.seating.groupCols || 2;
-  return g > 1 && ((c + 1) % g === 0) && (c + 1) < state.seating.cols;
-}
 function renderSeating() {
   const st = state.seating;
   const pending = seatPendingStudents();
-  const totalSeats = st.cells.flat().filter(c => c.type === 'seat').length;
-  const assignedCount = st.cells.flat().filter(c => c.type === 'seat' && c.studentId).length;
-  const colHeaders = Array.from({ length: st.cols }, (_, i) => {
-    const isAisle = seatIsAisleCol(i);
-    return `<div class="seat-colhead ${isAisle ? 'seat-aisle-head' : ''}">${isAisle ? '' : seatColNumber(i)}</div>`;
-  }).join('');
+  const totalSeats = st.rows * st.cols;
+  const assignedCount = st.cells.flat().filter(Boolean).length;
+  const colHeaders = Array.from({ length: st.cols }, (_, i) =>
+    `<div class="seat-colhead">${seatColNumber(i)}</div>`
+  ).join('');
   const rowsHtml = st.cells.map((row, r) => {
     const rowNum = seatRowNumber(r);
-    const cellsHtml = row.map((cell, c) => {
-      const isAisle = seatIsAisleCol(c);
-      if (cell.type === 'blank') return `<div class="seat-cell seat-blank" title="空白位置" onclick="seatToggleType(${r},${c})"></div>`;
-      if (cell.type === 'aisle') return `<div class="seat-cell seat-aisle" title="过道" onclick="seatToggleType(${r},${c})"></div>`;
-      const name = seatStudentName(cell.studentId);
+    const cellsHtml = row.map((sid, c) => {
+      const name = seatStudentName(sid);
       const draggable = !!name;
-      return `<div class="${seatCellClass(cell)} ${isAisle ? 'seat-aisle-gap' : ''}" id="seat-${r}-${c}" draggable="${draggable}" ondragstart="seatDragStart(event,${r},${c})" ondrop="seatDrop(event,${r},${c})" ondragover="seatDragOver(event)" ondragleave="seatDragLeave(event)" onclick="seatClick(${r},${c})">${name ? esc(name) : '<span class="seat-empty">空</span>'}</div>`;
+      return `<div class="${seatCellClass(sid)}" id="seat-${r}-${c}" draggable="${draggable}" ondragstart="seatDragStart(event,${r},${c})" ondrop="seatDrop(event,${r},${c})" ondragover="seatDragOver(event)" ondragleave="seatDragLeave(event)" onclick="seatClick(${r},${c})">${name ? esc(name) : '<span class="seat-empty">空</span>'}</div>`;
     }).join('');
     return `<div class="seat-row"><div class="seat-rownum">${rowNum}</div>${cellsHtml}<div class="seat-rownum">${rowNum}</div></div>`;
   }).join('');
-  const deskRow = st.showTeacherDesk ? `<div class="seat-row seat-desk-row"><div class="seat-rownum"></div>${Array.from({ length: st.cols }, (_, c) => `<div class="seat-desk ${c === 0 ? 'seat-desk-label' : 'seat-desk-empty'}">${c === 0 ? '办公桌' : ''}</div>`).join('')}<div class="seat-rownum"></div></div>` : '';
-  const podiumRow = st.showPodium ? `<div class="seat-row seat-podium-row"><div class="seat-rownum"></div>${Array.from({ length: st.cols }, (_, c) => `<div class="seat-podium ${Math.floor(c * 3 / st.cols) === 1 ? 'seat-podium-label' : 'seat-podium-empty'}">${Math.floor(c * 3 / st.cols) === 1 ? '讲台' : ''}</div>`).join('')}<div class="seat-rownum"></div></div>` : '';
-  const pendingHtml = pending.length ? pending.map(s => {
-    return `<div class="seat-pending-chip" draggable="true" id="pending-${s.id}" ondragstart="seatDragStartPending(event,'${s.id}')" onclick="seatClickPending('${s.id}')">${esc(s.name)}</div>`;
-  }).join('') : '<span class="text-sm text-gray-400">暂无需安排的学生</span>';
-  return `<div class="space-y-4">
-    <div class="bg-white rounded-2xl p-5 shadow-sm">
-      <div class="flex items-center justify-between mb-3">
+  const pendingHtml = pending.length ? pending.map(s =>
+    `<div class="seat-pending-chip" draggable="true" id="pending-${s.id}" ondragstart="seatDragStartPending(event,'${s.id}')" onclick="seatClickPending('${s.id}')">${esc(s.name)}</div>`
+  ).join('') : '<span class="text-sm text-gray-400">暂无需安排的学生</span>';
+  return `<div class="space-y-3">
+    <div class="bg-white rounded-2xl p-4 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
         <div>
           <div class="font-bold text-gray-800">${esc(st.name)}</div>
-          <div class="text-xs text-gray-400 mt-1">已安排 ${assignedCount}/${totalSeats} 人 · 待安排 ${pending.length} 人</div>
+          <div class="text-xs text-gray-400 mt-0.5">已安排 ${assignedCount}/${totalSeats} 人 · 待安排 ${pending.length} 人</div>
         </div>
         <div class="flex gap-2">
+          <button class="text-xs border rounded px-3 py-1.5 hover:bg-gray-50" onclick="openSeatConfig()">⚙️ 布局</button>
           <button class="text-xs border rounded px-3 py-1.5 hover:bg-gray-50" onclick="seatAutoArrange()">🎲 自动填充</button>
           <button class="text-xs border border-red-200 text-red-500 rounded px-3 py-1.5 hover:bg-red-50" onclick="seatClearAll()">清空</button>
         </div>
       </div>
-      <div class="seat-legend text-xs text-gray-500 mb-3 flex flex-wrap gap-4">
-        <span class="flex items-center gap-1"><span class="seat-legend-dot bg-primary/10 border-primary"></span> 座位</span>
-        <span class="flex items-center gap-1"><span class="seat-legend-dot seat-aisle"></span> 过道</span>
-        <span class="flex items-center gap-1"><span class="seat-legend-dot seat-blank"></span> 空白</span>
-        <span class="text-gray-400">｜ 拖拽名字互换，点击座位弹窗选择，点击空白/过道切换类型</span>
+      <div class="mb-3">
+        <div class="text-xs text-gray-500 mb-1.5">🧩 待安排学生（点击或拖入空位）</div>
+        <div class="flex flex-wrap gap-2 max-h-[76px] overflow-y-auto">${pendingHtml}</div>
       </div>
       <div class="seat-wrap">
-        ${deskRow}
         <div class="seat-row seat-header-row"><div class="seat-rownum"></div>${colHeaders}<div class="seat-rownum"></div></div>
         ${rowsHtml}
-        <div class="seat-row seat-header-row"><div class="seat-rownum"></div>${colHeaders}<div class="seat-rownum"></div></div>
-        ${podiumRow}
       </div>
-    </div>
-    <div class="bg-white rounded-2xl p-5 shadow-sm">
-      <div class="font-bold text-gray-800 mb-3">🧩 待安排学生（已安排的不再出现）</div>
-      <div class="flex flex-wrap gap-2">${pendingHtml}</div>
+      <p class="text-xs text-gray-400 mt-2">点击空座位选择学生；拖拽名字可互换或从上方拖入空位。</p>
     </div>
   </div>`;
 }
 function seatDragStart(ev, r, c) {
-  const cell = state.seating.cells[r][c];
-  if (!cell || !cell.studentId) { ev.preventDefault(); return; }
+  const sid = state.seating.cells[r][c];
+  if (!sid) { ev.preventDefault(); return; }
   seatDragSrc = { type: 'cell', r, c };
   ev.dataTransfer.effectAllowed = 'move';
   ev.target.classList.add('opacity-50');
@@ -1639,33 +1620,27 @@ function seatDragLeave(ev) {
 }
 function seatDrop(ev, r, c) {
   ev.preventDefault();
-  const targetCell = state.seating.cells[r][c];
   document.querySelectorAll('.opacity-50').forEach(el => el.classList.remove('opacity-50'));
   document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
   if (!seatDragSrc) return;
-  if (targetCell.type !== 'seat') { seatDragSrc = null; return; }
   if (seatDragSrc.type === 'pending') {
-    targetCell.studentId = seatDragSrc.sid;
+    state.seating.cells[r][c] = seatDragSrc.sid;
   } else if (seatDragSrc.type === 'cell') {
-    const srcCell = state.seating.cells[seatDragSrc.r][seatDragSrc.c];
-    const tmp = targetCell.studentId;
-    targetCell.studentId = srcCell.studentId;
-    srcCell.studentId = tmp;
+    const tmp = state.seating.cells[r][c];
+    state.seating.cells[r][c] = state.seating.cells[seatDragSrc.r][seatDragSrc.c];
+    state.seating.cells[seatDragSrc.r][seatDragSrc.c] = tmp;
   }
   seatDragSrc = null;
   save(); render();
 }
 function seatClick(r, c) {
-  const cell = state.seating.cells[r][c];
-  if (cell.type !== 'seat') return seatToggleType(r, c);
   openSeatAssignModal(r, c);
 }
 function seatClickPending(sid) {
   for (let r = 0; r < state.seating.rows; r++) {
     for (let c = 0; c < state.seating.cols; c++) {
-      const cell = state.seating.cells[r][c];
-      if (cell.type === 'seat' && !cell.studentId) {
-        cell.studentId = sid;
+      if (!state.seating.cells[r][c]) {
+        state.seating.cells[r][c] = sid;
         save(); render();
         return;
       }
@@ -1674,13 +1649,12 @@ function seatClickPending(sid) {
   alert('没有空座位了');
 }
 function openSeatAssignModal(r, c) {
-  const cell = state.seating.cells[r][c];
-  const current = seatStudentName(cell.studentId);
+  const current = seatStudentName(state.seating.cells[r][c]);
   const pending = seatPendingStudents();
   openModal(`安排座位（第${seatRowNumber(r)}排 第${seatColNumber(c)}列）`, `
     <div class="space-y-3 max-h-80 overflow-y-auto">
       <div class="text-xs text-gray-400">已安排的学生不会出现在下方</div>
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-4 gap-2">
         ${pending.map(s => `<div class="p-2 rounded-lg bg-gray-50 hover:bg-primary/5 cursor-pointer text-center text-sm" onclick="seatSetStudent(${r},${c},'${s.id}')">${esc(s.name)}</div>`).join('')}
         <div class="p-2 rounded-lg bg-red-50 text-red-500 cursor-pointer text-center text-sm" onclick="seatSetStudent(${r},${c},'')">清除</div>
       </div>
@@ -1688,28 +1662,21 @@ function openSeatAssignModal(r, c) {
     </div>`);
 }
 function seatSetStudent(r, c, sid) {
-  state.seating.cells[r][c].studentId = sid;
+  state.seating.cells[r][c] = sid;
   save(); closeModal(); render();
-}
-function seatToggleType(r, c) {
-  const cell = state.seating.cells[r][c];
-  const order = { seat: 'aisle', aisle: 'blank', blank: 'seat' };
-  cell.type = order[cell.type] || 'seat';
-  if (cell.type !== 'seat') cell.studentId = '';
-  save(); render();
 }
 function seatClearAll() {
   if (!confirm('确定清空所有座位安排吗？')) return;
-  state.seating.cells.forEach(row => row.forEach(cell => { if (cell.type === 'seat') cell.studentId = ''; }));
+  state.seating.cells = makeSeatCells(state.seating.rows, state.seating.cols);
   save(); render();
 }
 function seatAutoArrange() {
   const pending = seatPendingStudents();
   const empties = [];
-  state.seating.cells.forEach((row, r) => row.forEach((cell, c) => { if (cell.type === 'seat' && !cell.studentId) empties.push({ r, c }); }));
+  state.seating.cells.forEach((row, r) => row.forEach((sid, c) => { if (!sid) empties.push({ r, c }); }));
   const shuffled = pending.map((s, i) => ({ s, i })).sort(() => Math.random() - 0.5);
   shuffled.forEach((item, idx) => {
-    if (idx < empties.length) state.seating.cells[empties[idx].r][empties[idx].c].studentId = item.s.id;
+    if (idx < empties.length) state.seating.cells[empties[idx].r][empties[idx].c] = item.s.id;
   });
   save(); render();
 }
@@ -1722,11 +1689,6 @@ function openSeatConfig() {
         <div><label class="block text-xs text-gray-500 mb-1">行数</label><input id="seatRows" type="number" min="1" max="20" class="w-full border rounded-lg p-2 text-sm" value="${st.rows}"></div>
         <div><label class="block text-xs text-gray-500 mb-1">列数</label><input id="seatCols" type="number" min="1" max="20" class="w-full border rounded-lg p-2 text-sm" value="${st.cols}"></div>
       </div>
-      <div><label class="block text-xs text-gray-500 mb-1">每组列数（自动插入过道）</label><input id="seatGroupCols" type="number" min="1" max="10" class="w-full border rounded-lg p-2 text-sm" value="${st.groupCols}"></div>
-      <div class="flex gap-4">
-        <label class="flex items-center gap-2 text-sm"><input id="seatShowDesk" type="checkbox" ${st.showTeacherDesk ? 'checked' : ''}> 显示办公桌</label>
-        <label class="flex items-center gap-2 text-sm"><input id="seatShowPodium" type="checkbox" ${st.showPodium ? 'checked' : ''}> 显示讲台</label>
-      </div>
       <p class="text-xs text-gray-400">调整行列会尽量保留已有安排；减少行列时超出部分会丢失。</p>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveSeatConfig()">保存</button>
     </div>`);
@@ -1736,25 +1698,17 @@ function saveSeatConfig() {
   const name = document.getElementById('seatName').value.trim() || '座次表';
   const rows = Math.min(20, Math.max(1, parseInt(document.getElementById('seatRows').value) || 7));
   const cols = Math.min(20, Math.max(1, parseInt(document.getElementById('seatCols').value) || 6));
-  const groupCols = Math.min(10, Math.max(1, parseInt(document.getElementById('seatGroupCols').value) || 2));
-  const showDesk = !!document.getElementById('seatShowDesk').checked;
-  const showPodium = !!document.getElementById('seatShowPodium').checked;
   const old = st.cells;
   const newCells = makeSeatCells(rows, cols);
   for (let r = 0; r < Math.min(old.length, rows); r++) {
     for (let c = 0; c < Math.min((old[r] || []).length, cols); c++) {
-      const oc = old[r][c];
-      if (!oc) continue;
-      newCells[r][c] = { type: oc.type === 'seat' || oc.type === 'aisle' || oc.type === 'blank' ? oc.type : 'seat', studentId: String(oc.studentId || '') };
-      if (newCells[r][c].type !== 'seat') newCells[r][c].studentId = '';
+      const sid = (old[r][c] && typeof old[r][c] === 'object') ? (old[r][c].studentId || '') : String(old[r][c] || '');
+      newCells[r][c] = sid;
     }
   }
   st.name = name;
   st.rows = rows;
   st.cols = cols;
-  st.groupCols = groupCols;
-  st.showTeacherDesk = showDesk;
-  st.showPodium = showPodium;
   st.cells = newCells;
   save(); closeModal(); render();
 }
@@ -1762,60 +1716,31 @@ function exportSeatTeacher() {
   const st = state.seating;
   const data = [];
   const header = [''];
-  for (let c = 0; c < st.cols; c++) header.push(seatIsAisleCol(c) ? '' : seatColNumber(c));
+  for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
   header.push('');
   data.push(header);
-  if (st.showTeacherDesk) {
-    const row = [''];
-    for (let c = 0; c < st.cols; c++) row.push(c === 0 ? '办公桌' : '');
-    row.push('');
-    data.push(row);
-  }
   st.cells.forEach((row, r) => {
     const rowNum = seatRowNumber(r);
-    const arr = [rowNum];
-    row.forEach(cell => {
-      if (cell.type === 'seat') arr.push(seatStudentName(cell.studentId));
-      else arr.push('');
-    });
-    arr.push(rowNum);
-    data.push(arr);
+    data.push([rowNum, ...row.map(sid => seatStudentName(sid)), rowNum]);
   });
-  const footer = [''];
-  for (let c = 0; c < st.cols; c++) footer.push(seatIsAisleCol(c) ? '' : seatColNumber(c));
-  footer.push('');
-  data.push(footer);
-  if (st.showPodium) {
-    const row = [''];
-    for (let c = 0; c < st.cols; c++) row.push(Math.floor(c * 3 / st.cols) === 1 ? '讲台' : '');
-    row.push('');
-    data.push(row);
-  }
   exportSeatToXlsx(data, `${st.name || '座次表'}_教师用.xlsx`);
 }
 function exportSeatStudent() {
   const st = state.seating;
-  const data = st.cells.map(row => row.map(cell => (cell.type === 'seat' ? seatStudentName(cell.studentId) : '')));
+  const data = st.cells.map(row => row.map(sid => seatStudentName(sid)));
   exportSeatToXlsx(data, `${st.name || '座次表'}_学生用.xlsx`);
 }
 function exportSeatToXlsx(data, filename) {
   if (typeof XLSX === 'undefined') return alert('Excel 导出库尚未加载，请刷新后重试');
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws['!cols'] = data[0].map(() => ({ wch: 10 }));
-  const merges = [];
-  if (filename.includes('_教师用')) {
-    const deskRow = 1;
-    merges.push({ s: { r: deskRow, c: 1 }, e: { r: deskRow, c: data[0].length - 2 } });
-    const podiumRow = data.length - 1;
-    merges.push({ s: { r: podiumRow, c: 1 }, e: { r: podiumRow, c: data[0].length - 2 } });
-  }
-  ws['!merges'] = merges;
+  ws['!merges'] = [];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '座次表');
   XLSX.writeFile(wb, filename);
 }
 
-// ===================== Album =====================// ===================== Album =====================
+// ===================== Album =====================// ===================== Album =====================// ===================== Album =====================
 function renderAlbum() {
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
