@@ -955,7 +955,7 @@ function renderStudents() {
             <div><div class="font-bold text-gray-800">${esc(s.name)}</div><div class="text-xs text-gray-500">${esc(s.class)}</div></div>
           </div>
           <div class="flex gap-2 mt-4 flex-wrap">
-            ${s.records.slice(0,3).map(r => `<span class="text-[10px] px-2 py-0.5 rounded-full ${r.type==='critic'?'tag-critic':r.type==='praise'?'tag-praise':'tag-chat'}">${r.type==='critic'?'批评':r.type==='praise'?'表扬':'谈心'}</span>`).join('')}
+            ${s.records.slice(0,3).map(r => `<span class="text-[10px] px-2 py-0.5 rounded-full ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span>`).join('')}
             ${s.records.length>3?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">+${s.records.length-1}</span>`:''}
           </div>
         </div>`).join('')}
@@ -1029,9 +1029,9 @@ function openStudentProfile(id) {
       <div class="space-y-3 max-h-72 overflow-y-auto">
         ${s.records.length ? s.records.map(r => `
           <div class="flex gap-3 p-3 rounded-xl bg-gray-50">
-            <div class="mt-0.5 text-lg">${r.type==='critic'?'⚠️':r.type==='praise'?'👍':'💬'}</div>
+            <div class="mt-0.5 text-lg">${recordTypeEmoji(r.type)}</div>
             <div class="flex-1"><div class="text-sm text-gray-700">${esc(r.content)}</div>
-            <div class="flex items-center gap-2 mt-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${r.type==='critic'?'tag-critic':r.type==='praise'?'tag-praise':'tag-chat'}">${r.type==='critic'?'批评':r.type==='praise'?'表扬':'谈心'}</span><span class="text-[10px] text-gray-400">${esc(r.date)}</span></div></div>
+            <div class="flex items-center gap-2 mt-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span><span class="text-[10px] text-gray-400">${esc(r.date)}</span></div></div>
             <button class="text-gray-300 hover:text-red-500" onclick="deleteRecord('${s.id}','${r.id}')">🗑️</button>
           </div>`).join('') : '<div class="text-sm text-gray-400">暂无行为记录</div>'}
       </div>
@@ -1051,6 +1051,7 @@ function openRecordForm(id) {
           <button type="button" class="rec-type-btn flex-1 py-2 rounded-lg border text-sm" data-type="critic" onclick="pickRecordType(this)">批评</button>
           <button type="button" class="rec-type-btn flex-1 py-2 rounded-lg border text-sm" data-type="praise" onclick="pickRecordType(this)">表扬</button>
           <button type="button" class="rec-type-btn flex-1 py-2 rounded-lg border text-sm" data-type="chat" onclick="pickRecordType(this)">谈心</button>
+          <button type="button" class="rec-type-btn flex-1 py-2 rounded-lg border text-sm" data-type="leave" onclick="pickRecordType(this)">请假</button>
         </div>
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="recDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
@@ -2382,7 +2383,7 @@ function getStudentProgress(studentName, examId, subject) {
 }
 
 // ===================== 考勤管理：页面与交互 =====================
-let attMode = 'home';   // 'home' | 'leave' | null
+let attMode = null;   // 'home' | 'leave' | null
 function attChipClass(name){
   const cur=(state.attendance.current)||{home:{},leave:{}};
   const h=!!cur.home[name], l=!!cur.leave[name];
@@ -2414,12 +2415,14 @@ function toggleAttDay(name, day){
   if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
   attRecomputeHome(); save(); render();
 }
-function addLeave(name, reason){
+function addLeave(name, reason, skipClassLog){
   name=(name||'').trim(); if(!name) return false;
   const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
   a.current.leave[name]=reason||'';
-  const dk=attDateKey(new Date());
-  state.classLogs.unshift({ id:uid(), date:dk, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+  if(!skipClassLog){
+    const dk=attDateKey(new Date());
+    state.classLogs.unshift({ id:uid(), date:dk, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+  }
   save(); return true;
 }
 function openAddLeaveModal(){
@@ -2439,7 +2442,8 @@ function removeLeave(name){
 }
 function saveTodayAtt(){
   const a=state.attendance, cur=a.current; if(!cur) return;
-  if(a.logs.some(l=>l.date===cur.date)){ alert('今日考勤已存于历史记录'); return; }
+  const idx = a.logs.findIndex(l=>l.date===cur.date);
+  if(idx > -1) a.logs.splice(idx, 1); // 同日多次保存直接覆盖
   a.logs.unshift(attBuildLog(cur)); save(); alert('今日考勤已存入历史'); render();
 }
 function openAttMemberModal(){
@@ -2466,10 +2470,11 @@ function renderAttendance() {
     return `<div class="member-chip ${cls}" onclick="markAttMember('${m.name.replace(/'/g,"")}')">${esc(m.name)}</div>`;
   }).join('') || '<div class="text-sm text-gray-400">还没有班级成员，点「班级成员管理」导入名单。</div>';
 
-  const homeRows = attMembers().map(m=>`<tr>
+  const todayDay = attDayName(new Date());
+  const homeRows = attMembers().filter(m => (m.weeklyHome||[]).includes(todayDay)).map(m=>`<tr>
     <td>${esc(m.name)}</td>
     <td><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay('${m.name.replace(/'/g,"")}','${d}')">${d}</span>`).join('')}</div></td>
-    <td>${(m.weeklyHome||[]).includes(attDayName(new Date()))?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400">暂无成员</td></tr>';
+    <td>${(m.weeklyHome||[]).includes(todayDay)?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400">今日无固定回家成员</td></tr>';
 
   const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave('${l.name.replace(/'/g,"")}')">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
 
@@ -2480,8 +2485,8 @@ function renderAttendance() {
       <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div><div class="text-xs text-gray-400 mb-1">当前考勤时间</div><div class="text-2xl font-bold text-gray-800">${formatDate(now)}</div></div>
         <div class="flex items-center gap-2">
-          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='home'?'bg-blue-100 border-blue-300 text-blue-700':'bg-white text-gray-600'}" onclick="setAttMode('home')">🏠 固定回家${attMode==='home'?' · 工作中':''}</button>
-          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='leave'?'bg-red-100 border-red-300 text-red-700':'bg-white text-gray-600'}" onclick="setAttMode('leave')">🏥 请假${attMode==='leave'?' · 工作中':''}</button>
+          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='home'?'bg-blue-100 border-blue-300 text-blue-700':'bg-white text-gray-600'}" onclick="setAttMode('home')">🏠 固定回家</button>
+          <button class="px-4 py-2 rounded-lg text-sm border ${attMode==='leave'?'bg-red-100 border-red-300 text-red-700':'bg-white text-gray-600'}" onclick="setAttMode('leave')">🏥 请假</button>
           <button class="px-4 py-2 rounded-lg text-sm text-white" style="background:linear-gradient(135deg,#f472b6,#ec4899)" onclick="saveTodayAtt()">💾 保存今日考勤</button>
         </div>
       </div>
@@ -3596,17 +3601,22 @@ const REC_TYPE_LABELS_WORDS = {
   critic: ['批评', '罚站', '罚抄', '处罚', '违纪', '迟到', '早退', '打架', '顶撞', '不交', '没交', '未完成', '没完成', '犯错', '扣分', '警告', '处分', '玩手机', '走神', '睡觉', '抄袭', '作弊', '说话'],
   praise: ['表扬', '夸奖', '夸', '赞', '得奖', '获奖', '奖励', '突出', '满分', '高分', '守纪律', '好人好事'],
   chat:   ['谈心', '谈话', '沟通', '家访', '约谈', '开导', '安慰', '鼓励', '交流'],
+  leave:  ['请假', '病假', '事假', '请假条', '缺席'],
 };
 // 仅用于识别的描述性短语（不剔除，保证正文完整，如「主动帮助同学」「作业优秀」）
 const REC_TYPE_DESC = {
   critic: ['顶撞', '玩手机', '走神', '睡觉', '抄袭', '作弊', '吵架', '打架'],
   praise: ['主动帮助同学', '帮助同学', '助人为乐', '表现好', '值日认真', '作业优秀', '一等奖', '二等奖', '三等奖', '积极发言', '主动', '认真', '勤奋', '贴心', '懂事', '优秀', '进步', '棒'],
   chat:   ['心理疏导', '聊天', '聊到', '聊了', '情绪低落'],
+  leave:  ['肚子疼', '不舒服', '生病', '家中有事', '事假'],
 };
 // 识别/剔除用的「引出词」（如「提出表扬」的「提出」）
 const REC_LEADIN = ['提出', '给予', '予以', '进行', '做了', '被'];
-const REC_TYPE_LABELS = { critic: '批评', praise: '表扬', chat: '谈心' };
-const REC_TYPE_EMOJI  = { critic: '⚠️', praise: '👍', chat: '💬' };
+const REC_TYPE_LABELS = { critic: '批评', praise: '表扬', chat: '谈心', leave: '请假' };
+const REC_TYPE_EMOJI  = { critic: '⚠️', praise: '👍', chat: '💬', leave: '🏥' };
+function recordTypeLabel(t){ return REC_TYPE_LABELS[t] || '记录'; }
+function recordTypeClass(t){ return t==='critic'?'tag-critic':t==='praise'?'tag-praise':t==='leave'?'tag-leave':'tag-chat'; }
+function recordTypeEmoji(t){ return REC_TYPE_EMOJI[t] || '📝'; }
 // 积分维度识别：根据关键词自动判断所属模块
 const QR_DIM_KWS = {
   sport: ['体育', '早训', '早操', '课间操', '锻炼', '运动会', '跑步', '跳绳', '体测', '体育课', '篮球', '足球', '排球', '乒乓球', '游泳', '体能'],
@@ -3637,7 +3647,7 @@ function parseQuickRecord(text) {
   });
   // 2) 识别记录类型（多个）
   const types = [];
-  for (const t of ['critic', 'praise', 'chat']) {
+  for (const t of ['critic', 'praise', 'chat', 'leave']) {
     let hitKw = '';
     for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (text.includes(kw)) { hitKw = kw; break; } }
     if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw)) { hitKw = kw; break; } }
@@ -3655,7 +3665,7 @@ function parseQuickRecord(text) {
   // 4) 内容清洗
   let content = text;
   studentHits.forEach(h => { content = content.split(h.alias).join(''); });
-  for (const t of ['critic', 'praise', 'chat']) {
+  for (const t of ['critic', 'praise', 'chat', 'leave']) {
     for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (content.includes(kw)) content = content.split(kw).join(''); }
   }
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
@@ -3688,7 +3698,7 @@ function qrRecognize() {
   if (!text.trim()) return alert('请先输入内容');
   const r = parseQuickRecord(text);
   qrDraft = r;
-  const typeChips = ['critic', 'praise', 'chat'].map(t => {
+  const typeChips = ['critic', 'praise', 'chat', 'leave'].map(t => {
     const on = r.types.includes(t);
     return `<button type="button" data-qrtype="${t}" onclick="qrToggleType('${t}')" class="qr-type ${on?'qr-on':'qr-off'}">${REC_TYPE_EMOJI[t]} ${REC_TYPE_LABELS[t]}</button>`;
   }).join('');
@@ -3705,17 +3715,19 @@ function qrRecognize() {
     if (m.kind === 'type') return REC_TYPE_EMOJI[m.type] + ' ' + m.value;
     return dimIcon(m.dim) + ' ' + m.value;
   }).join('　') : '未识别到学生或类型，请手动选择');
+  const hasScoringType = r.types.some(t => t === 'praise' || t === 'critic');
+  const scoringSection = hasScoringType ? `
+      <div><div class="text-xs text-gray-500 mb-1">自动积分模块（可修改）</div>
+        <div class="flex flex-wrap gap-2">${dimChips}</div></div>
+      <div><div class="text-xs text-gray-500 mb-1">自动分值（表扬为正，批评为负，谈心/请假不计）</div>
+        <input id="qrPointVal" type="number" value="1" class="w-24 border rounded-lg p-2 text-sm" placeholder="1"></div>` : '';
   document.getElementById('qrResult').innerHTML = `
     <div class="rounded-xl border p-4 space-y-4 bg-gray-50">
       <div><div class="text-xs text-gray-500 mb-1">识别结果</div><div class="text-xs text-primary">${esc(matchedText)}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">学生（可增删，默认全选识别到的）</div>
         <div class="flex flex-wrap gap-2">${stuChips}</div></div>
       <div><div class="text-xs text-gray-500 mb-1">记录类型（可多选）</div>
-        <div class="flex flex-wrap gap-2">${typeChips}</div></div>
-      <div><div class="text-xs text-gray-500 mb-1">自动积分模块（可修改）</div>
-        <div class="flex flex-wrap gap-2">${dimChips}</div></div>
-      <div><div class="text-xs text-gray-500 mb-1">自动分值（表扬为正，批评为负，谈心不计）</div>
-        <input id="qrPointVal" type="number" value="1" class="w-24 border rounded-lg p-2 text-sm" placeholder="1"></div>
+        <div class="flex flex-wrap gap-2">${typeChips}</div></div>${scoringSection}
       <div><div class="text-xs text-gray-500 mb-1">记录内容</div>
         <textarea id="qrContent" rows="3" class="w-full border rounded-lg p-3 text-sm">${esc(r.content)}</textarea></div>
       <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
@@ -3744,11 +3756,12 @@ function qrToggleStu(id) {
   if (on) { qrDraft.students = qrDraft.students.filter(x => x.id !== id); btn.classList.remove('qr-on'); btn.classList.add('qr-off'); }
   else { const s = state.students.find(x => x.id === id); qrDraft.students.push({ id: s.id, name: s.name }); btn.classList.add('qr-on'); btn.classList.remove('qr-off'); }
 }
-// 快速记录：识别后按对应模块自动加减分，表扬+ / 批评- / 谈心0
+// 快速记录：识别后按对应模块自动加减分，表扬+ / 批评- / 谈心0 / 请假同步考勤
 function qrSave() {
   const content = document.getElementById('qrContent').value.trim();
   const date = document.getElementById('qrDate').value.trim() || todayLabel;
-  const pointVal = Math.abs(parseFloat(document.getElementById('qrPointVal').value) || 1);
+  const pointInput = document.getElementById('qrPointVal');
+  const pointVal = pointInput ? Math.abs(parseFloat(pointInput.value) || 1) : 1;
   if (!qrDraft.students.length) return alert('请至少选择一个学生');
   if (!qrDraft.types.length) return alert('请至少选择一个记录类型');
   if (!content) return alert('请输入记录内容');
@@ -3759,11 +3772,15 @@ function qrSave() {
       const s = state.students.find(x => x.id === st.id);
       if (!s) return;
       s.records.unshift({ id: uid(), type: t, date, content }); n++;
+      // 请假同步到今日考勤，不重复写入班级日志（由下方统一写入）
+      if (t === 'leave') {
+        addLeave(s.name, content || '请假', true);
+      }
       // 自动按对应模块加减分
       let delta = 0;
       if (t === 'praise') delta = +pointVal;
       else if (t === 'critic') delta = -pointVal;
-      // 谈心 / 未识别类型不计分
+      // 谈心 / 请假 / 未识别类型不计分
       if (delta !== 0) {
         const dim = qrDraft.autoDim || 'daily';
         ptWriteLog(s.id, dim, delta, `快速记录·${REC_TYPE_LABELS[t]}：${content.slice(0, 20)}`);
