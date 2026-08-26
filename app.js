@@ -67,7 +67,6 @@ function defaultState() {
         { id: 'students', label: '学生管理', icon: '👨‍👩‍👧‍👦' },
         { id: 'points', label: '积分管理', icon: '🏆' },
         { id: 'classLog', label: '班级日志', icon: '📓' },
-        { id: 'album', label: '班级相册', icon: '🖼️' },
         { id: 'seating', label: '座次表', icon: '🪑' },
         { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
@@ -152,7 +151,6 @@ function defaultState() {
       { id: uid(), name: '张明轩', subject: '英语', exam: '期中考试', score: 78, class: '10班' },
       { id: uid(), name: '王浩然', subject: '英语', exam: '期中考试', score: 92, class: '10班' },
     ],
-    album: [],
     seating: {
       name: '座次表',
       rows: 7,
@@ -176,8 +174,8 @@ function defaultState() {
       records: [],        // [{id,examId,classId,studentName,subject,score,colType}]  colType: score|rank
       subjects: [],       // 兼容旧字段，保留
     },
-    // ===== 积分折算比例（各维度 × 比例 = 折算分）=====
-    convertRatios: { sport: 1, daily: 1, exam: 1, post: 1 },
+    // ===== 积分折算满分（0 或空表示不折算；>0 表示该维度原始分最高分映射到此分值）=====
+    convertRatios: { sport: 0, daily: 0, exam: 0, post: 0 },
     // ===== 考勤管理 =====
     attendance: {
       members: [],   // [{name, weeklyHome:['一','三','五']}] 固定回家周期（长期保留，跨日不清空）
@@ -323,7 +321,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
@@ -396,8 +394,8 @@ function migrateState(s) {
   s.examData.records.forEach(r => { if (!r.colType) r.colType = 'score'; });
   syncExamClassesToStudents(s); // 成绩分析班级/成员与学生管理对齐
   s.examScore = normalizeExamScore(s.examScore); // 考试赋分规则归一化
-  if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
-  ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 1; });
+  if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 0, daily: 0, exam: 0, post: 0 };
+  ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 0; });
   if (!Array.isArray(s.snapshots)) s.snapshots = [];
   // 考勤管理
   if (!s.attendance || typeof s.attendance !== 'object') s.attendance = { members: [], current: null, logs: [] };
@@ -510,7 +508,7 @@ function loadState() {
 
 function save() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-  catch (e) { alert('保存失败，可能是本地存储空间已满（相册图片过多）。' + e.message); }
+  catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   pushSync();
 }
 
@@ -938,8 +936,8 @@ function renderSidebar() {
     </div>`;
   };
   let itemsHtml = '';
-  // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/相册/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','reminders','examscore'];
+  // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/座次/职务值日/考勤/周报/待办）隐藏
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -992,7 +990,7 @@ function setActiveClass(cls) {
   selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(); render();
 }
@@ -1003,7 +1001,7 @@ function renderTopBar() {
   </div>`;
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
-    album: '班级相册', seating: '座次表', classRecord: '课堂记录',
+    seating: '座次表', classRecord: '课堂记录',
     homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
     examscore: '考试赋分', positions: '职务与值日管理',
   };
@@ -1052,7 +1050,7 @@ function renderFab() {
 function renderPage() {
   const map = {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
-    album: renderAlbum, seating: renderSeating, classRecord: renderClassRecord,
+    seating: renderSeating, classRecord: renderClassRecord,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
     search: renderGlobalSearch, profile: renderStudentProfile,
@@ -2395,54 +2393,6 @@ function exportSeatToXlsx(data, filename) {
   XLSX.writeFile(wb, filename);
 }
 
-// ===================== Album =====================
-function renderAlbum() {
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">班级相册</div>
-      <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openAlbumForm()">+ 上传图片</button>
-    </div>
-    ${state.album.length ? `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-      ${state.album.map(p=>`<div class="relative group rounded-xl overflow-hidden bg-gray-100 aspect-square">
-        <img src="${esc(p.url)}" class="w-full h-full object-cover" alt="">
-        <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-          <div class="text-white text-xs flex-1 truncate">${esc(p.caption||'')}</div>
-          <button class="text-white text-xs bg-red-500/80 px-2 py-1 rounded" onclick="deleteAlbum('${p.id}')">删除</button>
-        </div>
-      </div>`).join('')}
-    </div>` : `<div class="text-center text-gray-400 py-12"><div class="text-5xl mb-3">🖼️</div><p>还没有照片，点「上传图片」添加班级活动照片</p></div>`}
-  </div>`;
-}
-function openAlbumForm() {
-  openModal('上传图片', `
-    <div class="space-y-4">
-      <div><label class="block text-xs text-gray-500 mb-1">图片地址（链接）</label><input id="albumUrl" class="w-full border rounded-lg p-2 text-sm" placeholder="https://..."></div>
-      <div class="text-center text-xs text-gray-400">或</div>
-      <div><label class="block text-xs text-gray-500 mb-1">从本地上传</label><input id="albumFile" type="file" accept="image/*" class="w-full text-sm"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">说明（可选）</label><input id="albumCaption" class="w-full border rounded-lg p-2 text-sm" placeholder="如：春游合影"></div>
-      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveAlbum()">保存</button>
-    </div>`);
-}
-function saveAlbum() {
-  const caption = document.getElementById('albumCaption').value.trim();
-  const urlInput = document.getElementById('albumUrl').value.trim();
-  const fileInput = document.getElementById('albumFile');
-  if(fileInput.files && fileInput.files[0]) {
-    const reader = new FileReader();
-    reader.onload = e => { state.album.unshift({ id: uid(), url: e.target.result, caption }); save(); closeModal(); render(); };
-    reader.readAsDataURL(fileInput.files[0]);
-    return;
-  }
-  if(!urlInput) return alert('请输入图片链接或选择本地文件');
-  state.album.unshift({ id: uid(), url: urlInput, caption });
-  save(); closeModal(); render();
-}
-function deleteAlbum(id) {
-  const p = state.album.find(x=>x.id===id);
-  if(!p) return;
-  doDelete(()=>state.album, id, p.title || '相册');
-}
-
 // ===================== Class Record =====================
 let crFilterSubject = ''; // '' = 全部
 let crSearchName = '';
@@ -2701,8 +2651,16 @@ function ptRanked(dim) {
   return arr;
 }
 function ptRecent(days) {
-  const cut = Date.now() - days * 86400000;
-  return state.points.logs.filter(l => (l.ts || 0) >= cut);
+  const start = ptCalcStartDate();
+  const cut = new Date();
+  cut.setDate(cut.getDate() - days);
+  cut.setHours(0, 0, 0, 0);
+  return state.points.logs.filter(l => {
+    const d = ptParseDate(l.date);
+    if (!d) return false;
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    return day.getTime() >= cut.getTime() && day.getTime() >= start.getTime();
+  });
 }
 function ptDeltaCls(d) { return d >= 0 ? 'text-red-500' : 'text-emerald-600'; }
 function ptDeltaBg(d) { return d >= 0 ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'; }
@@ -2710,8 +2668,16 @@ function ptDeltaBg(d) { return d >= 0 ? 'bg-red-50 text-red-500' : 'bg-emerald-5
 function fmtScore(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
 function ptSigned(d) { return (d >= 0 ? '+' : '') + fmtScore(d); }
 function ptStudentName(sid) { const s = state.students.find(x => x.id === sid); return s ? s.name : '（已删除学生）'; }
-// ===== 折算：各维度原始分 × 比例 = 折算分 =====
-function ptConvDim(sid, dim) { return (ptDimScore(sid, dim) || 0) * (state.convertRatios[dim] != null ? state.convertRatios[dim] : 1); }
+// ===== 折算：各维度原始分最高分映射到设置的折算满分 =====
+function ptConvDim(sid, dim) {
+  const raw = ptDimScore(sid, dim) || 0;
+  const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
+  // 不折算 或 负分保留原始值
+  if (cap <= 0 || raw < 0) return raw;
+  const maxRaw = Math.max(...state.students.map(s => ptDimScore(s.id, dim) || 0), 0);
+  if (maxRaw <= 0) return 0;
+  return (raw / maxRaw) * cap;
+}
 function ptConvTotal(sid) { return POINT_DIMS.reduce((a, d) => a + ptConvDim(sid, d.id), 0); }
 function ptRawTotal(sid) { return ptTotal(sid); }
 
@@ -2871,9 +2837,9 @@ function ptApplyRule(rid) {
   document.getElementById('ptReason').value = r.label;
   ptSetSign(r.delta >= 0 ? 1 : -1);
 }
-function ptWriteLog(studentId, dim, delta, reason, batchId, auto) {
+function ptWriteLog(studentId, dim, delta, reason, batchId, auto, date) {
   state.points.logs.unshift({
-    id: uid(), ts: Date.now(), date: nowStamp(), studentId,
+    id: uid(), ts: Date.now(), date: date || nowStamp(), studentId,
     studentName: ptStudentName(studentId), dim, delta, reason: reason || dimLabel(dim),
     batchId: batchId || '', auto: auto || '',
   });
@@ -2995,31 +2961,32 @@ function deletePtRule(id) {
 function openConvertSettings() {
   const rows = POINT_DIMS.map(d => {
     const st = dimStyle(d.id);
-    const v = state.convertRatios[d.id] != null ? state.convertRatios[d.id] : 1;
+    const v = state.convertRatios[d.id] != null ? state.convertRatios[d.id] : 0;
     return `<div class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-50">
       <span class="flex-1 text-sm ${st.text} font-medium">${d.icon} ${d.label}</span>
-      <span class="text-xs text-gray-400">原始分 ×</span>
+      <span class="text-xs text-gray-400">最高分映射到</span>
       <input id="conv_${d.id}" type="number" step="0.01" value="${v}" class="w-20 border rounded p-1.5 text-sm">
-      <span class="text-xs text-gray-400">= 折算分</span>
+      <span class="text-xs text-gray-400">分（0=不折算）</span>
     </div>`;
   }).join('');
   openModal('积分折算设置', `
     <div class="space-y-3">
-      <p class="text-xs text-gray-500 leading-relaxed">每个维度的「原始分」乘以对应比例得到「折算分」，总分 = 各维度折算分之和。例如：体育原始分 100、比例 0.5 → 折算 50 分。可随时调整，立即生效。</p>
+      <p class="text-xs text-gray-500 leading-relaxed">每个维度取当前学生的原始分最高分，映射到下面设置的「折算满分」，其余学生按比例折算；设置 0 表示不折算，负分保留原始值。例如：体育原始分最高 213、折算满分 80 → 该生得 80 分，其他人按 213→80 的比例折算。总分 = 各维度折算分之和。</p>
       ${rows}
-      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveConvertSettings()">保存折算比例</button>
+      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveConvertSettings()">保存折算设置</button>
     </div>`, 'md');
 }
 function saveConvertSettings() {
   POINT_DIMS.forEach(d => {
     const v = parseFloat(document.getElementById('conv_' + d.id).value);
-    state.convertRatios[d.id] = isNaN(v) ? 1 : v;
+    state.convertRatios[d.id] = isNaN(v) ? 0 : v;
   });
   save(); closeModal(); render();
 }
 
 // ===================== 积分 Excel / CSV 导入（按维度按姓名累加）=====================
 function openPtImport() {
+  const today = attDateKey(new Date());
   openModal('批量导入积分（按姓名累加）', `
     <div class="space-y-4">
       <div>
@@ -3030,13 +2997,18 @@ function openPtImport() {
         <p class="text-[11px] text-gray-400 mt-1">体育 / 日常 一般每周结算；考试 日期不定 —— 都用此入口按姓名累加。</p>
       </div>
       <div>
+        <label class="block text-xs text-gray-500 mb-1">积分日期</label>
+        <input id="ptImpDate" type="date" value="${today}" class="w-full border rounded-lg p-2 text-sm">
+        <p class="text-[11px] text-gray-400 mt-1">默认今天。若下方数据含第三列日期，则以该列日期为准。</p>
+      </div>
+      <div>
         <label class="block text-xs text-gray-500 mb-1">粘贴 / 上传数据</label>
-        <p class="text-[11px] text-gray-400 mb-1">每行一个：<code>姓名,分值</code>（制表符或逗号分隔）。按姓名匹配学生，累加分值。首行若是标题自动跳过。</p>
-        <textarea id="ptImpText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,5&#10;王浩然,3&#10;李思雨,-2"></textarea>
+        <p class="text-[11px] text-gray-400 mb-1">每行一个：<code>姓名,分值</code> 或 <code>姓名,分值,日期</code>（制表符或逗号分隔）。按姓名匹配学生，累加分值。首行若是标题自动跳过。</p>
+        <textarea id="ptImpText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,5&#10;王浩然,3&#10;李思雨,-2,2026-08-01"></textarea>
         <div class="mt-2"><input id="ptImpFile" type="file" accept=".csv,.txt,.xlsx" class="w-full text-sm"></div>
       </div>
       <div class="grid grid-cols-2 gap-3">
-        <button class="border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('ptImpText').value='姓名,分值\\n张明轩,5\\n王浩然,3'">填入示例</button>
+        <button class="border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('ptImpText').value='姓名,分值,日期（可选）\\n张明轩,5\\n王浩然,3\\n李思雨,-2,2026-08-01'">填入示例</button>
         <button class="bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doPtImport()">导入并累加</button>
       </div>
     </div>`, 'lg');
@@ -3050,12 +3022,13 @@ function openPtImport() {
 }
 function doPtImport() {
   const dim = document.getElementById('ptImpDim').value;
+  const defaultDate = document.getElementById('ptImpDate').value.trim() || attDateKey(new Date());
   const text = document.getElementById('ptImpText').value.trim();
   if (!text) return alert('请粘贴或上传积分数据');
   const rows = parseCSV(text);
   let start = 0;
   if (rows.length && /姓名|name|学生|名字/.test(rows[0][0])) start = 1;
-  let n = 0, matched = 0, unmatched = [];
+  let matched = 0, unmatched = [];
   const batchId = uid();
   for (let i = start; i < rows.length; i++) {
     const name = (rows[i][0] || '').trim();
@@ -3063,8 +3036,10 @@ function doPtImport() {
     if (!name || isNaN(val)) continue;
     const stu = state.students.find(s => s.name === name);
     if (!stu) { unmatched.push(name); continue; }
-    ptWriteLog(stu.id, dim, val, `Excel导入`, batchId);
-    matched++; n++;
+    const rowDate = (rows[i][2] || '').trim();
+    const date = ptParseDate(rowDate) ? rowDate : defaultDate;
+    ptWriteLog(stu.id, dim, val, `Excel导入`, batchId, '', date);
+    matched++;
   }
   if (!matched) return alert('没有匹配到任何学生，请检查姓名是否与「学生管理」一致。');
   // 导入即生成快照
@@ -5590,7 +5565,7 @@ function confirmModal(message, onYes, yesText, noText) {
     </div>`, 'sm');
 }
 // 安全全清：仅清除业务数据，保留账号/班级/积分规则/职务/课程节次/折算比例/考试赋分规则等固定设置
-const BUSINESS_DATA_KEYS = ['students','scores','attendance','pointsLogs','classRecords','classLogs','communications','homework','todosReminders','templates','album','seating','snapshots'];
+const BUSINESS_DATA_KEYS = ['students','scores','attendance','pointsLogs','classRecords','classLogs','communications','homework','todosReminders','templates','seating','snapshots'];
 
 function clearAllData() {
   applyClearData(BUSINESS_DATA_KEYS);
@@ -5616,14 +5591,13 @@ function applyClearData(keys) {
   if (on('homework')) state.homework = [];
   if (on('todosReminders')) { state.todos = []; state.reminders = []; }
   if (on('templates')) state.templates = [];
-  if (on('album')) state.album = [];
   if (on('seating')) state.seatingByClass = {};
   if (on('snapshots')) state.snapshots = [];
   // 高级：固定设置（清空后需重新配置）
   if (on('pointsRules')) state.points.rules = defaultPoints().rules;
   if (on('positions')) state.positions = defaultPositions();
   if (on('scheduleCourses')) state.schedule.courses = [];
-  if (on('convertRatios')) state.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
+  if (on('convertRatios')) state.convertRatios = { sport: 0, daily: 0, exam: 0, post: 0 };
   if (on('examScore')) state.examScore = defaultExamScore();
   if (on('examColumns')) { if (state.examData) state.examData.columns = defaultExamColumns(); }
   save(); render();
@@ -5642,7 +5616,6 @@ const CLEAR_GROUPS = [
     { k: 'homework', label: '作业' },
     { k: 'todosReminders', label: '待办与提醒' },
     { k: 'templates', label: '模板库' },
-    { k: 'album', label: '班级相册' },
     { k: 'seating', label: '座次表安排' },
     { k: 'snapshots', label: '历史积分快照' },
   ] },
@@ -5650,7 +5623,7 @@ const CLEAR_GROUPS = [
     { k: 'pointsRules', label: '积分规则' },
     { k: 'positions', label: '职务与值日体系' },
     { k: 'scheduleCourses', label: '课程表内容' },
-    { k: 'convertRatios', label: '折算比例' },
+    { k: 'convertRatios', label: '折算设置' },
     { k: 'examScore', label: '考试赋分规则' },
     { k: 'examColumns', label: '成绩分析预设列' },
   ] },
