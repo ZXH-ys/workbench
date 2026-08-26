@@ -323,7 +323,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
@@ -470,6 +470,12 @@ function migrateState(s) {
       return r.slice(0, targetCols);
     });
   }
+  // 座次表：迁移单份 seatings 为按班级存储（班主任班优先继承旧数据）
+  if (!s.seatingByClass || typeof s.seatingByClass !== 'object') s.seatingByClass = {};
+  if (s.seating && Array.isArray(s.seating.cells)) {
+    const seedClass = s.headTeacherClass || (s.classes[0] && s.classes[0].id) || '10班';
+    if (!s.seatingByClass[seedClass]) s.seatingByClass[seedClass] = JSON.parse(JSON.stringify(s.seating));
+  }
   // 导航若为旧版本（无积分管理），用最新导航覆盖（导航非用户数据）
   if (!JSON.stringify(s.nav || []).includes('"points"')) s.nav = defaultState().nav;
   // 确保「职务与值日」入口存在（旧导航可能没有）
@@ -580,8 +586,8 @@ const ATT_WEEK = ['一','二','三','四','五']; // 固定回家可选的工作
 function attDateKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function attDayName(d){ return ['日','一','二','三','四','五','六'][d.getDay()]; }
 function attMembers(){
-  // 班级成员直接取自「学生管理」，保证与学生管理实时一致
-  return (state.students||[]).filter(s=>s&&s.name).map(s=>({
+  // 班级成员直接取自「学生管理」，保证与学生管理实时一致；仅展示当前班级，避免两班混排
+  return (state.students||[]).filter(s=>s&&s.name&&s.class===state.activeClass).map(s=>({
     name: s.name,
     gender: s.gender,
     class: s.class,
@@ -641,6 +647,7 @@ let profileSid = null;       // 当前查看的学生档案
 let profileSubject = '';     // 档案页成绩趋势所选科目
 let hwSearchName = '';       // 作业模块姓名搜索
 let hwSubjectFilter = '';    // 作业模块科目筛选
+let reportRange = 'week';    // 周报/月报切换
 
 // ===================== Helpers =====================
 const now = new Date();
@@ -786,7 +793,7 @@ function doImportStudents() {
   for (let i = start; i < rows.length; i++) {
     const name = rows[i][0]; if (!name) continue;
     const gender = rows[i][1] || '未设置';
-    const cls = rows[i][2] || '';
+    const cls = rows[i][2] || state.activeClass;
     const avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + encodeURIComponent(name);
     state.students.push({ id: uid(), name, gender, class: cls, avatar, records: [] });
     n++;
@@ -909,7 +916,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/相册/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','album','reminders','examscore'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -937,10 +944,7 @@ function renderSidebar() {
       </nav>
       <div class="p-4 border-t space-y-2">
         <div class="text-xs text-gray-400">${formatDate(now)}</div>
-        <div class="grid grid-cols-2 gap-2">
-          <button class="text-xs border rounded py-1.5 hover:bg-gray-50" onclick="maybeOnboard()">❓ 使用引导</button>
-          <button class="text-xs border rounded py-1.5 hover:bg-gray-50" onclick="openSettings()">⚙️ 设置</button>
-        </div>
+        <button class="w-full text-xs border rounded py-1.5 hover:bg-gray-50" onclick="openSettings()">⚙️ 设置</button>
       </div>
     </aside>`;
 }
@@ -964,7 +968,7 @@ function setActiveClass(cls) {
   if (state.activeClass === cls) return;
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','album','reminders','examscore'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(); render();
 }
@@ -1461,20 +1465,33 @@ function savePeriods() {
 
 // ===================== Students =====================
 function renderStudents() {
+  const list = state.students.filter(s => s.class === state.activeClass);
+  const cards = list.map(s => `
+    <div class="p-4 rounded-2xl bg-gray-50 hover:bg-primary/5 transition cursor-pointer border border-transparent hover:border-primary/20" onclick="openStudentProfile('${s.id}')">
+      <div class="flex items-center gap-3">
+        <img src="${esc(s.avatar)}" class="w-12 h-12 rounded-full bg-white shadow-sm" alt="">
+        <div><div class="font-bold text-gray-800">${esc(s.name)}</div><div class="text-xs text-gray-500">${esc(s.class)}</div></div>
+      </div>
+      <div class="flex gap-2 mt-4 flex-wrap">
+        ${(s.records||[]).slice(0,3).map(r => `<span class="text-[10px] px-2 py-0.5 rounded-full ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span>`).join('')}
+        ${(s.records||[]).length>3?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">+${(s.records||[]).length-1}</span>`:''}
+      </div>
+    </div>`).join('');
+  let empty = '';
+  if (!list.length) {
+    const otherClasses = [...new Set(state.students.map(s => s.class).filter(c => c && c !== state.activeClass))];
+    const tip = otherClasses.length
+      ? `当前为 <b>${esc(state.activeClass)}</b>，暂无该班学生。其他班级（${otherClasses.map(esc).join('、')}）已有学生，可切换上方班级查看，或在当前班级「+ 新建学生 / 批量导入」录入。`
+      : `当前班级 <b>${esc(state.activeClass)}</b> 还没有学生。点右上角「+ 新建学生」或「批量导入」开始录入。`;
+    empty = `<div class="col-span-full text-center py-12 text-gray-400">
+      <div class="text-4xl mb-2">👨‍👩‍👧‍👦</div>
+      <p class="text-sm">${tip}</p>
+    </div>`;
+  }
   return `
   <div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-      ${state.students.filter(s => s.class === state.activeClass).map(s => `
-        <div class="p-4 rounded-2xl bg-gray-50 hover:bg-primary/5 transition cursor-pointer border border-transparent hover:border-primary/20" onclick="openStudentProfile('${s.id}')">
-          <div class="flex items-center gap-3">
-            <img src="${esc(s.avatar)}" class="w-12 h-12 rounded-full bg-white shadow-sm" alt="">
-            <div><div class="font-bold text-gray-800">${esc(s.name)}</div><div class="text-xs text-gray-500">${esc(s.class)}</div></div>
-          </div>
-          <div class="flex gap-2 mt-4 flex-wrap">
-            ${s.records.slice(0,3).map(r => `<span class="text-[10px] px-2 py-0.5 rounded-full ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span>`).join('')}
-            ${s.records.length>3?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">+${s.records.length-1}</span>`:''}
-          </div>
-        </div>`).join('')}
+      ${cards || empty}
     </div>
   </div>`;
 }
@@ -1939,12 +1956,27 @@ function deleteReminder(id) {
 // ===================== Duty =====================
 // ===================== Seating =====================
 let seatDragSrc = null;
+// 座次表按班级独立存储：每个班级一份网格，避免两班混排
+function seatSD() {
+  if (!state.seatingByClass || typeof state.seatingByClass !== 'object') state.seatingByClass = {};
+  const c = state.activeClass;
+  if (!state.seatingByClass[c]) {
+    const base = (state.seating && Array.isArray(state.seating.cells)) ? state.seating : { name: '座次表', rows: 7, cols: 6, cells: null };
+    state.seatingByClass[c] = {
+      name: base.name || '座次表',
+      rows: base.rows || 7,
+      cols: base.cols || 6,
+      cells: base.cells ? base.cells.map(r => Array.isArray(r) ? r.slice() : []) : makeSeatCells(base.rows || 7, base.cols || 6)
+    };
+  }
+  return state.seatingByClass[c];
+}
 function makeSeatCells(rows, cols) {
   return Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''));
 }
 function seatAssignedIds() {
   const ids = new Set();
-  (state.seating.cells || []).forEach(row => row.forEach(sid => { if (sid) ids.add(sid); }));
+  (seatSD().cells || []).forEach(row => row.forEach(sid => { if (sid) ids.add(sid); }));
   return ids;
 }
 function seatStudentName(sid) {
@@ -1954,17 +1986,17 @@ function seatStudentName(sid) {
 }
 function seatPendingStudents() {
   const assigned = seatAssignedIds();
-  return state.students.filter(s => !assigned.has(s.id));
+  return state.students.filter(s => s.class === state.activeClass && !assigned.has(s.id));
 }
 function seatCellClass(sid, isDragging) {
   const has = !!sid;
   const base = has ? 'bg-primary/10 border-primary text-primary' : 'bg-gray-50 border-gray-200 text-gray-300';
   return `seat-cell seat-seat ${base} ${isDragging ? 'opacity-50' : ''}`;
 }
-function seatRowNumber(r) { return state.seating.rows - r; }
+function seatRowNumber(r) { return seatSD().rows - r; }
 function seatColNumber(c) { return c + 1; }
 function renderSeating() {
-  const st = state.seating;
+  const st = seatSD();
   const pending = seatPendingStudents();
   const totalSeats = st.rows * st.cols;
   const assignedCount = st.cells.flat().filter(Boolean).length;
@@ -2009,7 +2041,7 @@ function renderSeating() {
   </div>`;
 }
 function seatDragStart(ev, r, c) {
-  const sid = state.seating.cells[r][c];
+  const sid = seatSD().cells[r][c];
   if (!sid) { ev.preventDefault(); return; }
   seatDragSrc = { type: 'cell', r, c };
   ev.dataTransfer.effectAllowed = 'move';
@@ -2036,11 +2068,11 @@ function seatDrop(ev, r, c) {
   document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
   if (!seatDragSrc) return;
   if (seatDragSrc.type === 'pending') {
-    state.seating.cells[r][c] = seatDragSrc.sid;
+    seatSD().cells[r][c] = seatDragSrc.sid;
   } else if (seatDragSrc.type === 'cell') {
-    const tmp = state.seating.cells[r][c];
-    state.seating.cells[r][c] = state.seating.cells[seatDragSrc.r][seatDragSrc.c];
-    state.seating.cells[seatDragSrc.r][seatDragSrc.c] = tmp;
+    const tmp = seatSD().cells[r][c];
+    seatSD().cells[r][c] = seatSD().cells[seatDragSrc.r][seatDragSrc.c];
+    seatSD().cells[seatDragSrc.r][seatDragSrc.c] = tmp;
   }
   seatDragSrc = null;
   save(); render();
@@ -2049,10 +2081,10 @@ function seatClick(r, c) {
   openSeatAssignModal(r, c);
 }
 function seatClickPending(sid) {
-  for (let r = 0; r < state.seating.rows; r++) {
-    for (let c = 0; c < state.seating.cols; c++) {
-      if (!state.seating.cells[r][c]) {
-        state.seating.cells[r][c] = sid;
+  for (let r = 0; r < seatSD().rows; r++) {
+    for (let c = 0; c < seatSD().cols; c++) {
+      if (!seatSD().cells[r][c]) {
+        seatSD().cells[r][c] = sid;
         save(); render();
         return;
       }
@@ -2061,7 +2093,7 @@ function seatClickPending(sid) {
   alert('没有空座位了');
 }
 function openSeatAssignModal(r, c) {
-  const current = seatStudentName(state.seating.cells[r][c]);
+  const current = seatStudentName(seatSD().cells[r][c]);
   const pending = seatPendingStudents();
   openModal(`安排座位（第${seatRowNumber(r)}排 第${seatColNumber(c)}列）`, `
     <div class="space-y-3 max-h-80 overflow-y-auto">
@@ -2074,26 +2106,26 @@ function openSeatAssignModal(r, c) {
     </div>`);
 }
 function seatSetStudent(r, c, sid) {
-  state.seating.cells[r][c] = sid;
+  seatSD().cells[r][c] = sid;
   save(); closeModal(); render();
 }
 function seatClearAll() {
   if (!confirm('确定清空所有座位安排吗？')) return;
-  state.seating.cells = makeSeatCells(state.seating.rows, state.seating.cols);
+  seatSD().cells = makeSeatCells(seatSD().rows, seatSD().cols);
   save(); render();
 }
 function seatAutoArrange() {
   const pending = seatPendingStudents();
   const empties = [];
-  state.seating.cells.forEach((row, r) => row.forEach((sid, c) => { if (!sid) empties.push({ r, c }); }));
+  seatSD().cells.forEach((row, r) => row.forEach((sid, c) => { if (!sid) empties.push({ r, c }); }));
   const shuffled = pending.map((s, i) => ({ s, i })).sort(() => Math.random() - 0.5);
   shuffled.forEach((item, idx) => {
-    if (idx < empties.length) state.seating.cells[empties[idx].r][empties[idx].c] = item.s.id;
+    if (idx < empties.length) seatSD().cells[empties[idx].r][empties[idx].c] = item.s.id;
   });
   save(); render();
 }
 function openSeatConfig() {
-  const st = state.seating;
+  const st = seatSD();
   openModal('座次表布局设置', `
     <div class="space-y-4">
       <div><label class="block text-xs text-gray-500 mb-1">表名</label><input id="seatName" class="w-full border rounded-lg p-2 text-sm" value="${esc(st.name)}"></div>
@@ -2106,7 +2138,7 @@ function openSeatConfig() {
     </div>`);
 }
 function saveSeatConfig() {
-  const st = state.seating;
+  const st = seatSD();
   const name = document.getElementById('seatName').value.trim() || '座次表';
   const rows = Math.min(20, Math.max(1, parseInt(document.getElementById('seatRows').value) || 7));
   const cols = Math.min(20, Math.max(1, parseInt(document.getElementById('seatCols').value) || 6));
@@ -2125,7 +2157,7 @@ function saveSeatConfig() {
   save(); closeModal(); render();
 }
 function exportSeatTeacher() {
-  const st = state.seating;
+  const st = seatSD();
   const data = [];
   const header = [''];
   for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
@@ -2141,7 +2173,7 @@ function exportSeatTeacher() {
   exportSeatToXlsx(data, `${st.name || '座次表'}_教师用.xlsx`);
 }
 function exportSeatStudent() {
-  const st = state.seating;
+  const st = seatSD();
   const data = [];
   const header = [''];
   for (let c = 0; c < st.cols; c++) header.push(seatColNumber(c));
@@ -2354,31 +2386,46 @@ function crRemoveKeyword(i,ki){
 }
 
 // ===================== Report =====================
+function setReportRange(r) { reportRange = r; render(); }
 function renderReport() {
-  const totalStudents = state.students.length;
-  const criticCount = state.students.reduce((a,s)=>a+s.records.filter(r=>r.type==='critic').length,0);
-  const praiseCount = state.students.reduce((a,s)=>a+s.records.filter(r=>r.type==='praise').length,0);
-  const pendingComm = state.communications.filter(c=>c.status==='待跟进').length;
-  const week = ptRecent(7);
-  const top3 = ptRanked('all').slice(0, 3).filter(x => x.score !== 0);
+  const clsStudents = state.students.filter(s => s.class === state.activeClass);
+  const isMonth = reportRange === 'month';
+  const dayWin = isMonth ? 30 : 7;
+  const inClass = new Set(clsStudents.map(s => s.id));
+  const totalStudents = clsStudents.length;
+  const criticCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'critic').length, 0);
+  const praiseCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'praise').length, 0);
+  const pendingComm = state.communications.filter(c => c.status === '待跟进').length;
+  const recent = ptRecent(dayWin).filter(l => inClass.has(l.studentId));
+  const top3 = clsStudents.map(s => ({ s, score: ptScoreOf(s.id) })).sort((a, b) => b.score - a.score).slice(0, 3).filter(x => x.score !== 0);
   const weekTop = (() => {
     const m = {};
-    week.forEach(l => { m[l.studentId] = (m[l.studentId] || 0) + l.delta; });
+    recent.forEach(l => { m[l.studentId] = (m[l.studentId] || 0) + l.delta; });
     return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([sid, v]) => `${ptStudentName(sid)}(${ptSigned(v)})`).join('、') || '暂无';
   })();
-  const report = `【班级周报／月报】
+  const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
+  const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
+  const totalSum = sportSum + dailySum + examSum + postSum;
+  const report = `【${state.activeClass} · ${isMonth ? '月报' : '周报'}】
 时间：${formatDate(now)}
 班级概况：本班共 ${totalStudents} 名学生。
-行为记录统计：本周表扬 ${praiseCount} 次，批评 ${criticCount} 次。
-积分概况：全班累计 ${fmtScore(ptClassSum('all'))} 分（体育打卡 ${fmtScore(ptClassSum('sport'))}、日常积分 ${fmtScore(ptClassSum('daily'))}、考试赋分 ${fmtScore(ptClassSum('exam'))}、任职赋分 ${fmtScore(ptClassSum('post'))}）。
+行为记录统计：${isMonth ? '本月' : '本周'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
+积分概况：全班累计 ${fmtScore(totalSum)} 分（体育打卡 ${fmtScore(sportSum)}、日常积分 ${fmtScore(dailySum)}、考试赋分 ${fmtScore(examSum)}、任职赋分 ${fmtScore(postSum)}）。
 积分排行前三：${top3.length ? top3.map((x, i) => `${i + 1}. ${x.s.name} ${fmtScore(x.score)}分`).join('，') : '暂无'}
-近7天积分进步：${weekTop}
+近${dayWin}天积分进步：${weekTop}
 家校沟通：待跟进 ${pendingComm} 项。
 班级日志摘要：${state.classLogs.slice(0,3).map(l=>l.date+' '+l.content).join('；') || '暂无'}
 待办重点：${state.todos.filter(t=>!t.done).slice(0,3).map(t=>t.title).join('；') || '无'}`;
+  const rangeBtn = (r, label) => `<button class="px-3 py-1.5 rounded-full text-sm transition ${reportRange===r?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setReportRange('${r}')">${label}</button>`;
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4"><div class="font-bold text-gray-800">班级周报／月报</div><button class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制报告</button></div>
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-bold text-gray-800">${esc(state.activeClass)} · 班级${isMonth ? '月报' : '周报'}</div>
+      <div class="flex items-center gap-2">
+        ${rangeBtn('week','📅 周报')} ${rangeBtn('month','🗓️ 月报')}
+        <button class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制报告</button>
+      </div>
+    </div>
     <pre id="reportText" class="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-gray-50 rounded-xl p-4">${esc(report)}</pre>
   </div>`;
 }
@@ -5309,7 +5356,7 @@ function clearAllData() {
   confirmModal('确定清空所有数据吗？此操作不可恢复（建议先导出备份）。', function(){
     state.students = []; state.todos = []; state.templates = []; state.classLogs = [];
     state.communications = []; state.homework = [];
-    state.scores = []; state.album = []; state.seating = { rows: 6, cols: 7, seats: {} };
+    state.scores = []; state.album = []; state.seatingByClass = {};
     state.reminders = []; state.classRecords = [];
     state.schedule.courses = [];
     state.points.logs = [];
