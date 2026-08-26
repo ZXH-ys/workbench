@@ -863,9 +863,9 @@ function maybeOnboard() {
   if (onboarded) return;
   openModal('欢迎使用班主任工作台 👋', `
     <div class="space-y-4">
-      <p class="text-sm text-gray-600 leading-relaxed">这是一个完全本地运行的班主任工作台，数据保存在你的浏览器里（刷新不丢）。跟着下面几步，几分钟就能用起来：</p>
+      <p class="text-sm text-gray-600 leading-relaxed">这是一个班主任工作台，数据主要保存在你的浏览器里（刷新不丢），登录后还会云端同步、支持多设备。跟着下面几步，几分钟就能用起来：</p>
       <ol class="list-decimal pl-5 space-y-2 text-sm text-gray-700">
-        <li>左下角「清空数据」清除示例，换成你的真实班级</li>
+        <li>先点下方「清空示例并开始」，或在「设置 → 清理数据」按需清理示例，换成你的真实班级</li>
         <li>「学生管理 → 新建学生 / 批量导入」录入全班</li>
         <li>「课程表 → 设置节次 / 添加课程」排好课</li>
         <li>「积分管理 → ⚙️规则 / 🎖️职务」按你们班标准配置</li>
@@ -1332,7 +1332,7 @@ function renderHome() {
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
       <div class="flex items-center justify-between mb-4">
         <div class="font-bold text-gray-800">💬 待跟进沟通</div>
-        <button class="text-xs text-primary hover:underline" onclick="navigate('communication')">查看全部</button>
+        <button class="text-xs text-primary hover:underline" onclick="openCommListModal()">查看全部</button>
       </div>
       <div class="space-y-3">
         ${state.communications.filter(c=>c.status==='待跟进').slice(0,2).map(c => `<div class="p-3 rounded-xl bg-gray-50 text-sm"><div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(c.student)} · ${esc(c.parent)}</span><span class="text-xs text-red-500">${esc(c.status)}</span></div><div class="text-gray-600 text-xs">${esc(c.content)}</div></div>`).join('')}
@@ -1848,6 +1848,17 @@ function deleteComm(id) {
   const c = state.communications.find(x=>x.id===id);
   if(!c) return;
   doDelete(()=>state.communications, id, (c.student || c.parent || '沟通'));
+}
+
+// 首页「待跟进沟通 → 查看全部」的弹窗视图（家校沟通菜单已精简，用弹窗替代独立页面）
+function openCommListModal() {
+  openModal('家校沟通', `
+    <div class="space-y-3">
+      <div class="flex justify-end">
+        <button class="text-sm bg-primary text-white rounded-lg px-3 py-1.5 hover:bg-primaryDark" onclick="closeModal(); openCommForm()">＋ 新增沟通</button>
+      </div>
+      ${renderCommunication()}
+    </div>`, 'lg');
 }
 
 // ===================== Homework =====================
@@ -2521,31 +2532,7 @@ function renderReport() {
   </div>`;
 }
 
-// ===================== PPT =====================
-function renderPPT() {
-  const theme = '新学期主题班会';
-  const outline = `【班会 PPT 大纲：${theme}】
-1. 开场：班级现状与氛围
-2. 成绩与目标：本次考试分析（见成绩管理）
-3. 行为表现：表扬与改进点（见学生行为记录）
-4. 家校协同：近期沟通重点（见家校沟通）
-5. 下一阶段计划与寄语`;
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4"><div class="font-bold text-gray-800">班会 PPT</div><button class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('pptOutline').textContent)">复制大纲</button></div>
-    <div class="mb-4"><label class="block text-xs text-gray-500 mb-1">班会主题</label><input id="pptTheme" class="w-full border rounded-lg p-2 text-sm" value="${theme}" oninput="renderPPTLive()"></div>
-    <pre class="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-gray-50 rounded-xl p-4" id="pptOutline">${esc(outline)}</pre>
-  </div>`;
-}
-function renderPPTLive() {
-  const theme = document.getElementById('pptTheme').value.trim() || '班会';
-  const outline = `【班会 PPT 大纲：${theme}】
-1. 开场：班级现状与氛围
-2. 成绩与目标：本次考试分析（见成绩管理）
-3. 行为表现：表扬与改进点（见学生行为记录）
-4. 家校协同：近期沟通重点（见家校沟通）
-5. 下一阶段计划与寄语`;
-  document.getElementById('pptOutline').textContent = outline;
-}
+// （「班会 PPT」生成功能曾提供，已在菜单精简时移除入口，相关函数已清理为死代码并删除）
 
 // ===================== Points: 积分管理 =====================
 let pointsTab = 'all';
@@ -4944,6 +4931,7 @@ function openQuickRecord() {
   const tip = '输入一句话即可自动识别多名学生、多个事件。例如：\n「张明轩参加体育早训，提出表扬；秦梦茹月考满分，提出表扬；王浩然迟到批评」\n系统会按学生拆分为多条记录，并自动识别科目、作业、积分规则、类型等。你可以在识别结果中编辑或删除不满意的分项。';
   openModal('一句话记录', `
     <div class="space-y-3">
+      ${(state.activeClass !== state.headTeacherClass) ? `<div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">⚠️ 当前为任课视角（${esc(className(state.activeClass))}），一句话记录只会保存「课堂记录」与「作业」；行为 / 积分 / 请假请在班主任班（${esc(className(state.headTeacherClass))}）记录。</div>` : ''}
       <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
       <textarea id="qrText" rows="3" class="w-full border rounded-lg p-3 text-sm" placeholder="输入一句话，例如：赵吉晨数学作业未完成且上语文课说话"></textarea>
       <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrRecognize()">🔍 识别并预览</button>
@@ -6223,6 +6211,7 @@ function showLogin() {
           <input id="login-user" placeholder="账号" value="admin" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
           <input id="login-pass" type="password" placeholder="密码" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
           <button onclick="doLogin()" class="w-full bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition">登录</button>
+          <button onclick="enterOffline()" class="w-full text-gray-500 py-2 rounded-lg text-sm hover:bg-gray-50 transition">📴 本地离线使用（数据仅存本机，不上云）</button>
           <p id="login-err" class="text-xs text-red-500 text-center h-4"></p>
         </div>
         <p class="text-[11px] text-gray-300 text-center">默认账号 admin / admin123，登录后可在数据管理修改密码</p>
@@ -6232,7 +6221,14 @@ function showLogin() {
   if (p) p.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 }
 
+function enterOffline() {
+  localStorage.setItem('ct_offline', '1');
+  render();
+  maybeOnboard();
+}
+
 function doLogin() {
+  localStorage.removeItem('ct_offline');
   const u = document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value;
   const err = document.getElementById('login-err');
@@ -6276,6 +6272,9 @@ if (AUTH_TOKEN) {
     render();
     maybeOnboard();
   }).catch(() => { render(); maybeOnboard(); });
+} else if (localStorage.getItem('ct_offline') === '1') {
+  render();
+  maybeOnboard();
 } else {
   showLogin();
 }
