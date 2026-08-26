@@ -74,6 +74,7 @@ function defaultState() {
       ]},
       { section: '减负工具', items: [
         { id: 'exam', label: '成绩管理', icon: '📊' },
+        { id: 'examscore', label: '考试赋分', icon: '📈' },
         { id: 'attendance', label: '考勤管理', icon: '✅' },
         { id: 'homework', label: '作业管理', icon: '📚' },
         { id: 'report', label: '周报月报', icon: '📰' },
@@ -164,6 +165,7 @@ function defaultState() {
     ],
     points: defaultPoints(),
     // ===== 成绩分析（两班对比 + 成员预设）=====
+    examScore: defaultExamScore(),
     examData: {
       columns: defaultExamColumns(), // 预识别列：score 类科目 + rank 类排名（可手动增删/启停）
       classes: [
@@ -391,6 +393,7 @@ function migrateState(s) {
   s.examData.classes.forEach(c => { if (!c.gender || typeof c.gender !== 'object') c.gender = {}; });
   s.examData.records.forEach(r => { if (!r.colType) r.colType = 'score'; });
   syncExamClassesToStudents(s); // 成绩分析班级/成员与学生管理对齐
+  s.examScore = normalizeExamScore(s.examScore); // 考试赋分规则归一化
   if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
   ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 1; });
   if (!Array.isArray(s.snapshots)) s.snapshots = [];
@@ -520,6 +523,49 @@ const EXAM_COLUMNS_DEFAULT = [
 ];
 function defaultExamColumns() {
   return EXAM_COLUMNS_DEFAULT.map(c => ({ key: c.key, type: c.type, enabled: true }));
+}
+// ===================== 考试赋分：规则与计算 =====================
+// 每个人的考试赋分 = 规定日期内各次考试积分之和
+// 规定日期 = 首页设定的 calcStartDate ~ 今天
+// 单次考试积分 = 班次第n名(班级总人数+1-n) + 校次区间赋分(读上传的校次列) + 单科最高分赋分(班内每科第1名)
+function defaultExamScore() {
+  return {
+    classRank: { enabled: true },                                   // 班次第n名 = 班级参考人数+1-n（按总分排名）
+    schoolRank: {
+      enabled: true,
+      column: '校次',                                               // 读取的校次列（来自成绩上传的 rank 列）
+      tiers: [                                                      // 校次名次区间 → 赋分（按 upTo 升序匹配）
+        { upTo: 10, points: 8 },
+        { upTo: 50, points: 4 },
+        { upTo: 99999, points: 1 }
+      ]
+    },
+    subjectTop: {
+      enabled: true,
+      points: 5,                                                    // 班内每科第1名赋分
+      scope: 'class'                                                // 'class' | 'school'
+    }
+  };
+}
+function normalizeExamScore(obj) {
+  const def = defaultExamScore();
+  if (!obj || typeof obj !== 'object') return def;
+  const o = obj;
+  return {
+    classRank: { enabled: !!(o.classRank && o.classRank.enabled) },
+    schoolRank: {
+      enabled: !!(o.schoolRank && o.schoolRank.enabled),
+      column: (o.schoolRank && o.schoolRank.column) || def.schoolRank.column,
+      tiers: (o.schoolRank && Array.isArray(o.schoolRank.tiers) && o.schoolRank.tiers.length)
+        ? o.schoolRank.tiers.map(t => ({ upTo: +t.upTo || 99999, points: +t.points || 0 }))
+        : def.schoolRank.tiers.map(t => ({ ...t }))
+    },
+    subjectTop: {
+      enabled: !!(o.subjectTop && o.subjectTop.enabled),
+      points: (o.subjectTop && typeof o.subjectTop.points === 'number') ? o.subjectTop.points : def.subjectTop.points,
+      scope: (o.subjectTop && o.subjectTop.scope) || def.subjectTop.scope
+    }
+  };
 }
 
 // ===================== 考勤管理：核心逻辑（含跨日自动归档）=====================
@@ -855,7 +901,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/相册/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders'];
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders','examscore'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -910,7 +956,7 @@ function setActiveClass(cls) {
   if (state.activeClass === cls) return;
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders'];
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders','examscore'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(); render();
 }
@@ -967,7 +1013,7 @@ function renderPage() {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
     album: renderAlbum, seating: renderSeating, classRecord: renderClassRecord,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
-    points: renderPoints, exam: renderExam, attendance: renderAttendance, positions: renderPositions,
+    points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
   };
   return (map[currentRoute] || renderHome)();
 }
@@ -2212,8 +2258,24 @@ function nowStamp() {
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
 function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId === sid); }
 function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
-function ptDimScore(sid, dim) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim))); }
-function ptClassSum(dim) { return ptSum(ptEffectiveLogs(state.points.logs.filter(l => dim === 'all' || l.dim === dim))); }
+function ptDimScore(sid, dim) {
+  let v = ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim)));
+  // 考试赋分：并入自动计算的考试赋分（仅班主任班）
+  if (dim === 'exam' && state.activeClass === state.headTeacherClass) {
+    const s = state.students.find(x => x.id === sid);
+    if (s) v += examScoreStudentTotal(s.name);
+  }
+  return v;
+}
+function ptClassSum(dim) {
+  let base = ptSum(ptEffectiveLogs(state.points.logs.filter(l => dim === 'all' || l.dim === dim)));
+  // 考试赋分：并入自动计算的考试赋分（仅班主任班）
+  if ((dim === 'exam' || dim === 'all') && state.activeClass === state.headTeacherClass) {
+    const d = examScoreData();
+    base += Object.values(d.students).reduce((a, b) => a + b.total, 0);
+  }
+  return base;
+}
 function ptRanked(dim) {
   const arr = state.students.map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
@@ -2877,6 +2939,115 @@ function findClassIdByName(name) {
   }
   return null;
 }
+// ---------- 考试赋分：核心计算 ----------
+function examSchoolRankColumnKey() {
+  const cfg = (state.examScore && state.examScore.schoolRank) || {};
+  const rankCols = examRankColumns().map(c => c.key);
+  if (cfg.column && rankCols.includes(cfg.column)) return cfg.column;
+  const hint = rankCols.find(k => /校次|校名|年级名|年级次|校排|年排/.test(k));
+  return hint || rankCols[0] || null;
+}
+function schoolTierPoints(rk, tiers) {
+  if (!rk || rk <= 0) return 0;
+  const ts = (tiers || []).slice().sort((a, b) => a.upTo - b.upTo);
+  for (const t of ts) { if (rk <= t.upTo) return t.points; }
+  return 0;
+}
+// 计算规定日期内（calcStartDate ~ 今天）各次考试积分，按学生汇总
+function examScoreInRange() {
+  const cfg = state.examScore || defaultExamScore();
+  const start = state.points.calcStartDate || '2026-01-01';
+  const today = attDateKey(new Date());
+  const clsName = state.activeClass;
+  const clsObj = (state.examData.classes || []).find(c => c.name === clsName);
+  const out = { exams: [], students: {} };
+  if (!clsObj) return out;
+  const classId = clsObj.id;
+  const exams = (state.examData.exams || [])
+    .filter(e => e.date && e.date >= start && e.date <= today)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  out.exams = exams;
+  // 初始化本班所有学生
+  examStudentsOfClass(clsName).forEach(n => { out.students[n] = { total: 0, exams: 0, byExam: [] }; });
+  const schoolCol = examSchoolRankColumnKey();
+  const scoreCols = examScoreColumns().map(c => c.key);
+  exams.forEach(e => {
+    const recs = (state.examData.records || []).filter(r => r.examId === e.id && r.classId === classId);
+    const names = [...new Set(recs.map(r => r.studentName))].filter(Boolean);
+    if (!names.length) return;
+    // 每位学生总分（score 类列求和）
+    const totalByStu = {};
+    recs.filter(r => r.colType !== 'rank').forEach(r => { totalByStu[r.studentName] = (totalByStu[r.studentName] || 0) + (+r.score || 0); });
+    // 班次排名（按总分）
+    const ranked = [...names].sort((a, b) => (totalByStu[b] || 0) - (totalByStu[a] || 0));
+    const classRankMap = {}; ranked.forEach((nm, i) => { classRankMap[nm] = i + 1; });
+    const classSize = names.length;
+    // 单科记录分组（用于单科最高分）
+    const bySubj = {};
+    recs.filter(r => r.colType !== 'rank').forEach(r => { (bySubj[r.subject] = bySubj[r.subject] || []).push(r); });
+    // 各 scope 下的单科最高分集合：subject -> 最高分学生集合
+    const topOf = {};
+    Object.keys(bySubj).forEach(sub => {
+      const arr = bySubj[sub];
+      const max = Math.max(...arr.map(r => +r.score || 0));
+      if (max <= 0) return;
+      const winners = new Set(arr.filter(r => (+r.score || 0) === max).map(r => r.studentName));
+      if (cfg.subjectTop.scope === 'school') {
+        // 校内：跨所有班级同一次考试中该科目最高分（仅当本班为该科目最高时计入）
+        const allRecs = (state.examData.records || []).filter(r => r.examId === e.id && r.subject === sub && r.colType !== 'rank');
+        const allMax = Math.max(...allRecs.map(r => +r.score || 0));
+        if (max >= allMax) topOf[sub] = winners;
+      } else {
+        topOf[sub] = winners;
+      }
+    });
+    names.forEach(nm => {
+      let cr = 0, sr = 0, st = 0;
+      const classRank = classRankMap[nm] || null;
+      if (cfg.classRank.enabled && classRank) cr = classSize + 1 - classRank;
+      if (cfg.schoolRank.enabled && schoolCol) {
+        const rec = recs.find(r => r.studentName === nm && r.subject === schoolCol);
+        const rk = rec ? parseInt(rec.score, 10) : NaN;
+        if (!isNaN(rk)) sr = schoolTierPoints(rk, cfg.schoolRank.tiers);
+      }
+      const topSubs = [];
+      if (cfg.subjectTop.enabled) {
+        Object.keys(topOf).forEach(sub => { if (topOf[sub].has(nm)) { st += cfg.subjectTop.points; topSubs.push(sub); } });
+      }
+      const examTotal = cr + sr + st;
+      if (!out.students[nm]) out.students[nm] = { total: 0, exams: 0, byExam: [] };
+      out.students[nm].total += examTotal;
+      out.students[nm].exams += 1;
+      out.students[nm].byExam.push({
+        examId: e.id, examName: e.name, date: e.date,
+        totalScore: totalByStu[nm] || 0,
+        classRank, classRankPoints: cr,
+        schoolRankVal: (() => { const rec = recs.find(r => r.studentName === nm && r.subject === schoolCol); return rec ? parseInt(rec.score, 10) : null; })(),
+        schoolRankPoints: sr,
+        topSubjects: topSubs, subjectTopPoints: st,
+        examTotal
+      });
+    });
+  });
+  return out;
+}
+// 带缓存的派生数据（输入变化时才重算）
+let _escCache = null, _escSig = '';
+function examScoreData() {
+  const sig = JSON.stringify({
+    a: state.activeClass,
+    s: state.points.calcStartDate,
+    ex: state.examData.exams,
+    rc: state.examData.records,
+    st: (state.students || []).map(x => x.name + '|' + x.class),
+    cols: (state.examData.columns || []).map(c => c.key + c.type + (c.enabled ? '1' : '0')),
+    cfg: state.examScore
+  });
+  if (_escSig === sig && _escCache) return _escCache;
+  _escSig = sig; _escCache = examScoreInRange();
+  return _escCache;
+}
+function examScoreStudentTotal(name) { const d = examScoreData(); const e = d.students[name]; return e ? e.total : 0; }
 function getStudentProgress(studentName, examId, subject) {
   const exams = state.examData.exams;
   const idx = exams.findIndex(e => e.id === examId);
@@ -3040,6 +3211,179 @@ function renderAttendance() {
       <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left text-gray-500 font-medium pb-2">日期</th><th class="text-left text-gray-500 font-medium pb-2">应到</th><th class="text-left text-gray-500 font-medium pb-2">实到</th><th class="text-left text-gray-500 font-medium pb-2">固定回家</th><th class="text-left text-gray-500 font-medium pb-2">请假</th><th class="text-left text-gray-500 font-medium pb-2">出勤率</th><th></th></tr></thead><tbody>${historyRows}</tbody></table></div>
     </div>
   </div>`;
+}
+
+// ===================== 考试赋分模块 =====================
+function renderExamScore() {
+  if (state.activeClass !== state.headTeacherClass) {
+    return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm">
+      <div class="text-5xl mb-4">📈</div>
+      <div class="font-bold text-gray-800 mb-2">考试赋分（仅班主任班 ${esc(state.headTeacherClass)}）</div>
+      <p class="text-sm text-gray-500 mb-5">当前为 ${esc(state.activeClass)}（任课视角）。考试赋分依据成绩分析自动计算，仅对班主任班生效。</p>
+      <button class="bg-primary text-white px-5 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="setActiveClass('${esc(state.headTeacherClass)}')">切换到 ${esc(state.headTeacherClass)}</button>
+    </div>`;
+  }
+  const cfg = state.examScore;
+  const es = examScoreData();
+  const start = state.points.calcStartDate || '2026-01-01';
+  const today = attDateKey(new Date());
+  const rankCols = examRankColumns().map(c => c.key);
+  const schoolKey = examSchoolRankColumnKey();
+  const rows = Object.keys(es.students).map(name => ({ name, ...es.students[name] }))
+    .sort((a, b) => b.total - a.total || String(a.name).localeCompare(String(b.name), 'zh'));
+  const classTotal = rows.reduce((a, b) => a + b.total, 0);
+
+  // 规则配置卡片
+  const tierRows = (cfg.schoolRank.tiers || []).map((t, i) => `
+    <div class="flex items-center gap-2 mb-1">
+      <span class="text-xs text-gray-500 w-12">前</span>
+      <input type="number" data-tier-upTo="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.upTo}">
+      <span class="text-xs text-gray-500">名及以内</span>
+      <input type="number" step="0.1" data-tier-points="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.points}">
+      <span class="text-xs text-gray-500">赋分</span>
+      <button class="text-gray-300 hover:text-red-500 text-sm px-1" onclick="examScoreRemoveTier(${i})">×</button>
+    </div>`).join('') || '<div class="text-xs text-gray-400">暂无区间</div>';
+
+  const rankColOpts = rankCols.length
+    ? rankCols.map(k => `<option value="${esc(k)}" ${k === (cfg.schoolRank.column || schoolKey) ? 'selected' : ''}>${esc(k)}</option>`).join('')
+    : '<option value="">（请先在「成绩管理-班级设置/管理列」添加 rank 列）</option>';
+
+  const rulesCard = `
+  <div class="bg-white rounded-2xl p-5 shadow-sm space-y-5">
+    <div class="flex items-center justify-between">
+      <div class="font-bold text-gray-800">⚙️ 赋分规则（可自由更改，立即生效）</div>
+    </div>
+    <p class="text-xs text-gray-500">规定日期：<b>${esc(start)}</b> 至 <b>${esc(today)}</b>（自首页「积分计算起始日」起）。仅统计 ${esc(state.activeClass)} 在成绩分析中上传的成绩。各次考试成绩积分之和，即为每位学生的考试赋分，并自动计入积分系统的「考试赋分」维度。</p>
+
+    <div class="border rounded-xl p-4">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="esClassRank" ${cfg.classRank.enabled ? 'checked' : ''} class="w-4 h-4 accent-primary">
+        <span class="font-medium text-gray-800">班次第 n 名</span>
+      </label>
+      <p class="text-xs text-gray-500 mt-1 ml-6">按当次考试总分在班内排名，赋分 = 班级参考人数 + 1 − 名次。</p>
+    </div>
+
+    <div class="border rounded-xl p-4 space-y-2">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="esSchoolEnabled" ${cfg.schoolRank.enabled ? 'checked' : ''} class="w-4 h-4 accent-primary">
+        <span class="font-medium text-gray-800">校次赋分（读取上传的校次列）</span>
+      </label>
+      <div class="ml-6 space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">校次列：</span>
+          <select id="esSchoolCol" class="border rounded-lg p-1.5 text-sm">${rankColOpts}</select>
+        </div>
+        <div class="text-xs text-gray-500">名次区间 → 赋分（按区间从小到大依次匹配）：</div>
+        <div id="esTierWrap">${tierRows}</div>
+        <button class="text-xs text-primary border border-primary px-3 py-1 rounded-full hover:bg-primary/5" onclick="examScoreAddTier()">+ 增加区间</button>
+      </div>
+    </div>
+
+    <div class="border rounded-xl p-4 space-y-2">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="esSubjectEnabled" ${cfg.subjectTop.enabled ? 'checked' : ''} class="w-4 h-4 accent-primary">
+        <span class="font-medium text-gray-800">单科最高分赋分</span>
+      </label>
+      <div class="ml-6 flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">每科第1名赋分</span>
+          <input type="number" step="0.1" id="esSubjectPoints" class="w-20 border rounded-lg p-1.5 text-sm" value="${cfg.subjectTop.points}">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">范围</span>
+          <select id="esSubjectScope" class="border rounded-lg p-1.5 text-sm">
+            <option value="class" ${cfg.subjectTop.scope === 'class' ? 'selected' : ''}>班内每科第1名</option>
+            <option value="school" ${cfg.subjectTop.scope === 'school' ? 'selected' : ''}>校内每科第1名</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <button class="bg-primary text-white px-5 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveExamScoreRules()">保存规则</button>
+  </div>`;
+
+  // 结果列表
+  const resultRows = rows.length ? rows.map((r, i) => {
+    const detailInner = r.byExam.length ? `
+      <div class="overflow-x-auto p-2 bg-gray-50">
+        <table class="w-full text-xs">
+          <thead><tr class="text-gray-400">
+            <th class="text-left p-1">考试</th><th class="text-right p-1">总分</th><th class="text-right p-1">班次名</th>
+            <th class="text-right p-1">班次赋分</th><th class="text-right p-1">校次</th><th class="text-right p-1">校次赋分</th>
+            <th class="text-left p-1">单科最高分</th><th class="text-right p-1">单科赋分</th><th class="text-right p-1">本次合计</th>
+          </tr></thead>
+          <tbody>
+            ${r.byExam.map(b => `<tr class="border-t border-gray-100">
+              <td class="p-1">${esc(b.examName)}${b.date ? ` <span class="text-gray-300">${esc(b.date)}</span>` : ''}</td>
+              <td class="text-right p-1">${fmtScore(b.totalScore)}</td>
+              <td class="text-right p-1">${b.classRank != null ? b.classRank : '—'}</td>
+              <td class="text-right p-1 text-sky-600">${fmtScore(b.classRankPoints)}</td>
+              <td class="text-right p-1">${b.schoolRankVal != null ? b.schoolRankVal : '—'}</td>
+              <td class="text-right p-1 text-sky-600">${fmtScore(b.schoolRankPoints)}</td>
+              <td class="p-1">${b.topSubjects.length ? esc(b.topSubjects.join('、')) : '—'}</td>
+              <td class="text-right p-1 text-sky-600">${fmtScore(b.subjectTopPoints)}</td>
+              <td class="text-right p-1 font-medium">${fmtScore(b.examTotal)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '<div class="p-2 text-xs text-gray-400">该生在规定日期内暂无考试成绩</div>';
+    return `
+    <tbody>
+      <tr class="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <td class="p-3 w-10 text-gray-400">${i + 1}</td>
+        <td class="p-3 font-medium text-gray-800">${esc(r.name)}</td>
+        <td class="p-3 text-right font-bold text-sky-600">${fmtScore(r.total)}</td>
+        <td class="p-3 text-right text-xs text-gray-400">${r.exams} 次</td>
+      </tr>
+      <tr class="hidden"><td class="p-0" colspan="4">${detailInner}</td></tr>
+    </tbody>`;
+  }).join('') : '<div class="text-sm text-gray-400 p-6 text-center">暂无学生或暂无规定日期内的考试成绩</div>';
+
+  return `
+  <div class="space-y-5">
+    ${rulesCard}
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800">📈 考试赋分结果（${esc(state.activeClass)}）</div>
+        <div class="text-sm text-gray-500">全班合计 <b class="text-sky-600">${fmtScore(classTotal)}</b> 分 · 已计入积分「考试赋分」维度</div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="text-gray-400 text-xs">
+            <th class="text-left p-3 w-10">#</th><th class="text-left p-3">学生</th>
+            <th class="text-right p-3">考试赋分</th><th class="text-right p-3">参考次数</th>
+          </tr></thead>
+          ${resultRows}
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+function examScoreAddTier() {
+  state.examScore.schoolRank.tiers.push({ upTo: 100, points: 1 });
+  save(); render();
+}
+function examScoreRemoveTier(i) {
+  state.examScore.schoolRank.tiers.splice(i, 1);
+  save(); render();
+}
+function saveExamScoreRules() {
+  const g = id => document.getElementById(id);
+  state.examScore.classRank.enabled = !!g('esClassRank').checked;
+  state.examScore.schoolRank.enabled = !!g('esSchoolEnabled').checked;
+  state.examScore.schoolRank.column = g('esSchoolCol').value;
+  const tiers = [];
+  document.querySelectorAll('[data-tier-upTo]').forEach(el => {
+    const i = +el.dataset.tierUpTo;
+    const p = document.querySelector(`[data-tier-points="${i}"]`);
+    tiers.push({ upTo: +el.value || 99999, points: +p.value || 0 });
+  });
+  state.examScore.schoolRank.tiers = tiers;
+  state.examScore.subjectTop.enabled = !!g('esSubjectEnabled').checked;
+  state.examScore.subjectTop.points = +g('esSubjectPoints').value || 0;
+  state.examScore.subjectTop.scope = g('esSubjectScope').value;
+  save(); render();
+  toast('考试赋分规则已保存');
 }
 
 function renderExam() {
