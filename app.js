@@ -4292,12 +4292,11 @@ function doExamImportWizard() {
 
 // ---------- 成绩分析看板 ----------
 let anSelExams = [], anSelSubjects = [], anSelClasses = [], anSelStudents = [];
+let anHasRun = false;
 function ensureAnalysisSel() {
-  if (!anSelExams.length) anSelExams = state.examData.exams.map(e => e.id);
-  if (!anSelSubjects.length) anSelSubjects = examScoreColumns().map(c => c.key);
-  if (!anSelClasses.length) anSelClasses = state.examData.classes.map(c => c.id);
+  // 不再默认全选；由用户手动选择后点击「开始分析」
 }
-function isAnChecked(arr, val) { return arr.length ? arr.includes(val) : true; }
+function isAnChecked(arr, val) { return arr.includes(val); }
 function collectFilters() {
   anSelExams = Array.from(document.querySelectorAll('.an-exam:checked')).map(b => b.value);
   anSelSubjects = Array.from(document.querySelectorAll('.an-sub:checked')).map(b => b.value);
@@ -4309,6 +4308,23 @@ function toggleFilter(group) {
   const every = all.length && all.every(b => b.checked);
   all.forEach(b => b.checked = !every);
   collectFilters();
+  // 不自动渲染，等待用户点击「开始分析」
+}
+function startExamAnalysis() {
+  collectFilters();
+  const hasScoreSub = anSelSubjects.some(s => { const c = examColumnByKey(s); return c && c.type === 'score'; });
+  if (!anSelExams.length || !anSelClasses.length || !hasScoreSub) {
+    const empty = document.getElementById('anEmptyTip');
+    const results = document.getElementById('anResults');
+    if (empty) {
+      empty.style.display = '';
+      empty.innerHTML = `<div class="text-4xl mb-3">⚠️</div><div class="font-bold text-gray-800">${!anSelExams.length ? '请至少选择一项考试' : !anSelClasses.length ? '请至少选择一个班级' : '请至少选择一个科目'}</div><p class="text-sm text-gray-500 mt-2">选好后再点「开始分析」。</p>`;
+    }
+    if (results) results.style.display = 'none';
+    return;
+  }
+  anHasRun = true;
+  const emptyOk = document.getElementById('anEmptyTip'); if (emptyOk) emptyOk.style.display = 'none';
   renderExamAnalysisInto();
 }
 function examAvgInExams(subject, classId, examIds) {
@@ -4326,10 +4342,10 @@ function renderExamAnalysis() {
   ensureAnalysisSel();
   const cols = examColumns().filter(c => c.enabled);
   const examStu = [...new Set(state.examData.records.filter(r => anSelExams.includes(r.examId) && (state.students||[]).some(s => s.name === r.studentName)).map(r => r.studentName))];
-  const examChk = state.examData.exams.map(e => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-exam" value="${e.id}" ${isAnChecked(anSelExams, e.id) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(e.name)}</label>`).join('');
-  const subChk = cols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-sub" value="${esc(c.key)}" ${isAnChecked(anSelSubjects, c.key) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</label>`).join('');
-  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" ${isAnChecked(anSelClasses, c.id) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(c.name)}</label>`).join('');
-  const stuChk = examStu.map(n => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-stu" value="${esc(n)}" ${anSelStudents.includes(n) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(n)}</label>`).join('');
+  const examChk = state.examData.exams.map(e => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-exam" value="${e.id}" ${isAnChecked(anSelExams, e.id) ? 'checked' : ''} onchange="collectFilters();"> ${esc(e.name)}</label>`).join('');
+  const subChk = cols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-sub" value="${esc(c.key)}" ${isAnChecked(anSelSubjects, c.key) ? 'checked' : ''} onchange="collectFilters();"> ${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</label>`).join('');
+  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" ${isAnChecked(anSelClasses, c.id) ? 'checked' : ''} onchange="collectFilters();"> ${esc(c.name)}</label>`).join('');
+  const stuChk = examStu.map(n => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-stu" value="${esc(n)}" ${anSelStudents.includes(n) ? 'checked' : ''} onchange="collectFilters();"> ${esc(n)}</label>`).join('');
   const selBtn = (g) => `<button type="button" class="text-xs px-2.5 py-1.5 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-primary/50" onclick="toggleFilter('${g}')">全选</button>`;
   const colBtn = (key, label, icon) => {
     const on = examAnalysisColumns[key];
@@ -4347,6 +4363,7 @@ function renderExamAnalysis() {
         <div class="font-bold text-gray-800">🔎 筛选条件</div>
         <div class="flex gap-2">
           ${selBtn('an-exam')} ${selBtn('an-sub')} ${selBtn('an-cls')} ${selBtn('an-stu')}
+          <button type="button" class="text-white px-4 py-1.5 rounded-full text-xs bg-primary" onclick="startExamAnalysis()">▶ 开始分析</button>
           <button type="button" class="text-white px-4 py-1.5 rounded-full text-xs" style="background:linear-gradient(135deg,#f472b6,#ec4899)" onclick="renderExamAnalysisInto()">刷新</button>
         </div>
       </div>
@@ -4376,6 +4393,7 @@ function renderExamAnalysis() {
       </div>
     </div>
 
+    <div id="anEmptyTip" class="bg-white rounded-2xl p-10 text-center shadow-sm text-gray-400">请选择考试、班级与科目，然后点击「开始分析 / 对比」。</div>
     <div id="anSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
