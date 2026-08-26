@@ -3101,6 +3101,8 @@ let examSelectedStudent = ''; // 当前在榜单中选中的学生
 // 智能导入向导状态
 let eiBook = null, eiSheets = [], eiSheetName = '', eiRows = [], eiHeaders = [];
 let eiNameCol = -1, eiClassCol = -1, eiColMap = {}, eiHeaderRow = 1, eiExamId = '';
+// 成绩查询页状态（仅 UI 偏好，不持久化）
+let eqExamId = '', eqClassIds = [], eqSearch = '';
 // 公示列开关（仅 UI 偏好，不持久化）
 let examAnalysisColumns = {
   score: true,
@@ -3795,6 +3797,7 @@ function saveExamScoreRules() {
 
 function renderExam() {
   const tabs = [
+    { id: 'query', label: '📋 成绩查询' },
     { id: 'analysis', label: '📊 成绩分析' },
     { id: 'upload', label: '📥 成绩上传' },
     { id: 'settings', label: '🏫 班级设置' },
@@ -3803,6 +3806,7 @@ function renderExam() {
   let body = '';
   if (examTab === 'upload') body = renderExamUpload();
   else if (examTab === 'settings') body = renderExamSettings();
+  else if (examTab === 'query') body = renderExamQuery();
   else body = renderExamAnalysis();
   return `
   <div class="space-y-5">
@@ -3890,10 +3894,8 @@ function renderExamUpload() {
         <h3 class="font-bold text-gray-800">📥 批量导入成绩（多科目 / 多列）</h3>
         <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openColumnManager()">⚙️ 管理列</button>
       </div>
-      <p class="text-[11px] text-gray-400">支持多工作表 Excel：选工作表 → 识别标题 → 将各列映射到「科目 / 预设列」→ 一键导入全部列。重导同次考试自动覆盖。</p>
-      <button class="w-full bg-primary text-white py-2.5 rounded-full text-sm hover:bg-primaryDark" onclick="openExamImportWizard()">🚀 打开智能导入向导</button>
-      <button class="w-full mt-2 bg-emerald-600 text-white py-2.5 rounded-full text-sm hover:bg-emerald-700" onclick="openProductImport()">📦 导入工具成品成绩（来自处理工具）</button>
-      <p class="text-[11px] text-gray-400 leading-relaxed">「成品成绩」为处理工具导出的固定格式 CSV：系统自动识别列、按文件名建考试，并<b>按「班级 + 姓名」与「学生管理」逐一匹配</b>后保存；班级或姓名对不上的数据会列出并跳过，绝不会混进其他班级。</p>
+      <button class="w-full bg-emerald-600 text-white py-2.5 rounded-full text-sm hover:bg-emerald-700" onclick="openProductImport()">📦 导入工具成品成绩</button>
+      <p class="text-[11px] text-gray-400 leading-relaxed">请先用上方「考试管理」添加考试名称和日期，再点此导入。系统会按文件名自动匹配到同名同日的考试；若匹配不上，会新建一个考试。导入时按「班级 + 姓名」与「学生管理」逐一匹配后保存，对不上的数据会列出并跳过。</p>
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
@@ -3963,11 +3965,18 @@ function parseExamNameFromFilename(fn) {
 }
 function autoCreateExamFromFilename(fn) {
   const info = parseExamNameFromFilename(fn);
-  if (!info.name && !info.date) return;
-  const ex = state.examData.exams.find(e => e.name === info.name && (e.date || '') === (info.date || ''));
-  if (!ex) state.examData.exams.push({ id: uid(), name: info.name, date: info.date });
-  const target = ex || state.examData.exams[state.examData.exams.length - 1];
-  eiExamId = target.id;
+  if (!info.name && !info.date) return null;
+  let ex = state.examData.exams.find(e => e.name === info.name && (e.date || '') === (info.date || ''));
+  if (!ex && info.name) {
+    // 日期有一方为空时，按名称匹配，避免“手动建了期中无日期，导入文件名含日期”产生重复
+    ex = state.examData.exams.find(e => e.name === info.name && (!(e.date || '') || !info.date));
+  }
+  if (!ex) {
+    state.examData.exams.push({ id: uid(), name: info.name, date: info.date });
+    ex = state.examData.exams[state.examData.exams.length - 1];
+  }
+  eiExamId = ex.id;
+  return ex;
 }
 function openExamImportWizard() {
   eiBook = null; eiSheets = []; eiSheetName = ''; eiRows = []; eiHeaders = [];
@@ -4450,43 +4459,80 @@ function doProductImport() {
   alert(msg);
 }
 
+// ---------- 成绩查询 ----------
+function renderExamQuery() {
+  const exams = state.examData.exams;
+  if (!exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📋</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
+  if (!eqExamId || !exams.find(e => e.id === eqExamId)) eqExamId = exams[exams.length - 1].id;
+  const examOpts = exams.map(e => `<option value="${e.id}" ${e.id === eqExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+  if (!eqClassIds.length) eqClassIds = state.examData.classes.map(c => c.id);
+  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
+  return `
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">选择考试</label>
+          <select id="eqExam" class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">班级</label>
+          <div class="flex flex-wrap gap-2">${clsChk}</div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">搜索学生姓名</label>
+          <input id="eqSearch" type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
+        </div>
+      </div>
+    </div>
+    <div id="eqTableWrap">${renderExamQueryTable()}</div>
+  </div>`;
+}
+function eqCollect() {
+  eqExamId = document.getElementById('eqExam').value;
+  eqClassIds = Array.from(document.querySelectorAll('.eq-cls:checked')).map(b => b.value);
+  eqSearch = (document.getElementById('eqSearch').value || '').trim();
+  const wrap = document.getElementById('eqTableWrap');
+  if (wrap) wrap.innerHTML = renderExamQueryTable();
+}
+function renderExamQueryTable() {
+  if (!eqExamId) return '<p class="text-sm text-gray-400">请选择考试。</p>';
+  const cols = examColumns().filter(c => c.enabled);
+  if (!cols.length) return '<p class="text-sm text-gray-400">还没有配置成绩列，请到「班级设置 → 管理列」添加。</p>';
+  const records = state.examData.records.filter(r => r.examId === eqExamId && eqClassIds.includes(r.classId));
+  const rows = [];
+  const seen = new Set();
+  records.forEach(r => {
+    const key = r.classId + '|' + r.studentName;
+    if (!r.studentName || seen.has(key)) return;
+    seen.add(key);
+    if (eqSearch && !r.studentName.includes(eqSearch)) return;
+    rows.push({ classId: r.classId, name: r.studentName });
+  });
+  rows.sort((a, b) => a.classId.localeCompare(b.classId) || a.name.localeCompare(b.name));
+  if (!rows.length) return `<p class="text-sm text-gray-400 text-center py-10">没有找到匹配的学生。</p>`;
+  const ths = ['<th class="py-2 pl-2 text-left">班级</th>', '<th class="py-2 text-left">姓名</th>'];
+  cols.forEach(c => ths.push(`<th class="py-2 text-right">${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</th>`));
+  const tbody = rows.map(row => {
+    const vals = cols.map(c => {
+      const rec = records.find(r => r.classId === row.classId && r.studentName === row.name && r.subject === c.key);
+      const v = rec ? rec.score : '';
+      return `<td class="py-1.5 ${c.type === 'rank' ? 'text-blue-600' : ''} text-right">${v === '' || v === undefined || v === null ? '—' : esc(String(v))}</td>`;
+    }).join('');
+    return `<tr class="border-t hover:bg-gray-50"><td class="py-1.5 pl-2">${esc(row.classId)}</td><td class="py-1.5">${esc(row.name)}</td>${vals}</tr>`;
+  }).join('');
+  return `<div class="bg-white rounded-2xl p-5 shadow-sm overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-100 text-gray-600 text-left">${ths.join('')}</tr></thead><tbody>${tbody}</tbody></table></div>`;
+}
+
 // ---------- 成绩分析看板 ----------
 let anSelExams = [], anSelSubjects = [], anSelClasses = [], anSelStudents = [];
 let anHasRun = false;
-function ensureAnalysisSel() {
-  // 不再默认全选；由用户手动选择后点击「开始分析」
-}
+// 成绩分析已简化为「个人趋势」与「两班同类型列对比」两个手动触发入口，不再默认勾选/自动全量计算。
+function ensureAnalysisSel() {}
 function isAnChecked(arr, val) { return arr.includes(val); }
-function collectFilters() {
-  anSelExams = Array.from(document.querySelectorAll('.an-exam:checked')).map(b => b.value);
-  anSelSubjects = Array.from(document.querySelectorAll('.an-sub:checked')).map(b => b.value);
-  anSelClasses = Array.from(document.querySelectorAll('.an-cls:checked')).map(b => b.value);
-  anSelStudents = Array.from(document.querySelectorAll('.an-stu:checked')).map(b => b.value);
-}
-function toggleFilter(group) {
-  const all = Array.from(document.querySelectorAll('.' + group));
-  const every = all.length && all.every(b => b.checked);
-  all.forEach(b => b.checked = !every);
-  collectFilters();
-  // 不自动渲染，等待用户点击「开始分析」
-}
-function startExamAnalysis() {
-  collectFilters();
-  const hasScoreSub = anSelSubjects.some(s => { const c = examColumnByKey(s); return c && c.type === 'score'; });
-  if (!anSelExams.length || !anSelClasses.length || !hasScoreSub) {
-    const empty = document.getElementById('anEmptyTip');
-    const results = document.getElementById('anResults');
-    if (empty) {
-      empty.style.display = '';
-      empty.innerHTML = `<div class="text-4xl mb-3">⚠️</div><div class="font-bold text-gray-800">${!anSelExams.length ? '请至少选择一项考试' : !anSelClasses.length ? '请至少选择一个班级' : '请至少选择一个科目'}</div><p class="text-sm text-gray-500 mt-2">选好后再点「开始分析」。</p>`;
-    }
-    if (results) results.style.display = 'none';
-    return;
-  }
-  anHasRun = true;
-  const emptyOk = document.getElementById('anEmptyTip'); if (emptyOk) emptyOk.style.display = 'none';
-  renderExamAnalysisInto();
-}
+function collectFilters() {}
+function toggleFilter(group) {}
+function startExamAnalysis() {}
 function examAvgInExams(subject, classId, examIds) {
   const rs = state.examData.records.filter(r => examIds.includes(r.examId) && r.classId === classId && r.subject === subject && r.colType !== 'rank');
   if (!rs.length) return null;
@@ -4499,273 +4545,63 @@ function examGradeAvg(examId, subject, classIds) {
 }
 function renderExamAnalysis() {
   if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
-  ensureAnalysisSel();
   const cols = examColumns().filter(c => c.enabled);
-  const examStu = [...new Set(state.examData.records.filter(r => anSelExams.includes(r.examId) && (state.students||[]).some(s => s.name === r.studentName)).map(r => r.studentName))];
-  const examChk = state.examData.exams.map(e => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-exam" value="${e.id}" ${isAnChecked(anSelExams, e.id) ? 'checked' : ''} onchange="collectFilters();"> ${esc(e.name)}</label>`).join('');
-  const subChk = cols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-sub" value="${esc(c.key)}" ${isAnChecked(anSelSubjects, c.key) ? 'checked' : ''} onchange="collectFilters();"> ${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</label>`).join('');
-  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" ${isAnChecked(anSelClasses, c.id) ? 'checked' : ''} onchange="collectFilters();"> ${esc(c.name)}</label>`).join('');
-  const stuChk = examStu.map(n => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-stu" value="${esc(n)}" ${anSelStudents.includes(n) ? 'checked' : ''} onchange="collectFilters();"> ${esc(n)}</label>`).join('');
-  const selBtn = (g) => `<button type="button" class="text-xs px-2.5 py-1.5 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-primary/50" onclick="toggleFilter('${g}')">全选</button>`;
-  const colBtn = (key, label, icon) => {
-    const on = examAnalysisColumns[key];
-    return `<button type="button" onclick="toggleExamCol('${key}')" class="text-xs px-2.5 py-1.5 rounded-full border transition ${on ? 'bg-primary text-white border-primary' : 'bg-white text-gray-600 border-gray-200 hover:border-primary/50'}">${icon} ${label}</button>`;
-  };
+  const colOpts = cols.map(c => `<option value="${esc(c.key)}">${esc(c.key)}${c.type === 'rank' ? '（排名）' : ''}</option>`).join('');
   return `
   <div class="space-y-4">
-    <div class="flex flex-wrap items-center gap-2">
-      <button class="text-sm px-4 py-2 rounded-full bg-primary text-white hover:bg-primaryDark" onclick="examQuickCompareClasses()">📊 对比两班均分</button>
-      <button class="text-sm px-4 py-2 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="examQuickPersonalTrend()">👤 个人趋势</button>
-      <span class="text-xs text-gray-400">快捷入口：一键套用对比模板</span>
-    </div>
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
-      <div class="flex items-center justify-between flex-wrap gap-2">
-        <div class="font-bold text-gray-800">🔎 筛选条件</div>
-        <div class="flex gap-2">
-          ${selBtn('an-exam')} ${selBtn('an-sub')} ${selBtn('an-cls')} ${selBtn('an-stu')}
-          <button type="button" class="text-white px-4 py-1.5 rounded-full text-xs bg-primary" onclick="startExamAnalysis()">▶ 开始分析</button>
-          <button type="button" class="text-white px-4 py-1.5 rounded-full text-xs" style="background:linear-gradient(135deg,#f472b6,#ec4899)" onclick="renderExamAnalysisInto()">刷新</button>
-        </div>
+      <div class="font-bold text-gray-800">👤 个人趋势</div>
+      <p class="text-xs text-gray-400">输入学生姓名，选择要看的一列（分数或排名），系统会列出该生历次考试的数据。</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input id="anStuName" type="text" class="border rounded-lg p-2 text-sm" placeholder="学生姓名，如：张明轩" onkeydown="if(event.key==='Enter')anRunPersonal()">
+        <select id="anStuCol" class="border rounded-lg p-2 text-sm">${colOpts}</select>
+        <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="anRunPersonal()">查看趋势</button>
       </div>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div>
-          <label class="text-xs font-semibold text-gray-500 mb-1 block">考试（可多选，看单次 / 多次对比）</label>
-          <div class="flex flex-wrap gap-2" id="anExamWrap">${examChk}</div>
-        </div>
-        <div>
-          <label class="text-xs font-semibold text-gray-500 mb-1 block">科目 / 预设列（可手动维护）</label>
-          <div class="flex flex-wrap gap-2 items-center" id="anSubWrap">${subChk}
-            <button type="button" class="text-xs text-primary border border-primary px-2 py-1 rounded-full hover:bg-primary/5" onclick="openColumnManager()">⚙️ 管理列</button>
-          </div>
-        </div>
-        <div>
-          <label class="text-xs font-semibold text-gray-500 mb-1 block">班级（1~2 个对比最佳）</label>
-          <div class="flex flex-wrap gap-2" id="anClsWrap">${clsChk}</div>
-        </div>
-        <div>
-          <label class="text-xs font-semibold text-gray-500 mb-1 block">学生（多选看个人，不选则全班）</label>
-          <div class="flex flex-wrap gap-2 max-h-24 overflow-y-auto" id="anStuWrap">${stuChk || '<span class="text-xs text-gray-400">暂无记录</span>'}</div>
-        </div>
-      </div>
-      <div class="flex gap-3 items-end">
-        <div><label class="block text-xs text-gray-500 mb-1">及格线</label><input id="anPass" type="number" value="72" class="border rounded-lg p-2 text-sm w-20"></div>
-        <div><label class="block text-xs text-gray-500 mb-1">优秀线</label><input id="anGood" type="number" value="96" class="border rounded-lg p-2 text-sm w-20"></div>
-      </div>
-    </div>
-
-    <div id="anEmptyTip" class="bg-white rounded-2xl p-10 text-center shadow-sm text-gray-400">请选择考试、班级与科目，然后点击「开始分析 / 对比」。</div>
-    <div id="anSummary" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div class="lg:col-span-2 bg-white rounded-2xl p-5 shadow-sm"><canvas id="anCmpChart" height="170"></canvas></div>
-      <div class="bg-white rounded-2xl p-5 shadow-sm"><canvas id="anTrendChart" height="170"></canvas></div>
+      <div id="anPersonalWrap"><p class="text-sm text-gray-400 pt-2">输入学生姓名并选择列后，点击「查看趋势」。</p></div>
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="font-bold text-gray-800">🧮 显示列</div>
-        <div class="text-xs text-gray-400">点选在下方明细表显示（分数列默认显示）</div>
+      <div class="font-bold text-gray-800">📊 两班同类型列对比</div>
+      <p class="text-xs text-gray-400">选择一列（如语文、数学、校次、县次等），系统会用柱状图对比 9 班和 10 班在该列上的平均值。</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <select id="anCmpCol" class="border rounded-lg p-2 text-sm">${colOpts}</select>
+        <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="anRunCompare()">对比两班</button>
       </div>
-      <div class="flex flex-wrap gap-2">
-        ${colBtn('classRank', '班级排名', '🏫')} ${colBtn('gradeRank', '年级排名', '🎓')} ${colBtn('grade', '等级', '🏅')} ${colBtn('pass', '是否及格', '✅')} ${colBtn('good', '是否优秀', '⭐')} ${colBtn('classAvgDiff', '与班均分差', '📐')} ${colBtn('gradeAvgDiff', '与年段均分差', '📏')} ${colBtn('totalScore', '累计总分', '➕')} ${colBtn('totalRank', '累计总分排名', '🏆')}
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead><tr class="text-gray-500 border-b text-left" id="anPreviewHead"></tr></thead>
-          <tbody id="anPreviewBody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="bg-white rounded-2xl p-5 shadow-sm">
-      <div class="font-bold text-gray-800 mb-3">👤 个人趋势</div>
-      <div id="anPersonalWrap"><p class="text-sm text-gray-400">请在成绩预览表中点击一名学生</p></div>
+      <div id="anCompareWrap"><p class="text-sm text-gray-400 pt-2">选择一列后，点击「对比两班」。</p></div>
     </div>
   </div>`;
 }
-function renderExamAnalysisInto() {
-  collectFilters();
-  ensureAnalysisSel();
-  const passEl = document.getElementById('anPass'); const goodEl = document.getElementById('anGood');
-  const pass = passEl ? +(passEl.value || 72) : 72;
-  const good = goodEl ? +(goodEl.value || 96) : 96;
-  const exams = anSelExams.map(examById).filter(Boolean);
-  const classes = state.examData.classes.filter(c => anSelClasses.includes(c.id));
-  const scoreSubs = anSelSubjects.filter(s => { const c = examColumnByKey(s); return c && c.type === 'score'; });
-  const rankSubs = anSelSubjects.filter(s => { const c = examColumnByKey(s); return c && c.type === 'rank'; });
-  if (!exams.length || !classes.length) return;
-  const mainSub = scoreSubs[0];
-
-  // KPI 池（score 类，所选考试+班级，可选学生）
-  let pool = state.examData.records.filter(r => anSelExams.includes(r.examId) && anSelClasses.includes(r.classId) && scoreSubs.includes(r.subject) && r.colType !== 'rank');
-  if (anSelStudents.length) pool = pool.filter(r => anSelStudents.includes(r.studentName));
-  const allScores = pool.map(r => +r.score);
-  const refCount = new Set(pool.map(r => r.studentName)).size;
-  const avg = allScores.length ? allScores.reduce((a, b) => a + b, 0) / allScores.length : null;
-  const max = allScores.length ? Math.max(...allScores) : null;
-  const min = allScores.length ? Math.min(...allScores) : null;
-  const passRate = allScores.length ? allScores.filter(s => s >= pass).length / allScores.length : null;
-  const goodRate = allScores.length ? allScores.filter(s => s >= good).length / allScores.length : null;
-
-  const mkCard = (label, value, sub) => `<div class="bg-white rounded-xl p-4 shadow-sm text-center"><div class="text-xs text-gray-500 mb-1">${label}</div><div class="text-xl font-bold text-gray-800">${value}</div>${sub ? `<div class="text-[10px] text-gray-400 mt-0.5">${sub}</div>` : ''}</div>`;
-  const fmtN = a => a == null ? '—' : a.toFixed(1);
-  const fmtPct = a => a == null ? '—' : (a * 100).toFixed(1) + '%';
-  const summaryEl = document.getElementById('anSummary');
-  if (summaryEl) summaryEl.innerHTML = `
-    ${mkCard('参考人数', refCount, `${classes.length}班·${exams.length}考`)}
-    ${mkCard('平均分', fmtN(avg), scoreSubs.map(s => s).join('/') || '—')}
-    ${mkCard('最高分', max == null ? '—' : max, '')}
-    ${mkCard('最低分', min == null ? '—' : min, '')}
-    ${mkCard('及格率', fmtPct(passRate), `≥${pass}`)}
-    ${mkCard('优秀率', fmtPct(goodRate), `≥${good}`)}
-  `;
-
-  // 对比图：每 score 科目一条数据集（班均分）
-  if (window._anCmpChart) try { window._anCmpChart.destroy(); } catch (e) { }
-  const cmpCtx = document.getElementById('anCmpChart');
-  if (cmpCtx) {
-    const labels = classes.map(c => c.name);
-    const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
-    const datasets = scoreSubs.map((s, i) => ({
-      label: s, data: classes.map(c => { const a = examAvgInExams(s, c.id, anSelExams); return a == null ? 0 : a; }), backgroundColor: colors[i % colors.length]
-    }));
-    window._anCmpChart = new Chart(cmpCtx.getContext('2d'), {
-      type: 'bar',
-      data: { labels, datasets },
-      options: { responsive: true, plugins: { title: { display: true, text: '各班平均分对比（按所选科目）' } }, scales: { y: { beginAtZero: true } } }
-    });
-  }
-
-  // 趋势图：每班一条线（mainSub 班均分，按所选考试）
-  if (window._anTrendChart) try { window._anTrendChart.destroy(); } catch (e) { }
-  const trCtx = document.getElementById('anTrendChart');
-  if (trCtx) {
-    const labels = exams.map(e => e.name);
-    const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24'];
-    const datasets = classes.map((c, idx) => ({
-      label: c.name,
-      data: exams.map(e => { const a = examAvg(e.id, c.id, mainSub); return a == null ? null : a; }),
-      borderColor: colors[idx % colors.length], backgroundColor: colors[idx % colors.length] + '20', fill: false, tension: .3
-    }));
-    window._anTrendChart = new Chart(trCtx.getContext('2d'), {
-      type: 'line',
-      data: { labels, datasets },
-      options: { responsive: true, plugins: { title: { display: true, text: mainSub ? mainSub + ' 平均分走势' : '平均分走势' } }, scales: { y: { beginAtZero: false } } }
-    });
-  }
-
-  // 明细表
-  const lastExam = exams[exams.length - 1];
-  const studentSet = new Set();
-  state.examData.records.filter(r => anSelExams.includes(r.examId) && anSelClasses.includes(r.classId)).forEach(r => {
-    if (anSelStudents.length && !anSelStudents.includes(r.studentName)) return;
-    // 仅显示学生管理中「班级 + 姓名」均命中的记录（与导入时的匹配口径一致）
-    const st = (state.students || []).find(s => s.name === r.studentName && s.class === r.classId);
-    if (!st) return;
-    studentSet.add(r.studentName);
-  });
-  const studentList = [...studentSet];
-
-  const buildRow = (name) => {
-    const myClass = classes.find(c => examStudentsOfClass(c.name).includes(name)) || state.examData.classes.find(c => examStudentsOfClass(c.name).includes(name));
-    const classId = myClass ? myClass.id : null;
-    const colVals = {};
-    scoreSubs.forEach(s => {
-      const rs = state.examData.records.filter(r => anSelExams.includes(r.examId) && r.classId === classId && r.studentName === name && r.subject === s && r.colType !== 'rank');
-      colVals[s] = rs.length ? rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length : null;
-    });
-    rankSubs.forEach(s => {
-      const rs = state.examData.records.filter(r => anSelExams.includes(r.examId) && r.classId === classId && r.studentName === name && r.subject === s && r.colType === 'rank');
-      colVals[s] = rs.length ? rs[rs.length - 1].score : null;
-    });
-    let curScore = null, prevScore = null, classRank = null, gradeRank = null, grade = null, gradeLabel = null, classAvgDiff = null, gradeAvgDiff = null, totalScore = null, totalRank = null;
-    if (mainSub && classId) {
-      const cur = state.examData.records.find(r => r.examId === lastExam.id && r.classId === classId && r.studentName === name && r.subject === mainSub && r.colType !== 'rank');
-      if (cur) {
-        curScore = +cur.score;
-        classRank = examClassRank(lastExam.id, classId, name, mainSub);
-        gradeRank = examGradeRank(lastExam.id, name, mainSub, anSelClasses);
-        grade = scoreToGrade(curScore, pass, good);
-        gradeLabel = scoreToGradeLabel(curScore, pass, good);
-        const cavg = examAvg(lastExam.id, classId, mainSub);
-        classAvgDiff = cavg == null ? null : curScore - cavg;
-        const gavg = examGradeAvg(lastExam.id, mainSub, anSelClasses);
-        gradeAvgDiff = gavg == null ? null : curScore - gavg;
-        totalScore = examTotalScore(name, mainSub);
-        totalRank = examTotalRank(name, mainSub, anSelClasses);
-        for (let i = exams.length - 2; i >= 0; i--) {
-          const pr = state.examData.records.find(r => r.examId === exams[i].id && r.classId === classId && r.studentName === name && r.subject === mainSub && r.colType !== 'rank');
-          if (pr) { prevScore = +pr.score; break; }
-        }
-      }
-    }
-    return { name, className: myClass ? myClass.name : '', colVals, curScore, prevScore, classRank, gradeRank, grade, gradeLabel, classAvgDiff, gradeAvgDiff, totalScore, totalRank };
-  };
-
-  let previewRows = studentList.map(buildRow);
-  previewRows.sort((a, b) => (b.curScore == null ? -1e9 : b.curScore) - (a.curScore == null ? -1e9 : a.curScore));
-
-  const headCells = ['<th class="py-2 pl-2">排名</th>', '<th class="py-2">姓名</th>', '<th class="py-2">班级</th>'];
-  scoreSubs.forEach(s => headCells.push(`<th class="py-2">${esc(s)}均</th>`));
-  rankSubs.forEach(s => headCells.push(`<th class="py-2">${esc(s)}</th>`));
-  if (examAnalysisColumns.classRank) headCells.push('<th class="py-2">班级排名</th>');
-  if (examAnalysisColumns.gradeRank) headCells.push('<th class="py-2">年级排名</th>');
-  if (examAnalysisColumns.grade) headCells.push('<th class="py-2">等级</th>');
-  if (examAnalysisColumns.pass) headCells.push('<th class="py-2">及格</th>');
-  if (examAnalysisColumns.good) headCells.push('<th class="py-2">优秀</th>');
-  if (examAnalysisColumns.classAvgDiff) headCells.push('<th class="py-2">与班均差</th>');
-  if (examAnalysisColumns.gradeAvgDiff) headCells.push('<th class="py-2">与年段均差</th>');
-  if (examAnalysisColumns.totalScore) headCells.push('<th class="py-2">累计总分</th>');
-  if (examAnalysisColumns.totalRank) headCells.push('<th class="py-2">累计排名</th>');
-  headCells.push('<th class="py-2">较上次</th>');
-  const previewHead = document.getElementById('anPreviewHead');
-  if (previewHead) previewHead.innerHTML = headCells.join('');
-
-  const fmtDiff = d => d == null ? '—' : (d > 0 ? `<span class="text-red-500">+${d.toFixed(1)}</span>` : d < 0 ? `<span class="text-emerald-600">${d.toFixed(1)}</span>` : '0');
-  const previewBody = document.getElementById('anPreviewBody');
-  if (previewBody) previewBody.innerHTML = previewRows.map((r, i) => {
-    const selected = r.name === examSelectedStudent ? 'bg-primary/5' : 'hover:bg-gray-50';
-    const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `<span class="text-xs text-gray-400">${i + 1}</span>`;
-    const prog = (() => {
-      if (r.prevScore == null || r.curScore == null) return '<span class="text-gray-400">—</span>';
-      const d = r.curScore - r.prevScore;
-      return d > 0 ? `<span class="text-red-500 font-bold">↑${d.toFixed(1)}</span>` : d < 0 ? `<span class="text-emerald-600 font-bold">↓${(-d).toFixed(1)}</span>` : '<span class="text-gray-500">—</span>';
-    })();
-    const colCells = scoreSubs.map(s => `<td class="py-2 font-medium">${r.colVals[s] == null ? '—' : r.colVals[s].toFixed(1)}</td>`).join('');
-    const rankCells = rankSubs.map(s => `<td class="py-2">${r.colVals[s] == null ? '—' : r.colVals[s]}</td>`).join('');
-    const cells = [`<td class="py-2 pl-2">${medal}</td>`, `<td class="py-2 font-medium">${esc(r.name)}</td>`, `<td class="py-2 text-gray-500">${esc(r.className)}</td>`, colCells, rankCells];
-    if (examAnalysisColumns.classRank) cells.push(`<td class="py-2">${r.classRank ?? '—'}</td>`);
-    if (examAnalysisColumns.gradeRank) cells.push(`<td class="py-2">${r.gradeRank ?? '—'}</td>`);
-    if (examAnalysisColumns.grade) cells.push(`<td class="py-2"><span class="px-1.5 py-0.5 rounded text-xs ${r.grade === 'A' ? 'bg-red-100 text-red-600' : r.grade === 'B' ? 'bg-blue-100 text-blue-600' : r.grade === 'C' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}">${r.gradeLabel || '—'}</span></td>`);
-    if (examAnalysisColumns.pass) cells.push(`<td class="py-2">${r.curScore == null ? '—' : (r.curScore >= pass ? '<span class="text-green-500">是</span>' : '<span class="text-red-500">否</span>')}</td>`);
-    if (examAnalysisColumns.good) cells.push(`<td class="py-2">${r.curScore == null ? '—' : (r.curScore >= good ? '<span class="text-red-500">是</span>' : '<span class="text-gray-400">否</span>')}</td>`);
-    if (examAnalysisColumns.classAvgDiff) cells.push(`<td class="py-2">${fmtDiff(r.classAvgDiff)}</td>`);
-    if (examAnalysisColumns.gradeAvgDiff) cells.push(`<td class="py-2">${fmtDiff(r.gradeAvgDiff)}</td>`);
-    if (examAnalysisColumns.totalScore) cells.push(`<td class="py-2">${r.totalScore || '—'}</td>`);
-    if (examAnalysisColumns.totalRank) cells.push(`<td class="py-2">${r.totalRank ?? '—'}</td>`);
-    cells.push(`<td class="py-2">${prog}</td>`);
-    return `<tr class="border-b cursor-pointer ${selected}" onclick="selectExamStudent('${esc(r.name)}')">${cells.join('')}</tr>`;
-  }).join('') || '<tr><td class="py-6 text-center text-gray-400" colspan="3">暂无成绩记录</td></tr>';
-
-  renderExamPersonalInto();
-}
-function renderExamPersonalInto() {
+function anRunPersonal() {
+  const name = (document.getElementById('anStuName').value || '').trim();
+  const col = document.getElementById('anStuCol').value;
   const wrap = document.getElementById('anPersonalWrap');
-  if (!wrap) return;
-  if (!examSelectedStudent) { wrap.innerHTML = '<p class="text-sm text-gray-400">请在榜单中点击一名学生</p>'; return; }
-  const mainSub = (anSelSubjects.filter(s => { const c = examColumnByKey(s); return c && c.type === 'score'; })[0]) || EXAM_SUBJECT;
-  const exams = anSelExams.map(examById).filter(Boolean);
+  if (!name || !col) { wrap.innerHTML = '<p class="text-sm text-red-500">请输入姓名并选择列。</p>'; return; }
+  const matches = (state.students || []).filter(s => s.name === name);
+  if (!matches.length) { wrap.innerHTML = `<p class="text-sm text-red-500">学生管理中没有「${esc(name)}」，请先去「学生管理」添加。</p>`; return; }
+  const stu = matches[0];
+  const classId = stu.class;
   const series = [];
-  exams.forEach(e => {
-    const r = state.examData.records.find(x => x.examId === e.id && x.studentName === examSelectedStudent && x.subject === mainSub && x.colType !== 'rank');
-    if (!r) return;
-    const same = state.examData.records.filter(x => x.examId === e.id && x.classId === r.classId && x.subject === mainSub && x.colType !== 'rank');
-    const sorted = [...same].sort((a, b) => b.score - a.score);
-    const rank = sorted.findIndex(x => x.studentName === examSelectedStudent) + 1;
-    series.push({ exam: e.name, date: e.date, score: +r.score, rank });
+  state.examData.exams.forEach(e => {
+    const r = state.examData.records.find(x => x.examId === e.id && x.classId === classId && x.studentName === name && x.subject === col);
+    if (r) series.push({ exam: e.name, date: e.date, score: +r.score, colType: r.colType });
   });
-  if (!series.length) { wrap.innerHTML = `<p class="text-sm text-gray-400">该学生暂无「${esc(mainSub)}」成绩记录</p>`; return; }
-  wrap.innerHTML = `<canvas id="anPsChart" height="170"></canvas><div id="anPsSummary" class="mt-3 text-sm text-gray-600"></div>`;
+  series.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!series.length) { wrap.innerHTML = `<p class="text-sm text-gray-400">该学生暂无「${esc(col)}」的历次记录。</p>`; return; }
+  const isRank = series[0].colType === 'rank';
+  const avg = (series.reduce((a, b) => a + b.score, 0) / series.length).toFixed(isRank ? 0 : 2);
+  const min = Math.min(...series.map(s => s.score));
+  const max = Math.max(...series.map(s => s.score));
+  const unit = isRank ? '名' : '分';
+  const rows = series.map(s => `<tr class="border-t"><td class="py-1">${esc(s.exam)}</td><td class="py-1 text-gray-400 text-xs">${esc(s.date || '-')}</td><td class="py-1 text-right font-medium">${s.score}${unit}</td></tr>`).join('');
+  wrap.innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-3">
+      <div class="lg:col-span-2 bg-white rounded-2xl p-4 shadow-sm"><canvas id="anPsChart" height="170"></canvas></div>
+      <div class="bg-white rounded-2xl p-4 shadow-sm space-y-2">
+        <div class="text-sm font-medium text-gray-700">📋 数据明细</div>
+        <div class="overflow-y-auto max-h-56"><table class="w-full text-sm"><thead><tr class="text-gray-500 text-left"><th class="py-1">考试</th><th class="py-1">日期</th><th class="py-1 text-right">${esc(col)}</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="text-xs text-gray-500 pt-2 border-t">共 ${series.length} 次 · 平均 ${avg}${unit} · 最高 ${max}${unit} · 最低 ${min}${unit}</div>
+      </div>
+    </div>`;
   setTimeout(() => {
     if (window._anPsChart) try { window._anPsChart.destroy(); } catch (e) { }
     const cv = document.getElementById('anPsChart');
@@ -4773,22 +4609,71 @@ function renderExamPersonalInto() {
     window._anPsChart = new Chart(cv.getContext('2d'), {
       type: 'line',
       data: { labels: series.map(s => s.exam), datasets: [
-        { label: mainSub + '分数', data: series.map(s => s.score), borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3, yAxisID: 'y' },
-        { label: '班级排名', data: series.map(s => s.rank), borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.1)', fill: false, tension: .3, yAxisID: 'y1' },
+        { label: col + (isRank ? '（名）' : '（分）'), data: series.map(s => s.score), borderColor: '#f06292', backgroundColor: 'rgba(240,98,146,.1)', fill: true, tension: .3 }
       ]},
-      options: { responsive: true, plugins: { title: { display: true, text: `${esc(examSelectedStudent)} ${esc(mainSub)} 分数与排名变化` } }, scales: { y: { type: 'linear', display: true, position: 'left', title: { display: true, text: '分数' }, beginAtZero: false }, y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: '排名' }, reverse: true, beginAtZero: false, grid: { drawOnChartArea: false } } } }
+      options: { responsive: true, plugins: { title: { display: true, text: `${esc(name)} · ${esc(col)} 趋势` } }, scales: { y: { beginAtZero: !isRank, reverse: isRank } } }
     });
-    const el = document.getElementById('anPsSummary');
-    if (!el) return;
-    if (series.length >= 2) {
-      const first = series[0], last = series[series.length - 1];
-      const diff = (last.score - first.score).toFixed(1);
-      const rankDiff = first.rank - last.rank;
-      el.innerHTML = `共 ${series.length} 次考试：最高 ${Math.max(...series.map(s => s.score))}、最低 ${Math.min(...series.map(s => s.score))}、平均 ${(series.reduce((a, b) => a + b.score, 0) / series.length).toFixed(1)} 分。<br>较首次 <b class="${diff >= 0 ? 'text-red-500' : 'text-emerald-600'}">${diff >= 0 ? '+' : ''}${diff}</b> 分，排名 <b class="${rankDiff > 0 ? 'text-red-500' : rankDiff < 0 ? 'text-emerald-600' : 'text-gray-600'}">${rankDiff > 0 ? '上升' + rankDiff + '名' : rankDiff < 0 ? '下降' + (-rankDiff) + '名' : '持平'}</b>。`;
-    } else {
-      el.innerHTML = `仅有 1 次记录：${series[0].score} 分，班级排名 ${series[0].rank}。`;
-    }
   }, 0);
+}
+function anRunCompare() {
+  const col = document.getElementById('anCmpCol').value;
+  const wrap = document.getElementById('anCompareWrap');
+  if (!col) { wrap.innerHTML = '<p class="text-sm text-red-500">请选择要对比的列。</p>'; return; }
+  const colDef = examColumnByKey(col);
+  const isRank = colDef && colDef.type === 'rank';
+  const exams = [...state.examData.exams].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const classes = state.examData.classes;
+  const data = exams.map(e => {
+    const row = { exam: e.name, date: e.date };
+    classes.forEach(c => {
+      const rs = state.examData.records.filter(r => r.examId === e.id && r.classId === c.id && r.subject === col);
+      row[c.id] = rs.length ? (rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length) : null;
+    });
+    return row;
+  });
+  const unit = isRank ? '名' : '分';
+  const ths = ['<th class="py-2 pl-2 text-left">考试</th>', ...classes.map(c => `<th class="py-2 text-right">${esc(c.name)}</th>`), '<th class="py-2 text-right">差值</th>'];
+  const rows = data.map(d => {
+    const vals = classes.map(c => `<td class="py-1.5 text-right">${d[c.id] == null ? '—' : d[c.id].toFixed(isRank ? 1 : 2)}</td>`).join('');
+    let diff = '';
+    if (classes.length === 2 && d[classes[0].id] != null && d[classes[1].id] != null) {
+      const a = d[classes[0].id], b = d[classes[1].id];
+      const v = (a - b).toFixed(isRank ? 1 : 2);
+      diff = `<span class="${isRank ? (v > 0 ? 'text-red-500' : 'text-emerald-600') : (v > 0 ? 'text-emerald-600' : 'text-red-500')}">${v > 0 ? '+' : ''}${v}</span>`;
+    }
+    return `<tr class="border-t"><td class="py-1.5 pl-2">${esc(d.exam)}<div class="text-gray-400 text-[10px]">${esc(d.date || '-')}</div></td>${vals}<td class="py-1.5 text-right">${diff}</td></tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-3">
+      <div class="lg:col-span-2 bg-white rounded-2xl p-4 shadow-sm"><canvas id="anCmpChart" height="170"></canvas></div>
+      <div class="bg-white rounded-2xl p-4 shadow-sm space-y-2">
+        <div class="text-sm font-medium text-gray-700">📋 对比明细</div>
+        <div class="overflow-y-auto max-h-56"><table class="w-full text-sm"><thead><tr class="text-gray-500 text-left">${ths.join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="text-xs text-gray-500 pt-2 border-t">${isRank ? '排名：数值越低越好，差值为正表示前者名次更高（更差）。' : '分数：差值为正表示前者均分更高。'}</div>
+      </div>
+    </div>`;
+  setTimeout(() => {
+    if (window._anCmpChart) try { window._anCmpChart.destroy(); } catch (e) { }
+    const cv = document.getElementById('anCmpChart');
+    if (!cv) return;
+    const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24'];
+    const datasets = classes.map((c, i) => ({
+      label: c.name,
+      data: data.map(d => d[c.id]),
+      backgroundColor: colors[i % colors.length]
+    }));
+    window._anCmpChart = new Chart(cv.getContext('2d'), {
+      type: 'bar',
+      data: { labels: data.map(d => d.exam), datasets },
+      options: { responsive: true, plugins: { title: { display: true, text: `${esc(col)} 两班对比（${isRank ? '平均排名' : '平均分'}）` } }, scales: { y: { beginAtZero: !isRank } } }
+    });
+  }, 0);
+}
+function renderExamAnalysisInto() {
+  // 新版分析页由按钮触发，不再自动全量渲染，避免打开即卡
+}
+function renderExamPersonalInto() {
+  // 个人趋势由 anRunPersonal 直接渲染到 #anPersonalWrap
 }
 
 // 在 render() 后渲染图表 / 绑定文件
