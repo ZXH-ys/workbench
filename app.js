@@ -648,6 +648,7 @@ let profileSubject = '';     // 档案页成绩趋势所选科目
 let hwSearchName = '';       // 作业模块姓名搜索
 let hwSubjectFilter = '';    // 作业模块科目筛选
 let reportRange = 'week';    // 周报/月报切换
+let selStudentIds = {};      // 学生管理批量选择（id -> true）
 
 // ===================== Helpers =====================
 const now = new Date();
@@ -661,6 +662,7 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 function navigate(route) {
+  selStudentIds = {};
   currentRoute = route; render();
   const app = document.getElementById('app');
   if (app && app.classList.contains('nav-open')) {
@@ -966,6 +968,7 @@ function saveUser() {
 
 function setActiveClass(cls) {
   if (state.activeClass === cls) return;
+  selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
   const teacherOnly = ['schedule','points','classLog','album','reminders','examscore'];
@@ -1466,9 +1469,26 @@ function savePeriods() {
 // ===================== Students =====================
 function renderStudents() {
   const list = state.students.filter(s => s.class === state.activeClass);
+  const selCount = list.filter(s => selStudentIds[s.id]).length;
+  const allSel = list.length > 0 && selCount === list.length;
+  const clsOptions = (state.classes || []).map(c => `<option value="${esc(c.id)}" ${c.id===state.activeClass?'selected':''}>${esc(c.name)}</option>`).join('');
+  const toolbar = list.length ? `
+    <div class="flex flex-wrap items-center gap-2 mb-4 p-3 rounded-xl bg-gray-50 border border-gray-100">
+      <label class="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+        <input type="checkbox" class="w-4 h-4 accent-primary" ${allSel?'checked':''} onclick="selAllStudents(${!allSel})"> 全选
+      </label>
+      <span class="text-sm text-gray-500">已选 <b class="text-primary">${selCount}</b> / ${list.length}</span>
+      <div class="flex-1"></div>
+      <button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-white disabled:opacity-40" ${selCount?'':'disabled'} onclick="bulkMoveStudents()">📦 调整班级…</button>
+      <button class="text-sm text-red-500 border border-red-200 px-3 py-1.5 rounded-full hover:bg-red-50 disabled:opacity-40" ${selCount?'':'disabled'} onclick="bulkDeleteStudents()">🗑️ 批量删除 (${selCount})</button>
+      <button class="text-sm text-red-400 border border-red-100 px-3 py-1.5 rounded-full hover:bg-red-50" onclick="clearClassStudents()">⚠️ 清空本班学生</button>
+    </div>` : '';
   const cards = list.map(s => `
-    <div class="p-4 rounded-2xl bg-gray-50 hover:bg-primary/5 transition cursor-pointer border border-transparent hover:border-primary/20" onclick="openStudentProfile('${s.id}')">
-      <div class="flex items-center gap-3">
+    <div class="relative p-4 rounded-2xl bg-gray-50 hover:bg-primary/5 transition cursor-pointer border ${selStudentIds[s.id]?'border-primary/40 ring-1 ring-primary/20':'border-transparent hover:border-primary/20'}" onclick="openStudentProfile('${s.id}')">
+      <div class="absolute top-3 left-3 z-10" onclick="event.stopPropagation(); toggleSelStudent('${s.id}')">
+        <input type="checkbox" class="w-4 h-4 accent-primary" ${selStudentIds[s.id]?'checked':''} onclick="event.stopPropagation(); toggleSelStudent('${s.id}')">
+      </div>
+      <div class="flex items-center gap-3 pl-6">
         <img src="${esc(s.avatar)}" class="w-12 h-12 rounded-full bg-white shadow-sm" alt="">
         <div><div class="font-bold text-gray-800">${esc(s.name)}</div><div class="text-xs text-gray-500">${esc(s.class)}</div></div>
       </div>
@@ -1490,10 +1510,60 @@ function renderStudents() {
   }
   return `
   <div class="bg-white rounded-2xl p-6 shadow-sm">
+    ${toolbar}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       ${cards || empty}
     </div>
   </div>`;
+}
+
+function toggleSelStudent(id) { selStudentIds[id] = !selStudentIds[id]; if (!selStudentIds[id]) delete selStudentIds[id]; render(); }
+function selAllStudents(on) {
+  const list = state.students.filter(s => s.class === state.activeClass);
+  list.forEach(s => { if (on) selStudentIds[s.id] = true; else delete selStudentIds[s.id]; });
+  render();
+}
+function bulkDeleteStudents() {
+  const ids = Object.keys(selStudentIds).filter(id => selStudentIds[id]);
+  if (!ids.length) return;
+  const count = ids.length;
+  confirmModal(`确定删除选中的 ${count} 名学生吗？相关行为记录会一并删除，此操作不可恢复。`, function(){
+    const idSet = new Set(ids);
+    state.students = state.students.filter(s => !idSet.has(s.id));
+    ids.forEach(id => delete selStudentIds[id]);
+    save(); closeModal(); render();
+  });
+}
+function bulkMoveStudents() {
+  const ids = Object.keys(selStudentIds).filter(id => selStudentIds[id]);
+  if (!ids.length) return;
+  const opts = (state.classes || []).map(c => `<option value="${esc(c.id)}" ${c.id===state.activeClass?'selected':''}>${esc(c.name)}</option>`).join('');
+  openModal('批量调整班级', `
+    <p class="text-sm text-gray-600 mb-4">将选中的 <b>${ids.length}</b> 名学生移动到：</p>
+    <select id="bulkMoveCls" class="w-full border rounded-lg p-2 text-sm mb-5">${opts}</select>
+    <div class="flex gap-3">
+      <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">取消</button>
+      <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doBulkMove('${ids.join(',')}')">确定移动</button>
+    </div>`, 'md');
+}
+function doBulkMove(idsStr) {
+  const ids = idsStr.split(',').filter(Boolean);
+  const cls = (document.getElementById('bulkMoveCls') || {}).value;
+  if (!cls) return;
+  const idSet = new Set(ids);
+  state.students.forEach(s => { if (idSet.has(s.id)) s.class = cls; });
+  ids.forEach(id => delete selStudentIds[id]);
+  save(); closeModal(); render();
+}
+function clearClassStudents() {
+  const list = state.students.filter(s => s.class === state.activeClass);
+  if (!list.length) return alert('当前班级没有学生，无需清空。');
+  confirmModal(`确定清空「${className(state.activeClass)}」的全部 ${list.length} 名学生吗？相关行为记录会一并删除，此操作不可恢复。`, function(){
+    const c = state.activeClass;
+    state.students = state.students.filter(s => s.class !== c);
+    selStudentIds = {};
+    save(); closeModal(); render();
+  });
 }
 function openStudentForm(id) {
   const s = id ? state.students.find(x=>x.id===id) : null;
