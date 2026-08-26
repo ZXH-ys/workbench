@@ -773,8 +773,16 @@ function bindFileToText(fileId, textId) {
   });
 }
 function openImportStudents() {
+  const clsOpts = (state.classes || []).map(c => `<option value="${esc(c.id)}" ${c.id===state.activeClass?'selected':''}>${esc(c.name)}</option>`).join('');
   openModal('批量导入学生', `
     <div class="space-y-4">
+      <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 text-sm">
+        <label class="block text-xs text-gray-500 mb-1">导入到班级</label>
+        <select id="impStudentClass" class="w-full border rounded-lg p-2 text-sm bg-white">${clsOpts}</select>
+        <label class="flex items-center gap-2 mt-2 text-xs text-gray-600 cursor-pointer select-none">
+          <input type="checkbox" id="impStudentUseCol" checked class="w-4 h-4 accent-primary"> 按 CSV 中的「班级」列分配（不勾则全部归入上方所选班级；留空也归入所选班级）
+        </label>
+      </div>
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一个学生，用英文逗号或制表符分隔：<br><code>姓名,性别,班级</code>（性别、班级可留空）。首行若是标题则自动跳过。</p>
       <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,${esc(state.activeClass)}&#10;王浩然,男,${esc(state.activeClass)}"></textarea>
       <div><input id="impStudentFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
@@ -788,6 +796,8 @@ function openImportStudents() {
 function doImportStudents() {
   const text = document.getElementById('impStudentText').value.trim();
   if (!text) return alert('请粘贴或上传学生数据');
+  const targetClass = document.getElementById('impStudentClass').value;
+  const useCol = document.getElementById('impStudentUseCol').checked;
   const rows = parseCSV(text);
   let start = 0;
   if (rows.length && /姓名|name|学生/i.test(rows[0][0])) start = 1;
@@ -795,18 +805,26 @@ function doImportStudents() {
   for (let i = start; i < rows.length; i++) {
     const name = rows[i][0]; if (!name) continue;
     const gender = rows[i][1] || '未设置';
-    const cls = resolveClass(rows[i][2]);
+    const cls = useCol ? resolveClass(rows[i][2], targetClass) : targetClass;
     const avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + encodeURIComponent(name);
     state.students.push({ id: uid(), name, gender, class: cls, avatar, records: [] });
     n++;
   }
   if (!n) return alert('没有解析到有效学生，请检查格式');
-  save(); closeModal(); render();
-  alert('成功导入 ' + n + ' 名学生');
+  save(); render(); closeModal();
+  alert('成功导入 ' + n + ' 名学生到「' + className(targetClass) + '」');
 }
 function openImportScores() {
+  const clsOpts = (state.classes || []).map(c => `<option value="${esc(c.id)}" ${c.id===state.activeClass?'selected':''}>${esc(c.name)}</option>`).join('');
   openModal('批量导入成绩', `
     <div class="space-y-4">
+      <div class="p-3 rounded-xl bg-primary/5 border border-primary/10 text-sm">
+        <label class="block text-xs text-gray-500 mb-1">导入到班级</label>
+        <select id="impScoreClass" class="w-full border rounded-lg p-2 text-sm bg-white">${clsOpts}</select>
+        <label class="flex items-center gap-2 mt-2 text-xs text-gray-600 cursor-pointer select-none">
+          <input type="checkbox" id="impScoreUseCol" checked class="w-4 h-4 accent-primary"> 按 CSV 中的「班级」列分配（不勾则全部归入上方所选班级；留空也归入所选班级）
+        </label>
+      </div>
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一条：<code>姓名,班级,科目,考试,分数</code>。首行标题自动跳过。</p>
       <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,${esc(state.activeClass)},英语,期中考试,78"></textarea>
       <div><input id="impScoreFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
@@ -820,6 +838,8 @@ function openImportScores() {
 function doImportScores() {
   const text = document.getElementById('impScoreText').value.trim();
   if (!text) return alert('请粘贴或上传成绩数据');
+  const targetClass = document.getElementById('impScoreClass').value;
+  const useCol = document.getElementById('impScoreUseCol').checked;
   const rows = parseCSV(text);
   let start = 0;
   if (rows.length && /姓名|name|学生/i.test(rows[0][0])) start = 1;
@@ -828,12 +848,13 @@ function doImportScores() {
     const name = rows[i][0]; if (!name) continue;
     const score = parseFloat(rows[i][4]);
     if (isNaN(score)) continue;
-    state.scores.unshift({ id: uid(), name, class: resolveClass(rows[i][1]), subject: rows[i][2] || '英语', exam: rows[i][3] || '考试', score });
+    const cls = useCol ? resolveClass(rows[i][1], targetClass) : targetClass;
+    state.scores.unshift({ id: uid(), name, class: cls, subject: rows[i][2] || '英语', exam: rows[i][3] || '考试', score });
     n++;
   }
   if (!n) return alert('没有解析到有效成绩，请检查格式');
-  save(); closeModal(); render();
-  alert('成功导入 ' + n + ' 条成绩');
+  save(); render(); closeModal();
+  alert('成功导入 ' + n + ' 条成绩到「' + className(targetClass) + '」');
 }
 
 // ===================== 首次使用引导 =====================
@@ -5245,11 +5266,13 @@ function className(id) {
   return c ? c.name : (id || '');
 }
 // 导入时把班级列（可能是显示名或 id）统一解析为内部 id
-function resolveClass(raw) {
-  if (!raw) return state.activeClass;
+function resolveClass(raw, fallback) {
+  const def = (fallback !== undefined) ? fallback : state.activeClass;
+  if (!raw) return def;
   raw = String(raw).trim();
+  if (!raw) return def;
   const c = (state.classes || []).find(x => x.id === raw || x.name === raw);
-  return c ? c.id : raw;
+  return c ? c.id : def;
 }
 
 function openSettings() {
