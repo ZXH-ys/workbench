@@ -4704,7 +4704,7 @@ function renderExamAnalysis() {
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
       <div class="font-bold text-gray-800">📊 两班同类型列对比</div>
-      <p class="text-xs text-gray-400">选择一列和 1-3 个对比指标，系统会同时呈现多个指标的两班对比。分数科目支持「全班平均分」「优生平均分」「及格数」；排名类列仅支持平均排名。</p>
+      <p class="text-xs text-gray-400">选择一列和 1-3 个对比指标，系统会同时呈现多个指标的两班对比。分数科目支持「全班平均分」「优生平均分」「及格数」；排名类列支持「名次区间人数」。</p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <select id="anCmpCol" class="border rounded-lg p-2 text-sm" onchange="anToggleMetricInputs()">${colOpts}</select>
       </div>
@@ -4714,6 +4714,7 @@ function renderExamAnalysis() {
           <label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="an-cmp-metric" value="avg" onchange="anToggleMetricInputs()"> 全班平均分</label>
           <label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="an-cmp-metric" value="top" checked onchange="anToggleMetricInputs()"> 优生平均分</label>
           <label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="an-cmp-metric" value="pass" onchange="anToggleMetricInputs()"> 及格数</label>
+          <label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="an-cmp-metric" value="rankRange" onchange="anToggleMetricInputs()"> 名次区间人数</label>
         </div>
         <div id="anMetricParams" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
       </div>
@@ -4771,9 +4772,20 @@ function anToggleMetricInputs() {
   const colDef = examColumnByKey(col);
   const isRank = colDef && colDef.type === 'rank';
   const paramsWrap = document.getElementById('anMetricParams');
+  const metricEls = document.querySelectorAll('.an-cmp-metric');
   if (!paramsWrap) return;
+  metricEls.forEach(b => {
+    if (isRank) b.disabled = b.value !== 'rankRange';
+    else b.disabled = b.value === 'rankRange';
+    const label = b.closest('label');
+    if (label) label.classList.toggle('opacity-50', b.disabled);
+  });
   if (isRank) {
-    paramsWrap.innerHTML = `<div class="col-span-full text-xs text-gray-400">排名列：自动计算两班平均排名。</div>`;
+    metricEls.forEach(b => { b.checked = b.value === 'rankRange'; });
+    paramsWrap.innerHTML = `
+      <div><label class="block text-xs text-gray-500 mb-1">名次区间 · 起始名次（含）</label><input id="anCmpParam_rankMin" type="number" class="w-full border rounded-lg p-2 text-sm" placeholder="如：50" value="50"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">名次区间 · 结束名次（含）</label><input id="anCmpParam_rankMax" type="number" class="w-full border rounded-lg p-2 text-sm" placeholder="如：100" value="100"></div>
+      <div class="flex items-end"><div class="text-xs text-gray-400">统计两班名次在该区间内的学生人数。</div></div>`;
     return;
   }
   const metrics = Array.from(document.querySelectorAll('.an-cmp-metric:checked')).map(b => b.value);
@@ -4801,14 +4813,18 @@ function anRunCompare() {
   if (!metricEls.length) { wrap.innerHTML = '<p class="text-sm text-red-500">请至少选择一个对比指标。</p>'; return; }
   const metrics = Array.from(metricEls).map(b => {
     const key = b.value;
+    if (key === 'rankRange') {
+      const minRaw = document.getElementById('anCmpParam_rankMin')?.value ?? '1';
+      const maxRaw = document.getElementById('anCmpParam_rankMax')?.value ?? '100';
+      return { key, param: { min: parseFloat(minRaw), max: parseFloat(maxRaw) } };
+    }
     const raw = document.getElementById('anCmpParam_' + key)?.value ?? '';
     return { key, param: parseFloat(raw) };
   });
-  if (isRank) metrics.splice(0, metrics.length, { key: 'rank', param: 0 });
   const exams = [...state.examData.exams].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const classes = state.examData.classes;
   const defs = {
-    rank: { label: '平均排名', unit: '名', decimals: 1, beginAtZero: false },
+    rankRange: { label: m => `名次 ${m.param.min}-${m.param.max} 人数`, unit: '人', decimals: 0, beginAtZero: true },
     avg: { label: m => `前${m.param}名平均分`, unit: '分', decimals: 2, beginAtZero: true },
     top: { label: m => `前${m.param}名优生平均分`, unit: '分', decimals: 2, beginAtZero: true },
     pass: { label: m => `≥${m.param}分及格数`, unit: '人', decimals: 0, beginAtZero: true }
@@ -4816,7 +4832,11 @@ function anRunCompare() {
   const compute = (rs, metric) => {
     const nums = rs.map(r => +r.score).filter(s => !isNaN(s));
     if (!nums.length) return null;
-    if (isRank) return nums.reduce((a, b) => a + b, 0) / nums.length;
+    if (metric.key === 'rankRange') {
+      const lo = Math.min(metric.param.min, metric.param.max);
+      const hi = Math.max(metric.param.min, metric.param.max);
+      return nums.filter(s => s >= lo && s <= hi).length;
+    }
     if (metric.key === 'pass') return nums.filter(s => s >= metric.param).length;
     nums.sort((a, b) => b - a);
     const n = metric.key === 'top' ? metric.param : (metric.param > 0 ? metric.param : nums.length);
@@ -4845,17 +4865,17 @@ function anRunCompare() {
       if (classes.length === 2 && d[classes[0].id] != null && d[classes[1].id] != null) {
         const a = d[classes[0].id], b = d[classes[1].id];
         const v = def.decimals === 0 ? (a - b) : (a - b).toFixed(def.decimals);
-        const posGood = metric.key === 'rank' ? false : true;
+        const posGood = metric.key === 'rankRange' ? false : true;
         diff = `<span class="${v > 0 ? (posGood ? 'text-emerald-600' : 'text-red-500') : (posGood ? 'text-red-500' : 'text-emerald-600')}">${v > 0 ? '+' : ''}${v}</span>`;
       }
       return `<tr class="border-t"><td class="py-1.5 pl-2">${esc(d.exam)}<div class="text-gray-400 text-[10px]">${esc(d.date || '-')}</div></td>${vals}<td class="py-1.5 text-right">${diff}</td></tr>`;
     }).join('');
-    const chartId = 'anCmpChart_' + metric.key + '_' + metric.param;
+    const chartId = metric.key === 'rankRange' ? ('anCmpChart_' + metric.key + '_' + metric.param.min + '_' + metric.param.max) : ('anCmpChart_' + metric.key + '_' + metric.param);
     return `
     <div class="bg-white rounded-2xl p-4 shadow-sm space-y-3">
       <div class="flex items-center justify-between">
         <div class="text-sm font-medium text-gray-700">${esc(label)}</div>
-        <div class="text-xs text-gray-400">${metric.key === 'rank' ? '排名：数值越低越好' : (metric.key === 'pass' ? '及格数越多越好' : '分数越高越好')}</div>
+        <div class="text-xs text-gray-400">${metric.key === 'rankRange' ? '区间内人数：人数越多越好' : (metric.key === 'pass' ? '及格数越多越好' : '分数越高越好')}</div>
       </div>
       <div class="overflow-x-auto"><canvas id="${chartId}" height="160"></canvas></div>
       <div class="overflow-y-auto max-h-56"><table class="w-full text-sm"><thead><tr class="text-gray-500 text-left">${ths.join('')}</tr></thead><tbody>${rows}</tbody></table></div>
@@ -4864,7 +4884,7 @@ function anRunCompare() {
   wrap.innerHTML = `<div class="grid grid-cols-1 gap-4 mt-3">${results.map(renderOne).join('')}</div>`;
   setTimeout(() => {
     results.forEach(({ metric, label, data }) => {
-      const chartId = 'anCmpChart_' + metric.key + '_' + metric.param;
+      const chartId = metric.key === 'rankRange' ? ('anCmpChart_' + metric.key + '_' + metric.param.min + '_' + metric.param.max) : ('anCmpChart_' + metric.key + '_' + metric.param);
       const cv = document.getElementById(chartId);
       if (!cv) return;
       const key = chartId;
