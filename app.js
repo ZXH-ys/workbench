@@ -3974,37 +3974,61 @@ const QR_CONNECTORS = /(?:且|并且|又|还|同时|接着|随后|另外|此外|
 const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
 
 // 智能解析：返回 { raw, segments:[{student:{id,name}, items:[{text,content,subjects,homework,rules,recType,dim,pointDelta,enabled}]}], matched:[] }
+// 支持连续多名学生共享同一段事件描述，例如「赵吉晨，孙巾杰数学作业未完成；秦梦茹，刘俊汝英语作业未完成」
 function parseQuickRecord(text) {
   text = (text || '').trim();
   const matched = [];
-  // 1) 识别所有学生，按出现位置排序
+  // 1) 识别所有学生，按出现位置排序（取每个学生的最长别名首次匹配）
   const studentHits = [];
   state.students.forEach(s => {
     const aliases = [s.name].concat((s.alias || '').split(/\s+/).filter(Boolean));
     aliases.sort((a, b) => b.length - a.length);
     for (const a of aliases) {
-      if (a && text.includes(a)) {
-        studentHits.push({ id: s.id, name: s.name, alias: a, len: a.length, pos: text.indexOf(a) });
+      if (!a) continue;
+      let pos = text.indexOf(a);
+      while (pos !== -1) {
+        // 避免重叠：若该位置已被更长别名占用则跳过
+        const overlap = studentHits.some(h => pos < h.pos + h.len && pos + a.length > h.pos);
+        if (!overlap) {
+          studentHits.push({ id: s.id, name: s.name, alias: a, len: a.length, pos });
+        }
+        pos = text.indexOf(a, pos + 1);
+      }
+      if (studentHits.some(h => h.id === s.id)) {
         matched.push({ kind: 'student', value: s.name });
         break;
       }
     }
   });
   studentHits.sort((a, b) => a.pos - b.pos);
-  // 2) 按学生拆分句子
-  const segments = [];
+  // 2) 把学生按「连续并列组」拆分：组内学生之间只有逗号/顿号/连接词，共享组后的一段事件描述
+  const rawSegments = []; // [{student, text}]
   if (!studentHits.length) {
-    segments.push({ student: null, text });
+    rawSegments.push({ student: null, text });
   } else {
-    for (let i = 0; i < studentHits.length; i++) {
-      const start = studentHits[i].pos + studentHits[i].len;
-      const end = i + 1 < studentHits.length ? studentHits[i + 1].pos : text.length;
-      segments.push({ student: studentHits[i], text: text.slice(start, end).trim() });
+    let i = 0;
+    while (i < studentHits.length) {
+      let j = i;
+      while (j + 1 < studentHits.length) {
+        const between = text.slice(studentHits[j].pos + studentHits[j].len, studentHits[j + 1].pos);
+        if (/^[，,、\s]*$/.test(between) || QR_CONNECTORS.test(between.trim())) {
+          j++;
+        } else {
+          break;
+        }
+      }
+      const groupStart = studentHits[j].pos + studentHits[j].len;
+      const groupEnd = j + 1 < studentHits.length ? studentHits[j + 1].pos : text.length;
+      let sharedText = text.slice(groupStart, groupEnd).trim().replace(/^[，,、；;。.:：!！?？\s]+/, '');
+      for (let k = i; k <= j; k++) {
+        rawSegments.push({ student: studentHits[k], text: sharedText });
+      }
+      i = j + 1;
     }
   }
   // 3) 每个学生片段再按连接词/标点拆分为多个记录项
   const result = { raw: text, segments: [], matched };
-  segments.forEach(seg => {
+  rawSegments.forEach(seg => {
     const segment = { student: seg.student, items: [] };
     const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
     const clauses = [];
@@ -4146,6 +4170,7 @@ function qrRenderDraft() {
   }
   let totalItems = 0;
   qrDraft.segments.forEach(seg => totalItems += seg.items.length);
+  const use2Col = totalItems > 4;
   const list = qrDraft.segments.map((seg, si) => {
     const stuName = seg.student ? seg.student.name : '未识别学生';
     return `<div class="rounded-xl border p-3 space-y-2 bg-white">
@@ -4158,7 +4183,7 @@ function qrRenderDraft() {
   }).join('');
   resultEl.innerHTML = dedHtml + `<div class="space-y-3">
     <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。可在卡片内修改文本、删除或停用。</div>
-    ${list}
+    <div class="grid grid-cols-1 ${use2Col ? 'md:grid-cols-2' : ''} gap-3">${list}</div>
     <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
     <div class="flex gap-2 pt-1">
       <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
@@ -4168,25 +4193,45 @@ function qrRenderDraft() {
 }
 
 function qrItemCard(item, si, ii) {
-  const chips = [];
-  if (item.recType) chips.push(`${recordTypeEmoji(item.recType)} ${recordTypeLabel(item.recType)}`);
-  item.subjects.forEach(sub => chips.push(`📚 ${sub.name}`));
-  item.rules.forEach(({ rule }) => chips.push(`📐 ${rule.label}${rule.delta >= 0 ? '+' : ''}${rule.delta}`));
-  if (item.homework) chips.push(`📖 作业`);
-  if (item.pointDelta !== 0 && !item.rules.length) chips.push(`${dimIcon(item.dim)} ${item.pointDelta >= 0 ? '+' : ''}${item.pointDelta}`);
+  const typeOpts = [['critic','批评','⚠️'],['praise','表扬','👍'],['chat','谈心','💬'],['leave','请假','🏥']];
+  const typeSelect = `<select onchange="qrSetType(${si},${ii},this.value)" class="text-xs rounded-full px-2 py-1 border-0 outline-none cursor-pointer ${recordTypeClass(item.recType)}">
+    ${typeOpts.map(([v,l,e]) => `<option value="${v}" ${item.recType===v?'selected':''}>${e} ${l}</option>`).join('')}
+  </select>`;
+  const currentSubj = item.subjects[0];
+  const subjOpts = [{id:'',name:'无科目'}].concat(state.classRecordSubjects || []);
+  const subjectSelect = `<select onchange="qrSetSubject(${si},${ii},this.value)" class="text-xs rounded-full px-2 py-1 border-0 outline-none cursor-pointer ${currentSubj ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'}">
+    ${subjOpts.map(sub => `<option value="${sub.id}" ${(currentSubj && currentSubj.id===sub.id)?'selected':''}>📚 ${sub.name}</option>`).join('')}
+  </select>`;
+  const homeworkSelect = `<select onchange="qrSetHomework(${si},${ii},this.value==='1')" class="text-xs rounded-full px-2 py-1 border-0 outline-none cursor-pointer ${item.homework ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}">
+    <option value="1" ${item.homework?'selected':''}>📖 作业</option>
+    <option value="0" ${!item.homework?'selected':''}>📖 非作业</option>
+  </select>`;
+  const pointOpts = [
+    {label:'不积分', dim:'daily', delta:0},
+    {label:'日常 -1', dim:'daily', delta:-1},
+    {label:'日常 +1', dim:'daily', delta:1},
+    {label:'体育 +1', dim:'sport', delta:1},
+    {label:'考试 +1', dim:'exam', delta:1},
+    {label:'任职 +1', dim:'post', delta:1},
+  ];
+  const activePoint = pointOpts.find(o => o.dim===item.dim && o.delta===item.pointDelta) || {label:`${dimLabel(item.dim)} ${item.pointDelta>=0?'+':''}${item.pointDelta}`, dim:item.dim, delta:item.pointDelta};
+  const pointSelect = `<select onchange="qrSetPoint(${si},${ii},this.value)" class="text-xs rounded-full px-2 py-1 border-0 outline-none cursor-pointer ${dimStyle(item.dim).bg} ${dimStyle(item.dim).text}">
+    ${pointOpts.map(o => `<option value="${o.dim}|${o.delta}" ${(o.dim===item.dim && o.delta===item.pointDelta)?'selected':''}>${dimIcon(o.dim)} ${o.label}</option>`).join('')}
+    <option value="custom">✏️ 自定义…</option>
+  </select>`;
   const actions = [];
   if (item.recType && item.recType !== 'leave') actions.push('学生记录');
   if (item.recType === 'leave') actions.push('请假');
-  item.subjects.forEach(() => actions.push('课堂记录'));
-  item.rules.forEach(() => actions.push('积分规则'));
+  if (item.subjects.length) actions.push('课堂记录');
   if (item.homework && !/未完成|没交|未做|不交/.test(item.content)) actions.push('作业管理');
-  if (item.pointDelta !== 0 && !item.rules.length) actions.push('积分');
+  if (item.pointDelta !== 0) actions.push('积分');
+  if (item.rules.length) actions.push('积分规则');
   const disabledClass = item.enabled ? '' : 'opacity-50 grayscale';
   return `<div class="rounded-lg border border-gray-200 p-3 space-y-2 ${disabledClass}" data-qr-item="${si}-${ii}">
-    <div class="flex flex-wrap gap-1.5">${chips.map(c => `<span class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">${esc(c)}</span>`).join('')}</div>
+    <div class="flex flex-wrap gap-1.5">${typeSelect}${subjectSelect}${homeworkSelect}${pointSelect}</div>
     <textarea rows="2" class="w-full border rounded-lg p-2 text-sm" onchange="qrReparseItem(${si},${ii},this.value)">${esc(item.content)}</textarea>
     <div class="flex items-center justify-between">
-      <div class="text-xs text-gray-400">将生成：${actions.join('、')}</div>
+      <div class="text-xs text-gray-400">将生成：${actions.length ? actions.join('、') : '（仅文本记录）'}</div>
       <div class="flex items-center gap-2">
         <label class="text-xs flex items-center gap-1"><input type="checkbox" ${item.enabled ? 'checked' : ''} onchange="qrToggleItem(${si},${ii})"> 启用</label>
         <button class="text-xs text-red-500 hover:underline" onclick="qrRemoveItem(${si},${ii})">删除</button>
@@ -4214,6 +4259,48 @@ function qrRemoveItem(si, ii) {
   if (!qrDraft || !qrDraft.segments[si]) return;
   qrDraft.segments[si].items.splice(ii, 1);
   if (!qrDraft.segments[si].items.length) qrDraft.segments.splice(si, 1);
+  qrRenderDraft();
+}
+
+function qrSetType(si, ii, type) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  const item = qrDraft.segments[si].items[ii];
+  item.recType = type;
+  if (type === 'leave') { item.pointDelta = 0; item.dim = 'daily'; }
+  else item.pointDelta = (type === 'praise' ? 1 : type === 'critic' ? -1 : 0);
+  qrRenderDraft();
+}
+
+function qrSetSubject(si, ii, subId) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  const item = qrDraft.segments[si].items[ii];
+  if (!subId) { item.subjects = []; }
+  else {
+    const sub = state.classRecordSubjects.find(s => s.id === subId);
+    item.subjects = sub ? [sub] : [];
+  }
+  qrRenderDraft();
+}
+
+function qrSetHomework(si, ii, isHomework) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  qrDraft.segments[si].items[ii].homework = !!isHomework;
+  qrRenderDraft();
+}
+
+function qrSetPoint(si, ii, value) {
+  if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
+  const item = qrDraft.segments[si].items[ii];
+  if (value === 'custom') {
+    const dim = prompt('请选择积分维度：sport/daily/exam/post', item.dim) || item.dim;
+    const delta = parseInt(prompt('请输入积分变化值（扣分用负数）：', item.pointDelta || (item.recType==='praise'?1:item.recType==='critic'?-1:0)) || '0', 10);
+    item.dim = dim;
+    item.pointDelta = isNaN(delta) ? 0 : delta;
+  } else {
+    const [dim, deltaStr] = value.split('|');
+    item.dim = dim;
+    item.pointDelta = parseInt(deltaStr, 10) || 0;
+  }
   qrRenderDraft();
 }
 
