@@ -536,10 +536,10 @@ function defaultExamScore() {
     schoolRank: {
       enabled: true,
       column: '校次',                                               // 读取的校次列（来自成绩上传的 rank 列）
-      tiers: [                                                      // 校次名次区间 → 赋分（按 upTo 升序匹配）
-        { upTo: 10, points: 8 },
-        { upTo: 50, points: 4 },
-        { upTo: 99999, points: 1 }
+      tiers: [                                                      // 校次名次区间 → 赋分（闭区间 [from, to]）
+        { from: 1, to: 10, points: 8 },
+        { from: 11, to: 50, points: 4 },
+        { from: 51, to: 99999, points: 1 }
       ]
     },
     subjectTop: {
@@ -559,7 +559,12 @@ function normalizeExamScore(obj) {
       enabled: !!(o.schoolRank && o.schoolRank.enabled),
       column: (o.schoolRank && o.schoolRank.column) || def.schoolRank.column,
       tiers: (o.schoolRank && Array.isArray(o.schoolRank.tiers) && o.schoolRank.tiers.length)
-        ? o.schoolRank.tiers.map(t => ({ upTo: +t.upTo || 99999, points: +t.points || 0 }))
+        ? o.schoolRank.tiers.map((t, idx, arr) => {
+            const prevTo = idx > 0 ? (+arr[idx - 1].to || +arr[idx - 1].upTo || 99999) : 0;
+            const to = +t.to || +t.upTo || 99999;
+            const from = +t.from || (idx === 0 ? 1 : prevTo + 1);
+            return { from, to, points: +t.points || 0 };
+          }).sort((a, b) => a.to - b.to)
         : def.schoolRank.tiers.map(t => ({ ...t }))
     },
     subjectTop: {
@@ -2951,8 +2956,8 @@ function examSchoolRankColumnKey() {
 }
 function schoolTierPoints(rk, tiers) {
   if (!rk || rk <= 0) return 0;
-  const ts = (tiers || []).slice().sort((a, b) => a.upTo - b.upTo);
-  for (const t of ts) { if (rk <= t.upTo) return t.points; }
+  const ts = (tiers || []).slice().sort((a, b) => a.to - b.to);
+  for (const t of ts) { if (rk >= (t.from || 1) && rk <= t.to) return t.points; }
   return 0;
 }
 // 计算规定日期内（calcStartDate ~ 今天）各次考试积分，按学生汇总
@@ -3238,11 +3243,12 @@ function renderExamScore() {
   // 规则配置卡片
   const tierRows = (cfg.schoolRank.tiers || []).map((t, i) => `
     <div class="flex items-center gap-2 mb-1">
-      <span class="text-xs text-gray-500 w-12">前</span>
-      <input type="number" data-tier-upTo="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.upTo}">
-      <span class="text-xs text-gray-500">名及以内</span>
+      <input type="number" data-tier-from="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.from}">
+      <span class="text-xs text-gray-500">名 -</span>
+      <input type="number" data-tier-to="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.to}">
+      <span class="text-xs text-gray-500">名，赋</span>
       <input type="number" step="0.1" data-tier-points="${i}" class="w-20 border rounded-lg p-1.5 text-sm" value="${t.points}">
-      <span class="text-xs text-gray-500">赋分</span>
+      <span class="text-xs text-gray-500">分</span>
       <button class="text-gray-300 hover:text-red-500 text-sm px-1" onclick="examScoreRemoveTier(${i})">×</button>
     </div>`).join('') || '<div class="text-xs text-gray-400">暂无区间</div>';
 
@@ -3275,7 +3281,7 @@ function renderExamScore() {
           <span class="text-xs text-gray-500">校次列：</span>
           <select id="esSchoolCol" class="border rounded-lg p-1.5 text-sm">${rankColOpts}</select>
         </div>
-        <div class="text-xs text-gray-500">名次区间 → 赋分（按区间从小到大依次匹配）：</div>
+        <div class="text-xs text-gray-500">名次区间 → 赋分（闭区间，两端都包含；按区间从小到大依次匹配）：</div>
         <div id="esTierWrap">${tierRows}</div>
         <button class="text-xs text-primary border border-primary px-3 py-1 rounded-full hover:bg-primary/5" onclick="examScoreAddTier()">+ 增加区间</button>
       </div>
@@ -3362,7 +3368,10 @@ function renderExamScore() {
   </div>`;
 }
 function examScoreAddTier() {
-  state.examScore.schoolRank.tiers.push({ upTo: 100, points: 1 });
+  const tiers = state.examScore.schoolRank.tiers;
+  const lastTo = tiers.length ? +tiers[tiers.length - 1].to : 0;
+  const from = lastTo ? lastTo + 1 : 1;
+  state.examScore.schoolRank.tiers.push({ from, to: from + 99, points: 1 });
   save(); render();
 }
 function examScoreRemoveTier(i) {
@@ -3375,10 +3384,11 @@ function saveExamScoreRules() {
   state.examScore.schoolRank.enabled = !!g('esSchoolEnabled').checked;
   state.examScore.schoolRank.column = g('esSchoolCol').value;
   const tiers = [];
-  document.querySelectorAll('[data-tier-upTo]').forEach(el => {
-    const i = +el.dataset.tierUpTo;
+  document.querySelectorAll('[data-tier-from]').forEach(el => {
+    const i = +el.dataset.tierFrom;
+    const toEl = document.querySelector(`[data-tier-to="${i}"]`);
     const p = document.querySelector(`[data-tier-points="${i}"]`);
-    tiers.push({ upTo: +el.value || 99999, points: +p.value || 0 });
+    tiers.push({ from: +el.value || 1, to: +(toEl && toEl.value) || 99999, points: +p.value || 0 });
   });
   state.examScore.schoolRank.tiers = tiers;
   state.examScore.subjectTop.enabled = !!g('esSubjectEnabled').checked;
