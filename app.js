@@ -939,7 +939,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/相册/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','album','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','reminders','examscore'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -992,7 +992,7 @@ function setActiveClass(cls) {
   selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','album','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','reminders','examscore'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(); render();
 }
