@@ -390,6 +390,7 @@ function migrateState(s) {
   if (!Array.isArray(s.examData.columns) || !s.examData.columns.length) s.examData.columns = defaultExamColumns();
   s.examData.classes.forEach(c => { if (!c.gender || typeof c.gender !== 'object') c.gender = {}; });
   s.examData.records.forEach(r => { if (!r.colType) r.colType = 'score'; });
+  syncExamClassesToStudents(s); // 成绩分析班级/成员与学生管理对齐
   if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
   ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 1; });
   if (!Array.isArray(s.snapshots)) s.snapshots = [];
@@ -2776,6 +2777,39 @@ function examStudentGender(name) {
   const c = (state.examData.classes || []).find(x => x.gender && x.gender[name]);
   return c ? c.gender[name] : '';
 }
+// 成绩分析班级与学生管理对齐（以学生管理为唯一真相源）
+// 1) 学生管理中的每个班级都在成绩分析生成/保留对应班级；
+// 2) 学生管理中不存在的班级（及其记录）从成绩分析删除；
+// 3) 孤立的成绩记录按学生管理中的班级重新归类。
+function syncExamClassesToStudents(s) {
+  if (!s.examData || !Array.isArray(s.examData.classes)) return;
+  const clsList = (s.classes || []).filter(c => c && (c.id || c.name));
+  const byKey = {};
+  s.examData.classes.forEach(c => { if (c) byKey[c.name || c.id] = c; });
+  const next = [];
+  const usedIds = new Set();
+  clsList.forEach(c => {
+    const id = c.id || c.name, name = c.name || c.id;
+    let obj = byKey[name] || { id, name, gender: {} };
+    obj.id = id; obj.name = name;
+    if (!obj.gender || typeof obj.gender !== 'object') obj.gender = {};
+    delete obj.studentNames; // 成绩分析不再自存名单，统一取自学生管理
+    usedIds.add(obj.id);
+    next.push(obj);
+  });
+  s.examData.classes = next;
+  if (Array.isArray(s.examData.records)) {
+    const keptIds = new Set(next.map(c => c.id));
+    s.examData.records = s.examData.records.filter(r => {
+      if (keptIds.has(r.classId)) return true;
+      // 原班级已从学生管理移除：按学生当前班级重新归类；学生已不在学生管理则删除该记录
+      const st = (s.students || []).find(x => x.name === r.studentName);
+      const target = st && next.find(x => x.name === st.class || x.id === st.class);
+      if (target) { r.classId = target.id; return true; }
+      return false;
+    });
+  }
+}
 function examById(id) { return state.examData.exams.find(e => e.id === id); }
 function examSubjects() {
   const set = new Set(state.examData.subjects);
@@ -2831,9 +2865,15 @@ function studentRankSeries(studentName, subject) {
     return { exam: e.name, date: e.date, score: +mine.score, rank };
   }).filter(Boolean);
 }
+// 成绩分析班级成员：直接取自「学生管理」，以学生管理为唯一真相源
+function examStudentsOfClass(className) {
+  return (state.students || []).filter(s => s && s.name && s.class === className).map(s => s.name);
+}
 function findClassIdByName(name) {
-  for (const c of state.examData.classes) {
-    if ((c.studentNames || []).includes(name)) return c.id;
+  const st = (state.students || []).find(x => x.name === name);
+  if (st && st.class) {
+    const c = state.examData.classes.find(c => c.name === st.class || c.id === st.class);
+    if (c) return c.id;
   }
   return null;
 }
@@ -3023,101 +3063,37 @@ function setExamTab(t) { examTab = t; render(); }
 function selectExamStudent(name) { examSelectedStudent = name; renderExamAnalysisInto(); }
 
 // ---------- 数据管理 ----------
-function addExamClass() {
-  const id = 'c' + Date.now();
-  state.examData.classes.push({ id, name: '新班级', studentNames: [] });
-  save(); render();
-}
-function delExamClass(id) {
-  if (state.examData.classes.length <= 1) return alert('至少保留一个班级');
-  state.examData.records = state.examData.records.filter(r => r.classId !== id);
-  state.examData.classes = state.examData.classes.filter(c => c.id !== id);
-  save(); render();
-}
-function removeClassStudent(clsId, idx) {
-  const c = examClass(clsId); if (!c) return;
-  c.studentNames.splice(idx, 1);
-  save(); render();
-}
-function clearClassNames(clsId) {
-  const c = examClass(clsId); if (!c) return;
-  c.studentNames = [];
-  save(); render();
-}
-function uploadClassNames(clsId) {
-  const f = document.getElementById('clsFile_' + clsId);
-  const file = f && f.files[0]; if (!file) return alert('请先选择文件');
-  const finish = (text) => {
-    const names = text.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-    const c = examClass(clsId);
-    if (c) { c.studentNames = names; examSyncClassGender(c); save(); render(); alert(`已导入 ${names.length} 名学生到「${c.name}」`); }
-  };
-  if (/\.xlsx?$/i.test(file.name)) {
-    file.arrayBuffer().then(buf => {
-      try { const wb = XLSX.read(new Uint8Array(buf), { type: 'array' }); const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); finish(csv); }
-      catch (err) { alert('Excel 解析失败：' + err.message); }
-    }).catch(() => alert('读取文件失败'));
-  } else {
-    const r = new FileReader(); r.onload = e => finish(e.target.result); r.readAsText(file);
-  }
-}
-function examSyncClassGender(c) {
-  if (!c) return;
-  if (!c.gender || typeof c.gender !== 'object') c.gender = {};
-  (c.studentNames || []).forEach(n => {
-    const s = (state.students || []).find(x => x.name === n);
-    if (s && s.gender) c.gender[n] = s.gender;
-  });
-}
-function saveExamClasses() {
-  document.querySelectorAll('[data-cls]').forEach(el => {
-    const c = examClass(el.dataset.cls); if (!c) return;
-    c[el.dataset.field] = el.value;
-  });
-  document.querySelectorAll('[data-cls-names]').forEach(el => {
-    const c = examClass(el.dataset.clsNames); if (!c) return;
-    c.studentNames = el.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-    examSyncClassGender(c);
-  });
-  save(); render();
-}
+// 成绩分析的班级与成员统一取自「学生管理」，以学生管理为唯一真相源；
+// 班级增删、成员增删、性别调整均在「学生管理」完成，成绩分析自动同步（见 syncExamClassesToStudents）。
 
 function renderExamSettings() {
-  const clsHtml = state.examData.classes.map(c => `
+  const clsHtml = state.examData.classes.map(c => {
+    const members = examStudentsOfClass(c.name);
+    const chips = members.length ? members.map(n => {
+      const g = examStudentGender(n);
+      const badge = g ? `<span class="text-[10px] px-1 py-0.5 rounded bg-white/60 text-slate-500">${esc(g)}</span>` : '';
+      return `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700"><b>${esc(n)}</b>${badge}</span>`;
+    }).join('') : '<span class="text-xs text-gray-400">学生管理中暂无该班学生</span>';
+    return `
     <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
       <div class="flex items-center gap-2 mb-3">
-        <input class="flex-1 border rounded-lg p-2 text-sm font-medium" value="${esc(c.name)}" data-cls="${c.id}" data-field="name">
-        <span class="text-xs text-gray-400">${(c.studentNames || []).length}人</span>
-        <button class="text-xs text-red-500 hover:underline px-2" onclick="clearClassNames('${c.id}')">清空</button>
-        ${state.examData.classes.length > 1 ? `<button class="text-gray-300 hover:text-red-500" onclick="delExamClass('${c.id}')">🗑️</button>` : ''}
+        <div class="flex-1 text-sm font-medium">${esc(c.name)}</div>
+        <span class="text-xs text-gray-400">${members.length}人</span>
       </div>
-      <div class="flex flex-wrap gap-2 mb-3 min-h-[2rem]">
-        ${(c.studentNames || []).length ? c.studentNames.map(n => {
-          const g = examStudentGender(n);
-          const genderBadge = g ? `<span class="text-[10px] px-1 py-0.5 rounded bg-white/60 text-slate-500">${esc(g)}</span>` : '';
-          return `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-          <b>${esc(n)}</b>${genderBadge}
-          <button class="text-gray-400 hover:text-red-500 leading-none" onclick="removeClassStudent('${c.id}', ${c.studentNames.indexOf(n)})">×</button>
-        </span>`;
-        }).join('') : '<span class="text-xs text-gray-400">暂无学生，请在下方粘贴或上传名单</span>'}
-      </div>
-      <textarea data-cls-names="${c.id}" rows="4" class="w-full border rounded-lg p-3 text-xs" placeholder="每行一个学生姓名，可批量粘贴">${esc((c.studentNames || []).join('\n'))}</textarea>
-      <div class="flex gap-2 mt-2 items-center">
-        <input id="clsFile_${c.id}" type="file" accept=".csv,.txt,.xlsx,.xls" class="text-xs flex-1">
-        <button class="text-xs text-primary hover:underline" onclick="uploadClassNames('${c.id}')">上传名单</button>
-      </div>
-    </div>`).join('');
+      <div class="flex flex-wrap gap-2 mb-3 min-h-[2rem]">${chips}</div>
+      <p class="text-[11px] text-gray-400">名单自动同步自「学生管理」，增删学生或调整班级请前往学生管理。</p>
+    </div>`;
+  }).join('');
 
   return `
   <div class="space-y-5">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">🏫 班级与成员</div>
-        <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="addExamClass()">+ 增加班级</button>
+        <div class="font-bold text-gray-800">🏫 班级与成员（同步自学生管理）</div>
       </div>
-      <p class="text-xs text-gray-500 mb-3">可增删班级数量；成员支持 Excel 批量上传或单独增删。性别自动从「学生管理」同步，无需重复选择。导入成绩时按姓名自动匹配班级。</p>
+      <p class="text-xs text-gray-500 mb-3">成绩分析的班级与成员直接取自「学生管理」，以学生管理为唯一真相源。修改学生、班级、性别请在「学生管理」中进行，成绩分析会自动同步，无需在此维护名单。</p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${clsHtml}</div>
-      <button class="mt-4 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称与名单</button>
+      <button class="mt-4 text-sm text-primary hover:underline" onclick="navigate('students')">➡️ 去学生管理维护名单</button>
     </div>
   </div>`;
 }
@@ -3351,7 +3327,7 @@ function eiMatchInfoHTML() {
     if (!hasVal) return;
     total++;
     let cid = null;
-    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv && (c.studentNames || []).includes(name)) || {}).id; }
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv) || {}).id; }
     if (!cid) cid = findClassIdByName(name);
     if (cid) matched++; else unmatched.push(name);
   });
@@ -3487,7 +3463,7 @@ function doExamImportWizard() {
     const name = String(r[eiNameCol] ?? '').trim();
     if (!name) return;
     let cid = null;
-    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv && (c.studentNames || []).includes(name)) || {}).id; }
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv) || {}).id; }
     if (!cid) cid = findClassIdByName(name);
     if (!cid) { unmatched.push(name); return; }
     mapEntries.forEach(([idx, m]) => {
@@ -3543,7 +3519,7 @@ function renderExamAnalysis() {
   if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
   ensureAnalysisSel();
   const cols = examColumns().filter(c => c.enabled);
-  const examStu = [...new Set(state.examData.records.filter(r => anSelExams.includes(r.examId)).map(r => r.studentName))];
+  const examStu = [...new Set(state.examData.records.filter(r => anSelExams.includes(r.examId) && (state.students||[]).some(s => s.name === r.studentName)).map(r => r.studentName))];
   const examChk = state.examData.exams.map(e => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-exam" value="${e.id}" ${isAnChecked(anSelExams, e.id) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(e.name)}</label>`).join('');
   const subChk = cols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-sub" value="${esc(c.key)}" ${isAnChecked(anSelSubjects, c.key) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</label>`).join('');
   const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="an-cls" value="${c.id}" ${isAnChecked(anSelClasses, c.id) ? 'checked' : ''} onchange="collectFilters();renderExamAnalysisInto();"> ${esc(c.name)}</label>`).join('');
@@ -3694,12 +3670,13 @@ function renderExamAnalysisInto() {
   const studentSet = new Set();
   state.examData.records.filter(r => anSelExams.includes(r.examId) && anSelClasses.includes(r.classId)).forEach(r => {
     if (anSelStudents.length && !anSelStudents.includes(r.studentName)) return;
+    if (!(state.students||[]).some(s => s.name === r.studentName)) return; // 仅显示学生管理中存在的
     studentSet.add(r.studentName);
   });
   const studentList = [...studentSet];
 
   const buildRow = (name) => {
-    const myClass = classes.find(c => (c.studentNames || []).includes(name)) || state.examData.classes.find(c => (c.studentNames || []).includes(name));
+    const myClass = classes.find(c => examStudentsOfClass(c.name).includes(name)) || state.examData.classes.find(c => examStudentsOfClass(c.name).includes(name));
     const classId = myClass ? myClass.id : null;
     const colVals = {};
     scoreSubs.forEach(s => {
