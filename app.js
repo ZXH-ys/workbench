@@ -636,6 +636,11 @@ function autoArchiveAttendance(){
 let state = loadState();
 autoArchiveAttendance();   // ★ 跨日自动归档：打开即把前一天考勤存入历史并重置当天
 let currentRoute = 'home';
+let gsQuery = '';            // 全局搜索框内容（姓名/科目）
+let profileSid = null;       // 当前查看的学生档案
+let profileSubject = '';     // 档案页成绩趋势所选科目
+let hwSearchName = '';       // 作业模块姓名搜索
+let hwSubjectFilter = '';    // 作业模块科目筛选
 
 // ===================== Helpers =====================
 const now = new Date();
@@ -980,12 +985,17 @@ function renderTopBar() {
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
+  const searchBox = `<div class="flex items-center gap-2 border border-gray-200 rounded-full px-3 py-1.5 bg-gray-50" style="min-width:220px;">
+    <span class="text-gray-400 text-sm">🔍</span>
+    <input id="gsInput" value="${esc(gsQuery)}" oninput="gsSetQuery(this.value)" onkeydown="if(event.key==='Enter')gsOpen()" placeholder="搜索姓名/科目，如：张三 数学" class="bg-transparent outline-none text-sm w-40">
+    <button onclick="gsOpen()" class="text-primary text-xs font-medium hover:underline">搜索</button>
+  </div>`;
   const syncBadge = `<span id="sync-badge" class="text-[11px] text-gray-400 mr-1"></span>`;
   const logoutBtn = `<button onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>`;
   let extra = '';
   if (currentRoute === 'points') {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-      ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">积分管理</h1>
+      ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">积分管理</h1>${searchBox}
       <div class="flex items-center gap-2 flex-wrap justify-end">
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtRules()">⚙️ 规则</button>
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtLogs()">📜 日志</button>
@@ -1006,7 +1016,7 @@ function renderTopBar() {
     extra = importBtn + `<button ${data[currentRoute]} class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">${labels[currentRoute]}</button>`;
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-    ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>
+    ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>${searchBox}
     <div class="flex items-center gap-3">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
   </header>`;
 }
@@ -1021,8 +1031,185 @@ function renderPage() {
     album: renderAlbum, seating: renderSeating, classRecord: renderClassRecord,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
+    search: renderGlobalSearch, profile: renderStudentProfile,
   };
   return (map[currentRoute] || renderHome)();
+}
+
+// ===================== 全局搜索 + 学生档案 =====================
+function gsSetQuery(v) { gsQuery = v; }
+function gsOpen() { if (!gsQuery.trim()) return; currentRoute = 'search'; render(); }
+function openProfile(sid) { profileSid = sid; currentRoute = 'profile'; render(); }
+
+function studentLeaveCount(name) {
+  let n = 0;
+  (state.attendance.logs || []).forEach(l => (l.leave || []).forEach(x => { if (x.name === name) n++; }));
+  if (state.attendance.current && Object.prototype.hasOwnProperty.call(state.attendance.current.leave || {}, name)) n++;
+  return n;
+}
+
+function gsParse() {
+  const tokens = (gsQuery || '').trim().split(/\s+/).filter(Boolean);
+  const nameHits = state.students.filter(s => tokens.some(t => t.length >= 2 && s.name.includes(t)));
+  const nameSet = new Set(nameHits.map(s => s.name));
+  const kw = tokens.filter(t => !nameSet.has(t));
+  const kwMatch = (txt) => !kw.length || kw.every(t => (txt || '').includes(t));
+  return { tokens, nameHits, nameSet, kw, kwMatch };
+}
+
+function renderGlobalSearch() {
+  const { nameHits, nameSet, kw, kwMatch } = gsParse();
+  const rows = [];
+  state.classRecords.filter(r => (!nameSet.size || (r.studentName && nameSet.has(r.studentName))) && kwMatch((r.subject || '') + ' ' + (r.content || ''))).forEach(r => {
+    rows.push({ mod: '课堂', tag: '#EEEDFE', tagc: '#534AB7', name: r.studentName || '', subj: r.subject || '', content: r.content || '', date: r.date || '', go: "navigate('classRecord')" });
+  });
+  state.homework.filter(h => (!nameSet.size || kwMatch(h.title || '') || nameSet.has(h.class || '')) && kwMatch((h.subject || '') + ' ' + (h.title || ''))).forEach(h => {
+    rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: '', subj: h.subject || '', content: h.title || '', date: h.due || '', go: "navigate('homework')" });
+  });
+  state.students.filter(s => !nameSet.size || nameSet.has(s.name)).forEach(s => {
+    (s.records || []).filter(r => kwMatch(r.content || '')).forEach(r => {
+      rows.push({ mod: '行为', tag: '#FAECE7', tagc: '#993C1D', name: s.name, subj: recordTypeLabel(r.type), content: r.content || '', date: r.date || '', go: "openProfile('" + s.id + "')" });
+    });
+  });
+  state.examData.records.filter(r => (!nameSet.size || nameSet.has(r.studentName)) && kwMatch(r.subject || '')).forEach(r => {
+    const ex = state.examData.exams.find(e => e.id === r.examId) || {};
+    rows.push({ mod: '成绩', tag: '#E6F1FB', tagc: '#185FA5', name: r.studentName || '', subj: r.subject || '', content: '得分 ' + (r.score != null ? r.score : '—'), date: ex.name || '', go: "navigate('exam')" });
+  });
+
+  const profileBtns = nameHits.map(s => `<button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openProfile('${s.id}')">进入 ${esc(s.name)} 档案 →</button>`).join(' ');
+  const rowsHtml = rows.length ? rows.map(r => `
+    <div class="flex items-center gap-3 p-3 rounded-xl bg-white border border-gray-100 mb-2 cursor-pointer hover:bg-gray-50" onclick="${r.go}">
+      <span class="text-xs px-2 py-0.5 rounded" style="background:${r.tag};color:${r.tagc};">${r.mod}</span>
+      ${r.name ? `<span class="text-sm font-medium text-gray-800">${esc(r.name)}</span>` : ''}
+      <span class="text-xs text-gray-500">${esc(r.subj)}</span>
+      <span class="text-sm text-gray-700 flex-1 truncate">${esc(r.content)}</span>
+      <span class="text-xs text-gray-400">${esc(r.date)}</span>
+    </div>`).join('') : '<div class="text-gray-400 text-sm p-6 text-center">未找到匹配记录，换个姓名或科目试试</div>';
+
+  return `
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-gray-800">🔍 搜索 “${esc(gsQuery)}”</div>
+        <button class="text-xs text-gray-400 hover:text-primary" onclick="gsQuery='';navigate('home')">✕ 清除</button>
+      </div>
+      <p class="text-xs text-gray-500 mb-3">跨 课堂 / 作业 / 行为 / 成绩 聚合结果，共 ${rows.length} 条${nameHits.length ? '；命中 ' + nameHits.length + ' 名学生' : ''}。</p>
+      ${profileBtns ? `<div class="flex flex-wrap gap-2">${profileBtns}</div>` : ''}
+    </div>
+    <div>${rowsHtml}</div>
+  </div>`;
+}
+
+function studentLatestExamRanks(s) {
+  const cid = findClassIdByName(s.name); if (!cid) return null;
+  const exams = (state.examData.exams || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const last = exams[exams.length - 1]; if (!last) return null;
+  const subj = profileSubject || (examScoreColumns()[0] && examScoreColumns()[0].key);
+  if (!subj) return null;
+  return { exam: last.name, classRank: examClassRank(last.id, cid, s.name, subj), schoolRank: examGradeRank(last.id, s.name, subj, state.examData.classes.map(c => c.id)) };
+}
+function profileTrend(s) {
+  const cid = findClassIdByName(s.name);
+  const classIds = state.examData.classes.map(c => c.id);
+  const exams = (state.examData.exams || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  return exams.map(e => {
+    const r = state.examData.records.find(x => x.examId === e.id && x.studentName === s.name && x.subject === profileSubject);
+    if (!r) return null;
+    return { name: e.name, date: e.date, score: +r.score, classRank: cid ? examClassRank(e.id, cid, s.name, profileSubject) : null, schoolRank: examGradeRank(e.id, s.name, profileSubject, classIds) };
+  }).filter(Boolean);
+}
+function trendSvg(data) {
+  if (!data.length) return '<div class="text-xs text-gray-400">暂无该科目成绩</div>';
+  const W = 360, H = 150, padL = 36, padB = 26, padT = 14, padR = 10;
+  const scores = data.map(d => d.score);
+  const min = Math.min(...scores), max = Math.max(...scores);
+  const lo = Math.max(0, Math.floor((min - 5) / 10) * 10), hi = Math.ceil((max + 5) / 10) * 10;
+  const x = i => padL + (W - padL - padR) * (data.length === 1 ? 0.5 : i / (data.length - 1));
+  const y = v => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
+  const pts = data.map((d, i) => `${x(i).toFixed(1)},${y(d.score).toFixed(1)}`).join(' ');
+  const dots = data.map((d, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(d.score).toFixed(1)}" r="3" fill="#185FA5"/>`).join('');
+  const xlabels = data.map((d, i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" font-size="10" fill="#888" text-anchor="middle">${esc(d.name)}</text>`).join('');
+  const ylabels = [lo, Math.round((lo + hi) / 2), hi].map(v => `<text x="30" y="${y(v).toFixed(1)}" font-size="10" fill="#888" text-anchor="end">${v}</text>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;">
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="#ddd" stroke-width="1"/>
+    <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="#ddd" stroke-width="1"/>
+    <polyline points="${pts}" fill="none" stroke="#185FA5" stroke-width="2"/>
+    ${dots}${xlabels}${ylabels}
+  </svg>`;
+}
+function setProfileSubject(sub) { profileSubject = sub; render(); }
+
+function renderStudentProfile() {
+  const s = state.students.find(x => x.id === profileSid);
+  if (!s) return '<div class="text-gray-400 p-6">未找到该学生</div>';
+  const totalPts = ptSum(ptStudentLogs(s.id));
+  const examPts = examScoreStudentTotal(s.name);
+  const leaveN = studentLeaveCount(s.name);
+  const ranks = studentLatestExamRanks(s);
+  const scoreCols = examScoreColumns();
+  if (!profileSubject && scoreCols[0]) profileSubject = scoreCols[0].key;
+  const subjTabs = scoreCols.map(c => `<button class="px-3 py-1.5 rounded-full text-xs font-medium ${profileSubject === c.key ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="setProfileSubject('${c.key}')">${esc(c.key)}</button>`).join('');
+  const trend = profileTrend(s);
+  const crs = state.classRecords.filter(r => r.studentId === s.id).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const crHtml = crs.length ? crs.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无课堂记录</div>';
+  const hwKw = /未完成|没交|未做|不交|作业|背诵|默写/;
+  const hws = crs.filter(r => hwKw.test(r.content || ''));
+  const hwHtml = hws.length ? hws.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无作业相关记录</div>';
+  const beh = { critic: (s.records || []).filter(r => r.type === 'critic').length, praise: (s.records || []).filter(r => r.type === 'praise').length, chat: (s.records || []).filter(r => r.type === 'chat').length, leave: (s.records || []).filter(r => r.type === 'leave').length };
+  return `
+  <div class="space-y-5">
+    <div class="bg-white rounded-2xl p-5 shadow-sm flex items-center gap-4 flex-wrap">
+      <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-medium text-lg">${esc(s.name.slice(0, 1))}</div>
+      <div class="flex-1">
+        <div class="font-bold text-gray-800">${esc(s.name)}</div>
+        <div class="text-sm text-gray-500">${esc(s.class || '')}${s.gender ? (' · ' + s.gender) : ''}</div>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <span class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600">总积分 ${totalPts}</span>
+        <span class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600">考试赋分 ${examPts}</span>
+        <span class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600">请假 ${leaveN} 次</span>
+        ${ranks ? `<span class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600">${esc(ranks.exam)} 班次第 ${ranks.classRank || '—'}</span><span class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600">校次第 ${ranks.schoolRank || '—'}</span>` : ''}
+      </div>
+      <button class="text-xs text-gray-400 hover:text-primary" onclick="navigate('students')">← 返回学生管理</button>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">积分概览</div>
+      <div class="grid grid-cols-4 gap-3">
+        <div class="bg-gray-50 rounded-xl p-3"><div class="text-xs text-gray-400">考试赋分</div><div class="text-2xl font-medium">${examPts}</div></div>
+        <div class="bg-gray-50 rounded-xl p-3"><div class="text-xs text-gray-400">日常</div><div class="text-2xl font-medium">${ptDimScore(s.id, 'daily')}</div></div>
+        <div class="bg-gray-50 rounded-xl p-3"><div class="text-xs text-gray-400">任职</div><div class="text-2xl font-medium">${ptDimScore(s.id, 'post')}</div></div>
+        <div class="bg-gray-50 rounded-xl p-3"><div class="text-xs text-gray-400">总计</div><div class="text-2xl font-medium">${totalPts}</div></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800">成绩趋势</div>
+        <div class="flex flex-wrap gap-1">${subjTabs}</div>
+      </div>
+      ${trendSvg(trend)}
+      <div class="text-xs text-gray-500 mt-1">${trend.map(d => `${esc(d.name)} 班次第${d.classRank || '—'}/校次第${d.schoolRank || '—'}`).join(' ｜ ') || '暂无数据'}</div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">课堂记录</div>
+      ${crHtml}
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">作业</div>
+      ${hwHtml}
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm">
+      <div class="font-bold text-gray-800 mb-3">行为记录</div>
+      <div class="flex gap-2 flex-wrap">
+        <span class="text-xs px-3 py-1 rounded-full bg-orange-50 text-orange-600">批评 ${beh.critic}</span>
+        <span class="text-xs px-3 py-1 rounded-full bg-green-50 text-green-600">表扬 ${beh.praise}</span>
+        <span class="text-xs px-3 py-1 rounded-full bg-blue-50 text-blue-600">谈心 ${beh.chat}</span>
+        <span class="text-xs px-3 py-1 rounded-full bg-red-50 text-red-600">请假 ${beh.leave}</span>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ===================== Home =====================
@@ -1074,6 +1261,23 @@ function renderHome() {
             <button class="text-xs px-2 py-1 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="openAddLeaveModal()">+ 记请假</button>
           </div>`;
       })()}
+    </div>
+    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
+      <div class="font-bold text-gray-800 mb-3">⚡ 日常快捷操作</div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="openQuickRecord()">
+          <div class="font-medium text-gray-800">✏️ 一句话记录</div>
+          <div class="text-xs text-gray-500 mt-1">课堂/作业/积分… 一次录入自动归类</div>
+        </button>
+        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="goExamUpload()">
+          <div class="font-medium text-gray-800">📥 上传考试成绩</div>
+          <div class="text-xs text-gray-500 mt-1">导入 Excel，自动算赋分</div>
+        </button>
+        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="openAddLeaveModal()">
+          <div class="font-medium text-gray-800">🏥 记请假</div>
+          <div class="text-xs text-gray-500 mt-1">登记当天请假学生</div>
+        </button>
+      </div>
     </div>
     ${renderHomePointsCard()}
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
@@ -1562,6 +1766,9 @@ function deleteComm(id) {
 // ===================== Homework =====================
 function renderHomework() {
   const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
+  const subjects = [...new Set(state.homework.filter(h => !h.class || h.class === state.activeClass).map(h => h.subject).filter(Boolean))];
+  const subjTabs = [{ id: '', name: '全部' }].concat(subjects).map(s => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject('${s.id}')">${esc(s.name)}</button>`).join('');
+  const list = state.homework.filter(h => (!h.class || h.class === state.activeClass) && (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!hwSearchName.trim() || (h.title || '').includes(hwSearchName.trim()) || (h.subject || '').includes(hwSearchName.trim())));
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -1570,13 +1777,20 @@ function renderHomework() {
       </div>
       <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
     </div>
-    <div class="grid gap-4">${state.homework.filter(h => !h.class || h.class === state.activeClass).map(h => `
+    <div class="flex flex-wrap gap-2 mb-3">${subjTabs}</div>
+    <div class="relative mb-3">
+      <input value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名/科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
+    </div>
+    <div class="grid gap-4">${list.map(h => `
       <div class="p-4 rounded-xl bg-gray-50 flex justify-between items-center">
         <div><div class="font-bold text-gray-800 text-sm">${esc(h.title)}</div><div class="text-xs text-gray-500 mt-1">${esc(h.class)} · ${esc(h.subject)}</div></div>
         <div class="flex items-center gap-3"><div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full">截止 ${esc(h.due)}</div><button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button></div>
-      </div>`).join('') || '<div class="text-gray-400 text-sm">暂无作业，可点击「+ 布置作业」或在首页快速记录中输入「布置语文作业：背诵课文」自动添加。</div>'}</div>
+      </div>`).join('') || '<div class="text-gray-400 text-sm">暂无匹配的作业。</div>'}</div>
   </div>`;
 }
+function hwSetSearch(v) { hwSearchName = v; render(); }
+function hwSetSubject(s) { hwSubjectFilter = s; render(); }
 function openHomeworkForm() {
   openModal('布置作业', `
     <div class="space-y-4">
@@ -3416,7 +3630,26 @@ function renderExam() {
   </div>`;
 }
 function setExamTab(t) { examTab = t; render(); }
+function goExamUpload() { examTab = 'upload'; navigate('exam'); }
 function selectExamStudent(name) { examSelectedStudent = name; renderExamAnalysisInto(); }
+function examQuickCompareClasses() {
+  ensureAnalysisSel();
+  anSelClasses = state.examData.classes.map(c => c.id);
+  anSelExams = state.examData.exams.map(e => e.id);
+  anSelStudents = [];
+  renderExamAnalysisInto();
+}
+function examQuickPersonalTrend() {
+  ensureAnalysisSel();
+  if (!examSelectedStudent) {
+    const first = [...new Set(state.examData.records.map(r => r.studentName))][0];
+    if (!first) { alert('暂无成绩数据，请先上传成绩'); return; }
+    examSelectedStudent = first;
+  }
+  anSelClasses = state.examData.classes.map(c => c.id);
+  anSelExams = state.examData.exams.map(e => e.id);
+  renderExamAnalysisInto();
+}
 
 // ---------- 数据管理 ----------
 // 成绩分析的班级与成员统一取自「学生管理」，以学生管理为唯一真相源；
@@ -3887,6 +4120,11 @@ function renderExamAnalysis() {
   };
   return `
   <div class="space-y-4">
+    <div class="flex flex-wrap items-center gap-2">
+      <button class="text-sm px-4 py-2 rounded-full bg-primary text-white hover:bg-primaryDark" onclick="examQuickCompareClasses()">📊 对比两班均分</button>
+      <button class="text-sm px-4 py-2 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="examQuickPersonalTrend()">👤 个人趋势</button>
+      <span class="text-xs text-gray-400">快捷入口：一键套用对比模板</span>
+    </div>
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div class="font-bold text-gray-800">🔎 筛选条件</div>
