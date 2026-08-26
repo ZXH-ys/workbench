@@ -3973,7 +3973,74 @@ const QR_DIM_KWS = {
 const QR_CONNECTORS = /(?:且|并且|又|还|同时|接着|随后|另外|此外|以及|然后|再|最后)/;
 const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
 
-// 智能解析：返回 { raw, segments:[{student:{id,name}, items:[{text,content,subjects,homework,rules,recType,dim,pointDelta,enabled}]}], matched:[] }
+// 从文本中找出可能的学生姓名（不在名册中的）。
+// 策略：在每个分句开头扫描「姓名[,、]姓名[,、]...」序列，遇到事件描述或已知学生边界即停止。
+function extractUnknownNames(text, knownHits) {
+  const keywordSet = new Set();
+  ['语文','数学','英语','物理','化学','政治','历史','地理','生物','体育','音乐','美术','信息','班会','其他',
+   '作业','布置作业','交作业','写作业','完成作业','背诵','默写','练习','抄写','预习','复习','试卷','卷子','学案','同步','练习册','课后题',
+   '批评','表扬','谈心','请假','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话',
+   '今天','明天','昨天','上午','下午','课间','课堂','学校','老师','同学','班主任','家长','孩子','提出','给予','予以','进行','做了','被'].forEach(k => keywordSet.add(k));
+  const isNoise = (word) => keywordSet.has(word) || QR_CONNECTORS.test(word);
+  const knownRanges = knownHits.map(h => ({ start: h.pos, end: h.pos + h.len }));
+  const isKnownAt = (pos, len) => knownRanges.some(r => r.start === pos && r.end === pos + len);
+  const isKnownOverlap = (pos, len) => knownRanges.some(r => pos < r.end && pos + len > r.start);
+
+  const names = [];
+  const startsWithNoise = (str) => {
+    for (const kw of keywordSet) { if (str.startsWith(kw)) return true; }
+    return false;
+  };
+  const clauses = text.split(/([；。;])/);
+  let offset = 0;
+  for (let i = 0; i < clauses.length; i += 2) {
+    const clause = clauses[i];
+    const sep = clauses[i + 1] || '';
+    let pos = offset;
+    while (pos < offset + clause.length) {
+      // 从当前位置尝试2-4字中文，选择「后面紧跟关键词」的最长合法长度
+      let name = '', namePos = pos, nextPos = pos;
+      for (let len = 2; len <= 4 && pos + len <= text.length; len++) {
+        const candidate = text.slice(pos, pos + len);
+        if (!/^[\u4e00-\u9fa5]{2,4}$/.test(candidate)) break;
+        if (startsWithNoise(text.slice(pos + len))) {
+          name = candidate;
+          nextPos = pos + len;
+          break;
+        }
+        name = candidate;
+        nextPos = pos + len;
+      }
+      if (!name) break;
+      // 若与已知学生重叠：完全 known 则继续向后，否则停止
+      if (isKnownOverlap(namePos, name.length)) {
+        if (isKnownAt(namePos, name.length)) {
+          pos = nextPos;
+          if (!/[，,、]/.test(text[pos])) break;
+          pos++;
+          continue;
+        }
+        break;
+      }
+      if (isNoise(name)) break;
+      names.push({ pos: namePos, len: name.length, name });
+      pos = nextPos;
+      if (!/[，,、]/.test(text[pos])) break;
+      pos++; // skip separator
+    }
+    offset += clause.length + sep.length;
+  }
+  // 去重并按位置排序
+  const seen = new Set();
+  return names.filter(n => {
+    const key = n.pos + '-' + n.name;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => a.pos - b.pos);
+}
+
+// 智能解析：返回 { raw, segments:[{student:{id,name}?, unknownName?, items:[{text,content,subjects,homework,rules,recType,dim,pointDelta,enabled}]}], matched:[] }
 // 支持连续多名学生共享同一段事件描述，例如「赵吉晨，孙巾杰数学作业未完成；秦梦茹，刘俊汝英语作业未完成」
 function parseQuickRecord(text) {
   text = (text || '').trim();
@@ -4001,35 +4068,42 @@ function parseQuickRecord(text) {
     }
   });
   studentHits.sort((a, b) => a.pos - b.pos);
-  // 2) 把学生按「连续并列组」拆分：组内学生之间只有逗号/顿号/连接词，共享组后的一段事件描述
-  const rawSegments = []; // [{student, text}]
-  if (!studentHits.length) {
+  // 2) 识别不在名册中的潜在学生名，并合并到所有命中位置
+  const unknownHits = extractUnknownNames(text, studentHits);
+  const allHits = studentHits.concat(unknownHits.map(u => ({ ...u, id: null, name: u.name, unknown: true }))).sort((a, b) => a.pos - b.pos);
+  // 3) 把学生按「连续并列组」拆分：组内学生之间只有逗号/顿号/连接词，共享组后的一段事件描述
+  const rawSegments = []; // [{student?, unknownName?, text}]
+  if (!allHits.length) {
     rawSegments.push({ student: null, text });
   } else {
     let i = 0;
-    while (i < studentHits.length) {
+    while (i < allHits.length) {
       let j = i;
-      while (j + 1 < studentHits.length) {
-        const between = text.slice(studentHits[j].pos + studentHits[j].len, studentHits[j + 1].pos);
+      while (j + 1 < allHits.length) {
+        const between = text.slice(allHits[j].pos + allHits[j].len, allHits[j + 1].pos);
         if (/^[，,、\s]*$/.test(between) || QR_CONNECTORS.test(between.trim())) {
           j++;
         } else {
           break;
         }
       }
-      const groupStart = studentHits[j].pos + studentHits[j].len;
-      const groupEnd = j + 1 < studentHits.length ? studentHits[j + 1].pos : text.length;
+      const groupStart = allHits[j].pos + allHits[j].len;
+      const groupEnd = j + 1 < allHits.length ? allHits[j + 1].pos : text.length;
       let sharedText = text.slice(groupStart, groupEnd).trim().replace(/^[，,、；;。.:：!！?？\s]+/, '');
       for (let k = i; k <= j; k++) {
-        rawSegments.push({ student: studentHits[k], text: sharedText });
+        if (allHits[k].unknown) {
+          rawSegments.push({ student: null, unknownName: allHits[k].name, text: sharedText });
+        } else {
+          rawSegments.push({ student: allHits[k], text: sharedText });
+        }
       }
       i = j + 1;
     }
   }
-  // 3) 每个学生片段再按连接词/标点拆分为多个记录项
+  // 4) 每个学生片段再按连接词/标点拆分为多个记录项
   const result = { raw: text, segments: [], matched };
   rawSegments.forEach(seg => {
-    const segment = { student: seg.student, items: [] };
+    const segment = { student: seg.student || null, unknownName: seg.unknownName || '', items: [] };
     const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
     const clauses = [];
     rawClauses.forEach(rc => {
@@ -4042,6 +4116,28 @@ function parseQuickRecord(text) {
     });
     if (segment.items.length) result.segments.push(segment);
   });
+  // 5) 收集暂未命中任何关键词的词语，提示用户补充关键词
+  const matchedRanges = [];
+  studentHits.forEach(h => matchedRanges.push({ start: h.pos, end: h.pos + h.len }));
+  unknownHits.forEach(h => matchedRanges.push({ start: h.pos, end: h.pos + h.len }));
+  matched.forEach(m => {
+    if (!m.value) return;
+    let idx = text.indexOf(m.value);
+    while (idx !== -1) {
+      matchedRanges.push({ start: idx, end: idx + m.value.length });
+      idx = text.indexOf(m.value, idx + 1);
+    }
+  });
+  const unmatched = [];
+  const wordRe = /[\u4e00-\u9fa5]{2,4}/g;
+  let wm;
+  while ((wm = wordRe.exec(text)) !== null) {
+    const start = wm.index, end = start + wm[0].length;
+    if (matchedRanges.some(r => start < r.end && end > r.start)) continue;
+    if (/^(今天|明天|昨天|上午|下午|晚上|课间|课堂|学校|老师|同学|班主任|家长|孩子|一个|一下|一次|没有|还有|以及|因为|所以|但是|然后|接着|随后|另外|此外|最后|第一|第二|第三|可以|需要|已经|正在|还是|这样|那里|这里|我们|你们|他们|她们|它们)$/.test(wm[0])) continue;
+    unmatched.push(wm[0]);
+  }
+  result.unmatchedWords = [...new Set(unmatched)].slice(0, 6);
   return result;
 }
 
@@ -4171,18 +4267,30 @@ function qrRenderDraft() {
   let totalItems = 0;
   qrDraft.segments.forEach(seg => totalItems += seg.items.length);
   const use2Col = totalItems > 4;
+  const hasUnknown = qrDraft.segments.some(seg => seg.unknownName);
   const list = qrDraft.segments.map((seg, si) => {
-    const stuName = seg.student ? seg.student.name : '未识别学生';
-    return `<div class="rounded-xl border p-3 space-y-2 bg-white">
+    const isUnknown = !!seg.unknownName;
+    const stuName = seg.student ? seg.student.name : (seg.unknownName || '未识别学生');
+    const badge = isUnknown ? `<span class="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded ml-1">未识别</span>` : '';
+    const addBtn = isUnknown ? `<button class="text-[11px] text-primary hover:underline" onclick="qrAddUnknownStudent(${si})">➕ 添加到学生管理</button>` : '';
+    return `<div class="rounded-xl border p-3 space-y-2 bg-white ${isUnknown ? 'border-orange-200 bg-orange-50/30' : ''}">
       <div class="flex items-center justify-between">
-        <div class="font-medium text-sm">👤 ${esc(stuName)}</div>
-        <span class="text-xs text-gray-400">${seg.items.filter(i => i.enabled).length}/${seg.items.length} 项生效</span>
+        <div class="font-medium text-sm">👤 ${esc(stuName)}${badge}</div>
+        <div class="flex items-center gap-2">
+          ${addBtn}
+          <span class="text-xs text-gray-400">${seg.items.filter(i => i.enabled).length}/${seg.items.length} 项生效</span>
+        </div>
       </div>
       ${seg.items.map((item, ii) => qrItemCard(item, si, ii)).join('')}
     </div>`;
   }).join('');
+  const unknownTip = hasUnknown ? `<div class="text-xs text-orange-600 bg-orange-50 rounded-lg p-2">检测到未在学生名册中识别到的姓名，请先点击卡片右上角的「添加到学生管理」，或直接在「学生管理」中补全名单后再记录。</div>` : '';
+  const unmatched = (qrDraft.unmatchedWords || []).filter(w => !/^[，,、；;。.:：!！?？\s]+$/).slice(0, 5);
+  const unmatchedTip = unmatched.length ? `<div class="text-xs text-blue-600 bg-blue-50 rounded-lg p-2">以下词语暂未匹配到任何关键词，可到「设置」补充：<b>${esc(unmatched.join('、'))}</b></div>` : '';
   resultEl.innerHTML = dedHtml + `<div class="space-y-3">
     <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。可在卡片内修改文本、删除或停用。</div>
+    ${unknownTip}
+    ${unmatchedTip}
     <div class="grid grid-cols-1 ${use2Col ? 'md:grid-cols-2' : ''} gap-3">${list}</div>
     <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
     <div class="flex gap-2 pt-1">
@@ -4262,6 +4370,21 @@ function qrRemoveItem(si, ii) {
   qrRenderDraft();
 }
 
+function qrAddUnknownStudent(si) {
+  if (!qrDraft || !qrDraft.segments[si]) return;
+  const name = qrDraft.segments[si].unknownName;
+  if (!name) return;
+  state.students.push({
+    id: uid(), name,
+    gender: '', class: (state.students[0] && state.students[0].class) || '',
+    avatar: '', records: []
+  });
+  qrDraft = parseQuickRecord(qrDraft.raw);
+  qrRenderDraft();
+  toast('已添加「' + name + '」到学生管理，请稍后补全性别、班级等信息');
+  pushSync();
+}
+
 function qrSetType(si, ii, type) {
   if (!qrDraft || !qrDraft.segments[si] || !qrDraft.segments[si].items[ii]) return;
   const item = qrDraft.segments[si].items[ii];
@@ -4308,9 +4431,15 @@ function qrSetPoint(si, ii, value) {
 function qrSave() {
   const date = document.getElementById('qrDate').value.trim() || todayLabel;
   if (!qrDraft || !qrDraft.segments.length) return alert('请先识别内容');
+  const unknownSegs = qrDraft.segments.filter(seg => seg.unknownName);
+  if (unknownSegs.length) {
+    const names = unknownSegs.map(seg => seg.unknownName).join('、');
+    return alert('以下姓名未在学生名册中找到，请先点击卡片右上角「添加到学生管理」：' + names);
+  }
   let nRecord = 0, nPoint = 0, nClass = 0, nHomework = 0, nLeave = 0;
   const autoPointLogs = [];
   qrDraft.segments.forEach(seg => {
+    if (!seg.student) return;
     const s = state.students.find(x => x.id === seg.student.id);
     if (!s) return;
     seg.items.forEach(item => {
