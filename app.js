@@ -3892,6 +3892,8 @@ function renderExamUpload() {
       </div>
       <p class="text-[11px] text-gray-400">支持多工作表 Excel：选工作表 → 识别标题 → 将各列映射到「科目 / 预设列」→ 一键导入全部列。重导同次考试自动覆盖。</p>
       <button class="w-full bg-primary text-white py-2.5 rounded-full text-sm hover:bg-primaryDark" onclick="openExamImportWizard()">🚀 打开智能导入向导</button>
+      <button class="w-full mt-2 bg-emerald-600 text-white py-2.5 rounded-full text-sm hover:bg-emerald-700" onclick="openProductImport()">📦 导入工具成品成绩（来自处理工具）</button>
+      <p class="text-[11px] text-gray-400 leading-relaxed">「成品成绩」为处理工具导出的固定格式 CSV：系统自动识别列、按文件名建考试，并<b>按「班级 + 姓名」与「学生管理」逐一匹配</b>后保存；班级或姓名对不上的数据会列出并跳过，绝不会混进其他班级。</p>
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
@@ -4290,6 +4292,164 @@ function doExamImportWizard() {
   alert(msg);
 }
 
+// ---------- 导入「处理工具」导出的成品成绩（固定格式，按班级+姓名匹配）----------
+let piRows = [], piHeaders = [], piExamId = '';
+function piNormalizeClass(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  const classes = [...new Set((state.students || []).map(x => x.class).filter(Boolean))];
+  if (classes.includes(s)) return s;
+  const m = s.match(/(\d+)/);
+  if (m) { const cand = m[1] + '班'; if (classes.includes(cand)) return cand; }
+  return s;
+}
+// 按「班级 + 姓名」匹配到学生管理中的真实学生，返回其班级 id（= 班级名），否则 null
+function piMatchStudent(name, rawClass) {
+  const cls = piNormalizeClass(rawClass);
+  const s = (state.students || []).find(x => x.name === name && x.class === cls);
+  return s ? cls : null;
+}
+function piDetect(headers) {
+  return (headers || []).map((h, i) => {
+    const s = String(h || '').trim();
+    let kind = 'score';
+    if (/姓名|名字|name|学生/i.test(s)) kind = 'name';
+    else if (/班级|class/i.test(s)) kind = 'class';
+    else if (/次|排名|rank|位次/i.test(s)) kind = 'rank';
+    else kind = 'score';
+    return { i, header: s, kind, label: s };
+  });
+}
+function openProductImport() {
+  piRows = []; piHeaders = [];
+  piExamId = state.examData.exams.length ? state.examData.exams[state.examData.exams.length - 1].id : '';
+  openModal('📦 导入工具成品成绩', '<div id="piHost"></div>', 'xl');
+  piRender();
+}
+function piRender() {
+  const host = document.querySelector('#modal-root .p-6'); if (!host) return;
+  const examOpts = state.examData.exams.map(e => `<option value="${e.id}" ${e.id === piExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+  const hasData = piRows.length > 0;
+  const preview = hasData ? piBuildPreviewHTML() : '<p class="text-xs text-gray-400">请选择工具导出的成品 CSV（也可选 .xlsx/.xls，会自动转为 CSV 解析）。</p>';
+  host.innerHTML = `
+  <div class="space-y-4">
+    <p class="text-xs text-gray-400 leading-relaxed">适用于「成绩处理工具」导出的固定格式 CSV。系统会自动识别列、按文件名建考试、按 <b>班级 + 姓名</b> 与「学生管理」逐一匹配后再保存；班级或姓名对不上的数据会列出并跳过，绝不会混进其他班级。</p>
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="flex-1 min-w-[220px]">
+        <label class="block text-xs text-gray-500 mb-1">选择工具导出的成品 CSV</label>
+        <input id="piFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">导入到考试（可不选，按文件名自动建）</label>
+        <select id="piExam" class="border rounded-lg p-2 text-sm">${examOpts || '<option value="">（无，将自动创建）</option>'}</select>
+      </div>
+    </div>
+    <div id="piPreview">${preview}</div>
+    <div class="flex gap-3 pt-1">
+      <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">取消</button>
+      <button id="piImportBtn" class="flex-1 bg-emerald-600 text-white py-2 rounded-full hover:bg-emerald-700 disabled:opacity-40" onclick="doProductImport()" ${hasData ? '' : 'disabled'}>导入并保存</button>
+    </div>
+  </div>`;
+  const f = document.getElementById('piFile'); if (f) f.addEventListener('change', piOnFile);
+  const ex = document.getElementById('piExam'); if (ex) ex.addEventListener('change', () => { piExamId = ex.value; });
+}
+function piOnFile(e) {
+  const file = e.target.files && e.target.files[0]; if (!file) return;
+  autoCreateExamFromFilename(file.name);
+  if (state.examData.exams.length && eiExamId) piExamId = eiExamId;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (['xlsx', 'xls'].includes(ext)) {
+    if (typeof XLSX === 'undefined') { alert('Excel 解析库尚未加载，请刷新页面后再试'); return; }
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const rows = raw.filter(r => Array.isArray(r) && r.some(c => c !== '' && c !== undefined && c !== null));
+        piHeaders = rows[0] || []; piRows = rows.slice(1); piRender();
+      } catch (err) { alert('解析 Excel 失败：' + (err && err.message ? err.message : err)); }
+    };
+    r.readAsArrayBuffer(file);
+  } else {
+    const r = new FileReader();
+    r.onload = ev => { const rows = parseCSV(ev.target.result); piHeaders = rows[0] || []; piRows = rows.slice(1); piRender(); };
+    r.readAsText(file);
+  }
+}
+function piBuildPreviewHTML() {
+  const cols = piDetect(piHeaders);
+  const nameCol = cols.find(c => c.kind === 'name');
+  const classCol = cols.find(c => c.kind === 'class');
+  const dataCols = cols.filter(c => c.kind === 'score' || c.kind === 'rank');
+  if (!nameCol) return '<p class="text-xs text-red-500">未识别到「姓名」列，请检查文件表头。</p>';
+  if (!dataCols.length) return '<p class="text-xs text-red-500">未识别到成绩 / 排名列。</p>';
+  let total = 0, matched = 0; const byClass = {}; const unmatched = [];
+  piRows.forEach(r => {
+    const name = String(r[nameCol.i] ?? '').trim(); if (!name) return;
+    const rawClass = classCol ? String(r[classCol.i] ?? '').trim() : '';
+    const cid = classCol ? piMatchStudent(name, rawClass) : findClassIdByName(name);
+    total++;
+    if (cid) { matched++; byClass[cid] = (byClass[cid] || 0) + 1; } else unmatched.push(name + (rawClass ? ('（' + rawClass + '）') : '（无班级）'));
+  });
+  const headTxt = cols.map(c => c.header).join(' | ');
+  const rowsHtml = piRows.slice(0, 10).map(r => {
+    const name = String(r[nameCol.i] ?? '').trim();
+    const rawClass = classCol ? String(r[classCol.i] ?? '').trim() : '';
+    const cid = classCol ? piMatchStudent(name, rawClass) : findClassIdByName(name);
+    const ok = cid ? 'style="background:#f0fdf4"' : 'style="background:#fef2f2"';
+    return `<tr class="border-t"><td class="px-2 py-1" ${ok}>${esc(name)}</td><td class="px-2 py-1" ${ok}>${esc(rawClass || '-')}</td><td class="px-2 py-1" ${ok}>${cid ? '✓ ' + esc(cid) : '✗ 未匹配'}</td></tr>`;
+  }).join('');
+  const byClassTxt = Object.entries(byClass).map(([c, v]) => `${c} ${v}人`).join('，');
+  return `
+    <div class="text-xs text-gray-500 mb-1">识别到列：${esc(headTxt)}</div>
+    <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs mb-3">
+      <span>数据共 <b>${total}</b> 人</span>
+      <span class="text-green-600">按班级 + 姓名匹配 <b>${matched}</b> 人 ${byClassTxt ? '（' + byClassTxt + '）' : ''}</span>
+      ${unmatched.length ? `<span class="text-red-500">未匹配 <b>${unmatched.length}</b> 人（${esc(unmatched.slice(0, 8).join('、'))}${unmatched.length > 8 ? '…' : ''}）</span>` : '<span class="text-green-600">✓ 全部匹配成功</span>'}
+    </div>
+    <div class="overflow-x-auto border rounded-xl"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">姓名</th><th class="px-2 py-1.5 text-left">班级(文件)</th><th class="px-2 py-1.5 text-left">匹配结果</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="text-[10px] text-gray-400 p-2">仅预览前 10 行，共 ${total} 人</div></div>`;
+}
+function doProductImport() {
+  if (!piExamId) return alert('请先选择或自动创建考试（考试名称/时间会从文件名解析）。');
+  if (!piRows.length) return alert('没有可导入的数据，请先选择文件。');
+  const cols = piDetect(piHeaders);
+  const nameCol = cols.find(c => c.kind === 'name');
+  const classCol = cols.find(c => c.kind === 'class');
+  const dataCols = cols.filter(c => c.kind === 'score' || c.kind === 'rank');
+  if (!nameCol) return alert('未识别到姓名列');
+  if (!dataCols.length) return alert('未识别到成绩 / 排名列');
+  const newCols = [];
+  dataCols.forEach(c => { if (!examColumnByKey(c.label)) { if (addExamColumn(c.label, c.kind === 'rank' ? 'rank' : 'score')) newCols.push(c.label); } });
+  let n = 0; const matchedByClass = {}; const unmatched = [];
+  piRows.forEach(r => {
+    const name = String(r[nameCol.i] ?? '').trim();
+    if (!name) return;
+    const rawClass = classCol ? String(r[classCol.i] ?? '').trim() : '';
+    const classId = classCol ? piMatchStudent(name, rawClass) : findClassIdByName(name);
+    if (!classId) { unmatched.push(name + (rawClass ? ('（' + rawClass + '）') : '（无班级）')); return; }
+    matchedByClass[classId] = (matchedByClass[classId] || 0) + 1;
+    dataCols.forEach(c => {
+      const raw = String(r[c.i] ?? '').trim();
+      if (raw === '') return;
+      const sc = parseFloat(raw);
+      if (isNaN(sc)) return;
+      const ex = state.examData.records.find(x => x.examId === piExamId && x.classId === classId && x.studentName === name && x.subject === c.label);
+      if (ex) { ex.score = sc; ex.colType = c.kind; }
+      else state.examData.records.push({ id: uid(), examId: piExamId, classId, studentName: name, subject: c.label, score: sc, colType: c.kind });
+      n++;
+    });
+  });
+  Object.keys(matchedByClass).forEach(cid => ensureExamClass(cid));
+  save(); closeModal(); render();
+  let msg = `✅ 成功导入 / 更新 ${n} 条记录（已按「班级 + 姓名」与「学生管理」匹配）`;
+  if (newCols.length) msg += `\n新建列：${newCols.join('、')}`;
+  const byClassTxt = Object.entries(matchedByClass).map(([c, v]) => `${c} ${v}人`).join('，');
+  if (byClassTxt) msg += `\n匹配成功：${byClassTxt}`;
+  if (unmatched.length) msg += `\n未匹配（班级或姓名未命中，已跳过）：${unmatched.slice(0, 20).join('、')}${unmatched.length > 20 ? '…' : ''}`;
+  alert(msg);
+}
+
 // ---------- 成绩分析看板 ----------
 let anSelExams = [], anSelSubjects = [], anSelClasses = [], anSelStudents = [];
 let anHasRun = false;
@@ -4499,7 +4659,9 @@ function renderExamAnalysisInto() {
   const studentSet = new Set();
   state.examData.records.filter(r => anSelExams.includes(r.examId) && anSelClasses.includes(r.classId)).forEach(r => {
     if (anSelStudents.length && !anSelStudents.includes(r.studentName)) return;
-    if (!(state.students||[]).some(s => s.name === r.studentName)) return; // 仅显示学生管理中存在的
+    // 仅显示学生管理中「班级 + 姓名」均命中的记录（与导入时的匹配口径一致）
+    const st = (state.students || []).find(s => s.name === r.studentName && s.class === r.classId);
+    if (!st) return;
     studentSet.add(r.studentName);
   });
   const studentList = [...studentSet];
