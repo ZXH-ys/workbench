@@ -5178,8 +5178,8 @@ function openSettings() {
       <button class="p-4 rounded-xl border hover:bg-gray-50 flex flex-col items-center gap-2" onclick="closeModal(); importData()">
         <span class="text-2xl">⬆️</span><span>导入数据</span>
       </button>
-      <button class="p-4 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 flex flex-col items-center gap-2" onclick="closeModal(); clearAllData()">
-        <span class="text-2xl">🗑️</span><span>清空数据</span>
+      <button class="p-4 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 flex flex-col items-center gap-2" onclick="closeModal(); openClearDataModal()">
+        <span class="text-2xl">🗑️</span><span>清理数据</span>
       </button>
       <button class="p-4 rounded-xl border border-violet-200 text-violet-600 hover:bg-violet-50 flex flex-col items-center gap-2" onclick="closeModal(); openChangePassword()">
         <span class="text-2xl">🔑</span><span>修改密码</span>
@@ -5352,15 +5352,104 @@ function confirmModal(message, onYes, yesText, noText) {
       </div>
     </div>`, 'sm');
 }
+// 安全全清：仅清除业务数据，保留账号/班级/积分规则/职务/课程节次/折算比例/考试赋分规则等固定设置
+const BUSINESS_DATA_KEYS = ['students','scores','attendance','pointsLogs','classRecords','classLogs','communications','homework','todosReminders','templates','album','seating','snapshots'];
+
 function clearAllData() {
-  confirmModal('确定清空所有数据吗？此操作不可恢复（建议先导出备份）。', function(){
-    state.students = []; state.todos = []; state.templates = []; state.classLogs = [];
-    state.communications = []; state.homework = [];
-    state.scores = []; state.album = []; state.seatingByClass = {};
-    state.reminders = []; state.classRecords = [];
-    state.schedule.courses = [];
-    state.points.logs = [];
-    save(); render();
+  applyClearData(BUSINESS_DATA_KEYS);
+}
+
+// 分模块选择性清除：只清除 keys 里列出的内容，其余（含固定设置）一律保留
+function applyClearData(keys) {
+  const on = k => Array.isArray(keys) && keys.indexOf(k) !== -1;
+  if (on('students')) state.students = [];
+  if (on('scores')) {
+    state.scores = [];
+    if (state.examData) {
+      state.examData.exams = [];
+      state.examData.records = [];
+      (state.examData.classes || []).forEach(c => { c.studentNames = []; c.gender = {}; });
+    }
+  }
+  if (on('attendance')) state.attendance = { members: [], current: null, logs: [] };
+  if (on('pointsLogs')) state.points.logs = [];
+  if (on('classRecords')) state.classRecords = [];
+  if (on('classLogs')) state.classLogs = [];
+  if (on('communications')) state.communications = [];
+  if (on('homework')) state.homework = [];
+  if (on('todosReminders')) { state.todos = []; state.reminders = []; }
+  if (on('templates')) state.templates = [];
+  if (on('album')) state.album = [];
+  if (on('seating')) state.seatingByClass = {};
+  if (on('snapshots')) state.snapshots = [];
+  // 高级：固定设置（清空后需重新配置）
+  if (on('pointsRules')) state.points.rules = defaultPoints().rules;
+  if (on('positions')) state.positions = defaultPositions();
+  if (on('scheduleCourses')) state.schedule.courses = [];
+  if (on('convertRatios')) state.convertRatios = { sport: 1, daily: 1, exam: 1, post: 1 };
+  if (on('examScore')) state.examScore = defaultExamScore();
+  if (on('examColumns')) { if (state.examData) state.examData.columns = defaultExamColumns(); }
+  save(); render();
+}
+
+// 清理数据弹窗：按模块勾选，固定设置默认不勾
+const CLEAR_GROUPS = [
+  { def: true, title: '业务数据（默认勾选，可取消）', items: [
+    { k: 'students', label: '学生与行为档案（含评语/谈心）' },
+    { k: 'scores', label: '成绩数据（上传成绩 + 成绩分析名单）' },
+    { k: 'attendance', label: '考勤记录（含固定回家周期与请假）' },
+    { k: 'pointsLogs', label: '积分流水（积分归零，规则保留）' },
+    { k: 'classRecords', label: '课堂记录' },
+    { k: 'classLogs', label: '班级日志' },
+    { k: 'communications', label: '家校沟通' },
+    { k: 'homework', label: '作业' },
+    { k: 'todosReminders', label: '待办与提醒' },
+    { k: 'templates', label: '模板库' },
+    { k: 'album', label: '班级相册' },
+    { k: 'seating', label: '座次表安排' },
+    { k: 'snapshots', label: '历史积分快照' },
+  ] },
+  { def: false, advanced: true, title: '固定设置（默认不勾，清空后需重新配置，慎用）', items: [
+    { k: 'pointsRules', label: '积分规则' },
+    { k: 'positions', label: '职务与值日体系' },
+    { k: 'scheduleCourses', label: '课程表内容' },
+    { k: 'convertRatios', label: '折算比例' },
+    { k: 'examScore', label: '考试赋分规则' },
+    { k: 'examColumns', label: '成绩分析预设列' },
+  ] },
+];
+
+function openClearDataModal() {
+  const rows = g => g.items.map(it => `
+    <label class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+      <input type="checkbox" class="cd-chk" value="${it.k}" ${g.def ? 'checked' : ''} />
+      <span class="text-sm text-gray-700">${it.label}</span>
+    </label>`).join('');
+  const body = `
+    <p class="text-xs text-gray-500 mb-3">勾选要清除的内容，点「执行清除」后仍有二次确认。账号、班级结构、导航等核心设置不会被清除。</p>
+    <div class="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+      ${CLEAR_GROUPS.map(g => `
+        <div>
+          <div class="text-xs font-semibold text-gray-500 mb-1">${g.title}</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">${rows(g)}</div>
+        </div>`).join('')}
+    </div>
+    <div class="flex gap-2 mt-4">
+      <button class="flex-1 border py-2 rounded-full" onclick="closeModal()">取消</button>
+      <button class="flex-1 bg-red-500 text-white py-2 rounded-full hover:bg-red-600" onclick="confirmClearData()">执行清除</button>
+    </div>`;
+  openModal('清理数据', body, 'lg');
+}
+
+function confirmClearData() {
+  const sel = [].slice.call(document.querySelectorAll('#modal-root .cd-chk:checked')).map(i => i.value);
+  if (!sel.length) { alert('请至少选择一项要清除的内容'); return; }
+  const labelOf = {};
+  CLEAR_GROUPS.forEach(g => g.items.forEach(it => labelOf[it.k] = it.label));
+  const list = sel.map(k => labelOf[k]).join('、');
+  confirmModal('将清除以下数据（不可恢复，建议先导出备份）：' + list + '。固定设置（账号/班级/积分规则等）不会被清除。确定？', function () {
+    applyClearData(sel);
+    closeModal();
   });
 }
 
