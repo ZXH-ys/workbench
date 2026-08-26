@@ -969,7 +969,7 @@ function renderTopBar() {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     album: '班级相册', seating: '座次表', classRecord: '课堂记录',
     homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
-    positions: '职务与值日管理',
+    examscore: '考试赋分', positions: '职务与值日管理',
   };
   const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
