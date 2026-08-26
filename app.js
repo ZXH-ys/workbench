@@ -3938,11 +3938,39 @@ function saveExamScore() {
 }
 
 // ---------- 成绩智能导入向导 ----------
+function parseExamNameFromFilename(fn) {
+  if (!fn) return { name: '', date: '' };
+  const base = String(fn).replace(/\.[^.]+$/, '').split(/[\\/]/).pop();
+  let date = '';
+  const dm = base.match(/((?:20)?\d{2})[.\-_年](\d{1,2})[.\-_月](\d{1,2})/);
+  if (dm) {
+    let y = parseInt(dm[1], 10); if (y < 100) y += 2000;
+    const mo = String(parseInt(dm[2], 10)).padStart(2, '0');
+    const d = String(parseInt(dm[3], 10)).padStart(2, '0');
+    date = `${y}-${mo}-${d}`;
+  }
+  const typeKw = ['期中考试', '期中', '期末考试', '期末', '月考', '模拟考', '模拟', '一模', '二模', '三模', '联考', '质检', '摸底', '开学考', '入学考'];
+  let name = '';
+  for (const kw of typeKw) { if (base.includes(kw)) { name = kw.replace('考试', ''); break; } }
+  if (!name) {
+    let rest = base.replace(dm ? dm[0] : '', '');
+    rest = rest.replace(/导入用|合并|全县排名|折合后|全部|分析|排名|成绩|数据|\(.*?\)|（.*?）|_+|merged/gi, ' ').replace(/\s+/g, ' ').trim();
+    name = rest || '考试';
+  }
+  return { name, date };
+}
+function autoCreateExamFromFilename(fn) {
+  const info = parseExamNameFromFilename(fn);
+  if (!info.name && !info.date) return;
+  const ex = state.examData.exams.find(e => e.name === info.name && (e.date || '') === (info.date || ''));
+  if (!ex) state.examData.exams.push({ id: uid(), name: info.name, date: info.date });
+  const target = ex || state.examData.exams[state.examData.exams.length - 1];
+  eiExamId = target.id;
+}
 function openExamImportWizard() {
-  if (!state.examData.exams.length) { alert('请先在「考试管理」添加考试，再导入成绩'); return; }
   eiBook = null; eiSheets = []; eiSheetName = ''; eiRows = []; eiHeaders = [];
   eiNameCol = -1; eiClassCol = -1; eiColMap = {}; eiHeaderRow = 1;
-  eiExamId = state.examData.exams[state.examData.exams.length - 1].id;
+  eiExamId = state.examData.exams.length ? state.examData.exams[state.examData.exams.length - 1].id : '';
   openModal('📥 智能导入成绩', '<div id="eiHost"></div>', 'xl');
   eiRenderBody();
 }
@@ -4167,6 +4195,7 @@ function eiLoadSheet(name) {
 function eiOnFile(e) {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
+  autoCreateExamFromFilename(file.name);
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   if (['xlsx', 'xls'].includes(ext)) {
     if (typeof XLSX === 'undefined') { alert('Excel 解析库尚未加载，请刷新页面后再试'); return; }
