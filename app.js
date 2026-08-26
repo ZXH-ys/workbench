@@ -302,15 +302,15 @@ function defaultPositions() {
     dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null },
     deductionKeywords, deductionPoints:1,
     representatives: [
-      { id:'rep_yu', subject:'语文', count:1, names:[] },
-      { id:'rep_shu', subject:'数学', count:1, names:[] },
-      { id:'rep_ying', subject:'英语', count:1, names:[] },
-      { id:'rep_wu', subject:'物理', count:1, names:[] },
-      { id:'rep_hua', subject:'化学', count:1, names:[] },
-      { id:'rep_zheng', subject:'政治', count:1, names:[] },
-      { id:'rep_li', subject:'历史', count:1, names:[] },
-      { id:'rep_di', subject:'地理', count:1, names:[] },
-      { id:'rep_sheng', subject:'生物', count:1, names:[] }
+      { id:'rep_yu', subject:'语文', count:1, pts:null, names:[] },
+      { id:'rep_shu', subject:'数学', count:1, pts:null, names:[] },
+      { id:'rep_ying', subject:'英语', count:1, pts:null, names:[] },
+      { id:'rep_wu', subject:'物理', count:1, pts:null, names:[] },
+      { id:'rep_hua', subject:'化学', count:1, pts:null, names:[] },
+      { id:'rep_zheng', subject:'政治', count:1, pts:null, names:[] },
+      { id:'rep_li', subject:'历史', count:1, pts:null, names:[] },
+      { id:'rep_di', subject:'地理', count:1, pts:null, names:[] },
+      { id:'rep_sheng', subject:'生物', count:1, pts:null, names:[] }
     ]
   };
 }
@@ -342,6 +342,9 @@ function migrateState(s) {
   if (!s.positions.dutyTaskPoints || typeof s.positions.dutyTaskPoints !== 'object') s.positions.dutyTaskPoints = defaultPositions().dutyTaskPoints;
   if (!Array.isArray(s.positions.representatives)) s.positions.representatives = defaultPositions().representatives;
   if (!Array.isArray(s.positions.assign.kedaibiao)) s.positions.assign.kedaibiao = [];
+  // 课代表关联进班级职务体系：补全 pts、同步职务树子节点与关联扣分关键词
+  s.positions.representatives.forEach(r => { if (typeof r.pts !== 'number' && r.pts !== null) r.pts = null; });
+  if (typeof pmSyncRepTree === 'function') pmSyncRepTree(s.positions);
   const dp = defaultPoints();
   if (!s.points || typeof s.points !== 'object') s.points = dp;
   if (!Array.isArray(s.points.logs)) s.points.logs = [];
@@ -467,10 +470,15 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.schedule && parsed.students) return migrateState(parsed);
+      if (parsed && parsed.schedule && parsed.students) {
+        const migrated = migrateState(parsed);
+        if (typeof pmSyncRepTree === 'function') pmSyncRepTree(migrated.positions);
+        return migrated;
+      }
     }
   } catch (e) { console.warn('load failed', e); }
   const s = defaultState();
+  if (typeof pmSyncRepTree === 'function') pmSyncRepTree(s.positions);
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
   return s;
 }
@@ -4603,6 +4611,32 @@ function pmRenderRoles(){
     </div>`;
   });
   html+=`</div>`;
+  // 课代表也作为班级职务在架构页展示，可直接增删人员
+  const reps=P.representatives||[];
+  if(reps.length){
+    html+=`<div class="flex items-center justify-between mb-3 mt-2">
+      <div class="text-sm font-semibold text-slate-600">课代表（可在「课代表」标签页调整科目）</div>
+    </div>`;
+    html+=`<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">`;
+    reps.forEach(r=>{
+      const names=r.names||[];
+      const extra=r.pts!=null?('日积 '+r.pts):'';
+      html+=`<div class="bg-white rounded-2xl shadow-sm p-4 border-l-4 border-sky-400">
+        <div class="flex items-start justify-between">
+          <div>
+            <div class="font-bold text-slate-800 flex items-center gap-2">${esc(r.subject)}<span class="text-xs text-slate-400 font-normal bg-slate-50 px-1.5 py-0.5 rounded">${names.length}人</span></div>
+            <div class="text-[11px] text-slate-400 mt-0.5">每科课代表</div>
+          </div>
+          <div class="text-[11px] text-amber-600 whitespace-nowrap">${extra||'—'}</div>
+        </div>
+        <div class="flex flex-wrap gap-1.5 mt-3 items-center min-h-[2rem]">
+          ${names.map((n,i)=>`<span class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full border border-indigo-200 cursor-pointer" onclick="pmRemoveRepName('${r.id}',${i})">${esc(n)}<span class="text-indigo-400">×</span></span>`).join('')}
+          <span class="inline-flex items-center bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAddRep('${r.id}')">＋</span>
+        </div>
+      </div>`;
+    });
+    html+=`</div>`;
+  }
   return html;
 }
 function pmToggleRolesEdit(){ pmRolesEdit=!pmRolesEdit; pmRefreshAll(); }
@@ -4742,6 +4776,26 @@ function pmSyncKedaibiaoAssign(){
   (state.positions.representatives||[]).forEach(r=>{(r.names||[]).forEach(n=>{if(!all.includes(n)) all.push(n);});});
   state.positions.assign.kedaibiao=all;
 }
+// 把课代表各科同步到职务树（kedaibiao 节点下挂各科子节点）并维护关联扣分关键词
+function pmSyncRepTree(positions){
+  const P = positions || state.positions;
+  const kb = P.dutyTree && pmFindTreeNode(P.dutyTree, 'kedaibiao');
+  if (!kb) return;
+  const reps = P.representatives || [];
+  kb.children = reps.map(r => ({
+    id: r.id,
+    label: r.subject,
+    repId: r.id
+  }));
+  if (!P.deductionKeywords || typeof P.deductionKeywords !== 'object') P.deductionKeywords = {};
+  const validRepIds = new Set(reps.map(r => r.id));
+  for (const id in P.deductionKeywords) {
+    if (id.startsWith('rep_') && !validRepIds.has(id)) delete P.deductionKeywords[id];
+  }
+  reps.forEach(r => {
+    P.deductionKeywords[r.id] = [r.subject, r.subject + '课代表', r.subject + '代表'];
+  });
+}
 function pmRenderKedaibiao(){
   const reps=state.positions.representatives||[];
   return `<div class="bg-white rounded-2xl shadow-sm p-5">
@@ -4772,19 +4826,19 @@ function pmRepRow(r){
 }
 function pmAddRepSubject(){
   const name=prompt('请输入新科目名称：'); if(!name||!name.trim()) return;
-  state.positions.representatives.push({ id:'rep_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,5), subject:name.trim(), count:1, names:[] });
-  save(); pmRefreshAll();
+  state.positions.representatives.push({ id:'rep_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,5), subject:name.trim(), count:1, pts:null, names:[] });
+  pmSyncRepTree(); pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
 }
 function pmRemoveRepSubject(id){
   if(!confirm('确定删除这个科目吗？')) return;
   state.positions.representatives=state.positions.representatives.filter(r=>r.id!==id);
-  pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
+  pmSyncRepTree(); pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
 }
 function pmUpdateRepSubject(id,field,value){
   const r=state.positions.representatives.find(x=>x.id===id); if(!r) return;
   if(field==='subject') r.subject=value.trim();
   if(field==='count'){ const v=parseInt(value,10); r.count=isNaN(v)?1:v; }
-  save(); pmRefreshAll();
+  pmSyncRepTree(); save(); pmRefreshAll();
 }
 function pmRemoveRepName(id,idx){
   const r=state.positions.representatives.find(x=>x.id===id); if(!r||!r.names) return;
@@ -4809,10 +4863,15 @@ function pmDutyPointRow(task){
   const v=state.positions.dutyTaskPoints[task];
   return `<tr><td class="p-2 font-medium">${esc(task)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${v==null?'':v}" onchange="pmUpdateDutyPoint('${esc(task)}',this.value)"></td></tr>`;
 }
+function pmRepPointRow(r){
+  return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td></tr>`;
+}
 function pmRenderPoints(){
   const P=state.positions;
   const banWei=P.structure.filter(p=>p.pts!=null);
   const feiBanWei=P.structure.filter(p=>p.pts==null);
+  const reps=P.representatives||[];
+  const repRows=reps.map(pmRepPointRow).join('');
   let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
     <div class="font-bold text-slate-700 mb-4">职务积分（修改后同步到职务架构）</div>
     <div class="grid lg:grid-cols-2 gap-5">
@@ -4825,6 +4884,10 @@ function pmRenderPoints(){
           <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务 / 值日任务</th><th class="text-left p-2">日积分</th></tr></thead>
           <tbody>${feiBanWei.map(pmPointRow).join('')}${pmDutyTasks.map(pmDutyPointRow).join('')}</tbody></table></div></div>
     </div>
+    ${reps.length?`<div class="mt-5"><div class="text-sm font-semibold text-slate-600 mb-2">课代表积分</div>
+      <div class="overflow-x-auto max-w-md"><table class="w-full text-sm">
+        <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">科目</th><th class="text-left p-2">日积分</th></tr></thead>
+        <tbody>${repRows}</tbody></table></div></div>`:''}
     <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。</p>
   </div>`;
   return html;
@@ -4840,21 +4903,31 @@ function pmUpdateDutyPoint(task,val){
   state.positions.dutyTaskPoints[task]= v===''?null:parseFloat(v);
   save(); pmRefreshAll();
 }
+function pmUpdateRepPoint(id,val){
+  const r=state.positions.representatives.find(x=>x.id===id); if(!r) return;
+  const v=val.trim();
+  r.pts = v===''?null:parseFloat(v);
+  save(); pmRefreshAll();
+}
 
 /* ===== 职务树（横向组织图 + 拖动分支） ===== */
 function pmGetTreeNames(node){
   let names=[];
   if(node.id==='t_zrs') return names;
-  if(node.roleId && state.positions.assign[node.roleId]) names=state.positions.assign[node.roleId].slice();
+  if(node.repId){
+    const r = (state.positions.representatives || []).find(x => x.id === node.repId);
+    if (r && r.names) names = r.names.slice();
+  }
+  else if(node.roleId && state.positions.assign[node.roleId]) names=state.positions.assign[node.roleId].slice();
   else if(node.dutyTask){
     pmDays.forEach(d=>{ if(state.positions.dutyWeekly[d]&&state.positions.dutyWeekly[d][node.dutyTask]){ state.positions.dutyWeekly[d][node.dutyTask].forEach(n=>{ if(!names.includes(n)) names.push(n); }); } });
   }
   return names;
 }
 function pmNamesHtml(names){ if(!names||!names.length) return '<span class="org-empty">未安排</span>'; return names.map(n=>`<span class="name-chip">${esc(n)}</span>`).join(''); }
-function pmTreeNodeClass(node){ if(node.id==='banzhang') return 'root'; if(node.children&&node.children.length) return 'branch'; return 'leaf'; }
+function pmTreeNodeClass(node){ if(node.id==='banzhang') return 'root'; if(node.repId) return 'leaf'; if(node.children&&node.children.length) return 'branch'; return 'leaf'; }
 function pmIsDraggableNode(node){ return node.roleId && node.id!=='banzhang'; }
-function pmIsDroppableNode(node){ return node.roleId || node.id==='banzhang'; }
+function pmIsDroppableNode(node){ return (node.roleId || node.id==='banzhang') && !node.repId; }
 function pmRenderTreeNode(node){
   const hasChildren=node.children&&node.children.length;
   const cls=pmTreeNodeClass(node)+(pmGetTreeNames(node).length===0&&node.id!=='t_zrs'&&node.id!=='banzhang'?' empty':'');
@@ -4878,7 +4951,7 @@ function pmGetRoleIdsInTree(node,set){ set=set||new Set(); if(node.roleId) set.a
 function pmPruneTree(node){
   if(!node.children) return;
   node.children=node.children.filter(c=>{
-    if(c.roleId && c.id!=='banzhang' && !state.positions.structure.find(p=>p.id===c.roleId)) return false;
+    if(c.roleId && c.id!=='banzhang' && c.id!=='kedaibiao' && !state.positions.structure.find(p=>p.id===c.roleId)) return false;
     pmPruneTree(c); return true;
   });
 }
@@ -4935,6 +5008,10 @@ function pmFindNodeByKeyword(text){
   return null;
 }
 function pmGetPeopleForNode(node,day){
+  if(node.repId){
+    const r = (state.positions.representatives || []).find(x => x.id === node.repId);
+    return (r && r.names || []).map(name => ({ name, pos: node.label + '课代表' }));
+  }
   if(node.roleId) return (state.positions.assign[node.roleId]||[]).map(name=>({name,pos:node.label}));
   if(node.dutyTask){
     if(day && state.positions.dutyWeekly[day] && state.positions.dutyWeekly[day][node.dutyTask]) return state.positions.dutyWeekly[day][node.dutyTask].map(name=>({name,pos:day+node.label}));
