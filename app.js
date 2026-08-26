@@ -880,10 +880,6 @@ function render() {
     const btnA = document.querySelector('[data-addcourse]');
     if (btnA) btnA.addEventListener('click', openCourseModal);
   }
-  if (currentRoute === 'home') {
-    const b = document.querySelector('[data-home-new]');
-    if (b) b.addEventListener('click', openFabDefault);
-  }
   if (currentRoute === 'students') {
     const b = document.querySelector('[data-newstudent]');
     if (b) b.addEventListener('click', openStudentForm);
@@ -1005,7 +1001,7 @@ function renderTopBar() {
       </div>
     </header>`;
   }
-  if (currentRoute === 'home') extra = `<button data-home-new class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">+ 快速记录</button>`;
+  if (currentRoute === 'home') extra = `<button onclick="openQuickRecord()" class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">+ 一句话记录</button>`;
   else if (currentRoute === 'schedule') extra = `<button data-periods class="text-sm text-gray-500 hover:text-primary mr-2">⚙️ 设置节次</button><button data-addcourse class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark">+ 添加课程</button>`;
   else if (currentRoute === 'seating') extra = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openSeatConfig()">⚙️ 布局</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5 mr-2" onclick="exportSeatTeacher()">👩‍🏫 教师用</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="exportSeatStudent()">🎒 学生用</button>`;
   else if (['students','classLog','homework','reminders'].includes(currentRoute)) {
@@ -1261,23 +1257,6 @@ function renderHome() {
             <button class="text-xs px-2 py-1 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="openAddLeaveModal()">+ 记请假</button>
           </div>`;
       })()}
-    </div>
-    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
-      <div class="font-bold text-gray-800 mb-3">⚡ 日常快捷操作</div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="openQuickRecord()">
-          <div class="font-medium text-gray-800">✏️ 一句话记录</div>
-          <div class="text-xs text-gray-500 mt-1">课堂/作业/积分… 一次录入自动归类</div>
-        </button>
-        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="goExamUpload()">
-          <div class="font-medium text-gray-800">📥 上传考试成绩</div>
-          <div class="text-xs text-gray-500 mt-1">导入 Excel，自动算赋分</div>
-        </button>
-        <button class="text-left p-4 rounded-xl bg-gray-50 hover:bg-gray-100" onclick="openAddLeaveModal()">
-          <div class="font-medium text-gray-800">🏥 记请假</div>
-          <div class="text-xs text-gray-500 mt-1">登记当天请假学生</div>
-        </button>
-      </div>
     </div>
     ${renderHomePointsCard()}
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
@@ -3630,7 +3609,6 @@ function renderExam() {
   </div>`;
 }
 function setExamTab(t) { examTab = t; render(); }
-function goExamUpload() { examTab = 'upload'; navigate('exam'); }
 function selectExamStudent(name) { examSelectedStudent = name; renderExamAnalysisInto(); }
 function examQuickCompareClasses() {
   ensureAnalysisSel();
