@@ -4504,31 +4504,33 @@ function renderExamQuery() {
   const sortOpts = [{k:'',l:'默认（班级/姓名）'},{k:'classId',l:'班级'},{k:'name',l:'姓名'},...allCols.map(c=>({k:c.key,l:c.key+(c.type==='rank'?'·排名':'')}))].map(o=>`<option value="${esc(o.k)}" ${eqSortCol===o.k?'selected':''}>${esc(o.l)}</option>`).join('');
   return `
   <div class="space-y-4">
-    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">选择考试</label>
-          <select id="eqExam" class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">班级</label>
-          <div class="flex flex-wrap gap-2">${clsChk}</div>
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">搜索学生姓名</label>
-          <input id="eqSearch" type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">排序</label>
-          <div class="flex gap-2">
-            <select id="eqSortCol" class="flex-1 border rounded-lg p-2 text-sm" onchange="eqCollect();">${sortOpts}</select>
-            <button class="border rounded-lg px-3 text-sm hover:bg-gray-50" onclick="eqSortDesc=!eqSortDesc; eqCollect();" title="切换升序/降序">${eqSortDesc ? '↓' : '↑'}</button>
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4 overflow-x-auto">
+      <div class="min-w-[720px]">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">选择考试</label>
+            <select id="eqExam" class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">班级</label>
+            <div class="flex flex-wrap gap-2">${clsChk}</div>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">搜索学生姓名</label>
+            <input id="eqSearch" type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">排序</label>
+            <div class="flex gap-2">
+              <select id="eqSortCol" class="flex-1 border rounded-lg p-2 text-sm" onchange="eqCollect();">${sortOpts}</select>
+              <button class="border rounded-lg px-3 text-sm hover:bg-gray-50" onclick="eqSortDesc=!eqSortDesc; eqCollect();" title="切换升序/降序">${eqSortDesc ? '↓' : '↑'}</button>
+            </div>
           </div>
         </div>
-      </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">显示列</label>
-        <div class="flex flex-wrap gap-2">${colChk}</div>
+        <div class="mt-4">
+          <label class="block text-xs text-gray-500 mb-1">显示列</label>
+          <div class="flex flex-wrap gap-2">${colChk}</div>
+        </div>
       </div>
     </div>
     <div id="eqTableWrap">${renderExamQueryTable()}</div>
@@ -4612,13 +4614,15 @@ function renderExamQueryTable() {
   const ths = [`<th class="py-2 pl-3 pr-2 text-left whitespace-nowrap text-xs font-semibold" style="${stickyHead} ${stickyClassTh}; min-width:3.5rem;">班级</th>`, `<th class="py-2 pr-3 text-left whitespace-nowrap text-xs font-semibold" style="${stickyHead} ${stickyNameTh}; min-width:5rem;">姓名</th>`];
   cols.forEach(c => {
     const arrow = eqSortCol === c.key ? (eqSortDesc ? '↓' : '↑') : '';
-    ths.push(`<th class="py-2 px-2 text-right whitespace-nowrap text-xs font-semibold cursor-pointer select-none hover:bg-gray-200 ${c.type==='rank'?'text-blue-600':''}" style="${stickyHead} min-width:3.5rem;" onclick="eqSetSort('${esc(c.key)}')">${esc(c.key)}${c.type==='rank'?'<span class="text-[10px] opacity-70">排</span>':''}${arrow}</th>`);
+    const activeClass = eqSortCol === c.key ? 'bg-blue-50 text-blue-700' : '';
+    ths.push(`<th class="py-2 px-2 text-right whitespace-nowrap text-xs font-semibold cursor-pointer select-none hover:bg-gray-200 ${activeClass}" style="${stickyHead} min-width:3.5rem;" onclick="eqSetSort('${esc(c.key)}', event)">${esc(c.key)}${c.type==='rank'?'<span class="text-[10px] opacity-70">排</span>':''}${arrow}</th>`);
   });
   const tbody = rows.map(row => {
     const vals = cols.map(c => {
       const rec = records.find(r => r.classId === row.classId && r.studentName === row.name && r.subject === c.key);
       const v = rec ? fmtExamCell(rec.score, c.type === 'rank') : '—';
-      return `<td class="py-1.5 px-2 ${c.type === 'rank' ? 'text-blue-600' : ''} text-right whitespace-nowrap text-sm tabular-nums">${v}</td>`;
+      const activeClass = eqSortCol === c.key ? 'bg-blue-50 text-blue-700' : '';
+      return `<td class="py-1.5 px-2 text-right whitespace-nowrap text-sm tabular-nums ${activeClass}">${v}</td>`;
     }).join('');
     return `<tr class="border-b hover:bg-gray-50"><td class="py-1.5 pl-3 pr-2 text-sm text-gray-600 whitespace-nowrap" style="${stickyClassTd}">${esc(row.classId)}</td><td class="py-1.5 pr-3 text-sm font-medium whitespace-nowrap" style="${stickyNameTd}">${esc(row.name)}</td>${vals}</tr>`;
   }).join('');
@@ -4636,7 +4640,8 @@ function renderExamQueryTable() {
     </div>
   </div>`;
 }
-function eqSetSort(col) {
+function eqSetSort(col, event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
   if (eqSortCol === col) eqSortDesc = !eqSortDesc;
   else { eqSortCol = col; eqSortDesc = true; }
   const wrap = document.getElementById('eqTableWrap');
@@ -4683,11 +4688,18 @@ function renderExamAnalysis() {
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-3">
       <div class="font-bold text-gray-800">📊 两班同类型列对比</div>
-      <p class="text-xs text-gray-400">选择一列（如语文、数学、校次、县次等），系统会用柱状图对比 9 班和 10 班在该列上的平均值。</p>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <select id="anCmpCol" class="border rounded-lg p-2 text-sm">${colOpts}</select>
+      <p class="text-xs text-gray-400">选择一列和对比指标。分数科目支持「优生平均分」「全班平均分（可限定前 N 名）」「及格数」；排名类列仅支持平均排名。</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <select id="anCmpCol" class="border rounded-lg p-2 text-sm" onchange="anToggleMetricInputs()">${colOpts}</select>
+        <select id="anCmpMetric" class="border rounded-lg p-2 text-sm" onchange="anToggleMetricInputs()">
+          <option value="avg">全班平均分</option>
+          <option value="top">优生平均分</option>
+          <option value="pass">及格数</option>
+        </select>
+        <input id="anCmpParam" type="number" class="border rounded-lg p-2 text-sm" value="0">
         <button class="bg-primary text-white px-4 py-2 rounded-lg text-sm hover:bg-primaryDark" onclick="anRunCompare()">对比两班</button>
       </div>
+      <div id="anMetricHint" class="text-xs text-gray-400">全班平均分：参数填 0 表示全班，填 N 表示各班取前 N 名计算均分。</div>
       <div id="anCompareWrap"><p class="text-sm text-gray-400 pt-2">选择一列后，点击「对比两班」。</p></div>
     </div>
   </div>`;
@@ -4736,31 +4748,80 @@ function anRunPersonal() {
     });
   }, 0);
 }
+function anToggleMetricInputs() {
+  const col = document.getElementById('anCmpCol').value;
+  const metric = document.getElementById('anCmpMetric').value;
+  const paramIn = document.getElementById('anCmpParam');
+  const hint = document.getElementById('anMetricHint');
+  const colDef = examColumnByKey(col);
+  const isRank = colDef && colDef.type === 'rank';
+  if (!paramIn || !hint) return;
+  if (isRank) {
+    paramIn.value = '';
+    paramIn.disabled = true;
+    paramIn.placeholder = '—';
+    hint.textContent = '排名列：自动计算两班平均排名。';
+    return;
+  }
+  paramIn.disabled = false;
+  if (metric === 'avg') {
+    paramIn.placeholder = '前 N 名（0=全班）';
+    if (paramIn.value === '') paramIn.value = '0';
+    hint.textContent = '全班平均分：参数填 0 表示全班，填 N 表示各班取前 N 名计算均分。';
+  } else if (metric === 'top') {
+    paramIn.placeholder = '前 N 名';
+    if (paramIn.value === '' || paramIn.value === '0') paramIn.value = '15';
+    hint.textContent = '优生平均分：取各班该科成绩前 N 名的平均分。';
+  } else if (metric === 'pass') {
+    paramIn.placeholder = '及格线';
+    if (paramIn.value === '' || paramIn.value === '0') paramIn.value = '60';
+    hint.textContent = '及格数：统计成绩 ≥ 及格线的人数。';
+  }
+}
 function anRunCompare() {
   const col = document.getElementById('anCmpCol').value;
+  const metric = document.getElementById('anCmpMetric').value;
+  const paramRaw = document.getElementById('anCmpParam').value;
+  const param = parseFloat(paramRaw);
   const wrap = document.getElementById('anCompareWrap');
   if (!col) { wrap.innerHTML = '<p class="text-sm text-red-500">请选择要对比的列。</p>'; return; }
   const colDef = examColumnByKey(col);
   const isRank = colDef && colDef.type === 'rank';
   const exams = [...state.examData.exams].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const classes = state.examData.classes;
+  const compute = (rs) => {
+    const nums = rs.map(r => +r.score).filter(s => !isNaN(s));
+    if (!nums.length) return null;
+    if (isRank) return nums.reduce((a, b) => a + b, 0) / nums.length;
+    if (metric === 'pass') return nums.filter(s => s >= param).length;
+    nums.sort((a, b) => b - a);
+    const n = metric === 'top' ? param : (param > 0 ? param : nums.length);
+    const take = n > 0 ? Math.min(n, nums.length) : nums.length;
+    const arr = nums.slice(0, take);
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  };
   const data = exams.map(e => {
     const row = { exam: e.name, date: e.date };
     classes.forEach(c => {
       const rs = state.examData.records.filter(r => r.examId === e.id && r.classId === c.id && r.subject === col);
-      row[c.id] = rs.length ? (rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length) : null;
+      row[c.id] = compute(rs);
     });
     return row;
   });
-  const unit = isRank ? '名' : '分';
+  let metricLabel = '', unit = '', decimals = 2, beginAtZero = true;
+  if (isRank) { metricLabel = '平均排名'; unit = '名'; decimals = 1; beginAtZero = false; }
+  else if (metric === 'avg') { metricLabel = param > 0 ? `前${param}名平均分` : '全班平均分'; unit = '分'; }
+  else if (metric === 'top') { metricLabel = `前${param}名优生平均分`; unit = '分'; }
+  else if (metric === 'pass') { metricLabel = `≥${param}分及格数`; unit = '人'; decimals = 0; }
   const ths = ['<th class="py-2 pl-2 text-left">考试</th>', ...classes.map(c => `<th class="py-2 text-right">${esc(c.name)}</th>`), '<th class="py-2 text-right">差值</th>'];
   const rows = data.map(d => {
-    const vals = classes.map(c => `<td class="py-1.5 text-right">${d[c.id] == null ? '—' : d[c.id].toFixed(isRank ? 1 : 2)}</td>`).join('');
+    const vals = classes.map(c => `<td class="py-1.5 text-right">${d[c.id] == null ? '—' : (decimals === 0 ? Math.round(d[c.id]) : d[c.id].toFixed(decimals))}</td>`).join('');
     let diff = '';
     if (classes.length === 2 && d[classes[0].id] != null && d[classes[1].id] != null) {
       const a = d[classes[0].id], b = d[classes[1].id];
-      const v = (a - b).toFixed(isRank ? 1 : 2);
-      diff = `<span class="${isRank ? (v > 0 ? 'text-red-500' : 'text-emerald-600') : (v > 0 ? 'text-emerald-600' : 'text-red-500')}">${v > 0 ? '+' : ''}${v}</span>`;
+      const v = decimals === 0 ? (a - b) : (a - b).toFixed(decimals);
+      const posGood = isRank ? false : true;
+      diff = `<span class="${v > 0 ? (posGood ? 'text-emerald-600' : 'text-red-500') : (posGood ? 'text-red-500' : 'text-emerald-600')}">${v > 0 ? '+' : ''}${v}</span>`;
     }
     return `<tr class="border-t"><td class="py-1.5 pl-2">${esc(d.exam)}<div class="text-gray-400 text-[10px]">${esc(d.date || '-')}</div></td>${vals}<td class="py-1.5 text-right">${diff}</td></tr>`;
   }).join('');
@@ -4770,7 +4831,7 @@ function anRunCompare() {
       <div class="bg-white rounded-2xl p-4 shadow-sm space-y-2">
         <div class="text-sm font-medium text-gray-700">📋 对比明细</div>
         <div class="overflow-y-auto max-h-56"><table class="w-full text-sm"><thead><tr class="text-gray-500 text-left">${ths.join('')}</tr></thead><tbody>${rows}</tbody></table></div>
-        <div class="text-xs text-gray-500 pt-2 border-t">${isRank ? '排名：数值越低越好，差值为正表示前者名次更高（更差）。' : '分数：差值为正表示前者均分更高。'}</div>
+        <div class="text-xs text-gray-500 pt-2 border-t">${isRank ? '排名：数值越低越好，差值为正表示前者名次更高（更差）。' : (metric === 'pass' ? '及格数：差值为正表示前者及格人数更多。' : '分数：差值为正表示前者均分更高。')}</div>
       </div>
     </div>`;
   setTimeout(() => {
@@ -4779,14 +4840,14 @@ function anRunCompare() {
     if (!cv) return;
     const colors = ['#f06292', '#60a5fa', '#34d399', '#fbbf24'];
     const datasets = classes.map((c, i) => ({
-      label: c.name,
+      label: `${c.name} ${metricLabel}`,
       data: data.map(d => d[c.id]),
       backgroundColor: colors[i % colors.length]
     }));
     window._anCmpChart = new Chart(cv.getContext('2d'), {
       type: 'bar',
       data: { labels: data.map(d => d.exam), datasets },
-      options: { responsive: true, plugins: { title: { display: true, text: `${esc(col)} 两班对比（${isRank ? '平均排名' : '平均分'}）` } }, scales: { y: { beginAtZero: !isRank } } }
+      options: { responsive: true, plugins: { title: { display: true, text: `${esc(col)} 两班对比（${metricLabel}）` } }, scales: { y: { beginAtZero: beginAtZero } } }
     });
   }, 0);
 }
