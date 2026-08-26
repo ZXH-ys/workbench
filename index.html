@@ -124,8 +124,8 @@
     .inline-input:focus{outline:none;border-color:#4f46e5}
     .cell-edit{cursor:pointer}
     .cell-edit:hover{background:#eef2ff}
-    .org-chart{display:flex;flex-direction:column;align-items:center;padding:10px}
-    .org-chart ul{padding-top:28px;position:relative;display:flex;justify-content:center;margin:0;list-style:none}
+    .org-chart{display:flex;flex-direction:column;align-items:flex-start;padding:10px;min-width:max-content}
+    .org-chart ul{padding-top:28px;position:relative;display:flex;justify-content:center;margin:0;list-style:none;min-width:max-content}
     .org-chart li{float:left;text-align:center;position:relative;padding:0 12px}
     .org-chart li::before,.org-chart li::after{content:'';position:absolute;top:0;right:50%;border-top:2px solid #94a3b8;width:50%;height:28px}
     .org-chart li::after{right:auto;left:50%;border-left:2px solid #94a3b8}
@@ -144,7 +144,10 @@
     .org-node .names .name-chip{font-size:12px;background:#eef2ff;color:#4f46e5;padding:2px 8px;border-radius:999px;white-space:nowrap}
     .org-node .names .more{font-size:11px;color:#94a3b8}
     .org-node.root{background:#4f46e5;border-color:#4f46e5}
+    .org-node.root.empty{background:#4f46e5;border-style:solid;border-color:#4f46e5}
     .org-node.root .title{color:#fff}
+    .org-node.root.empty .title{color:#fff}
+    .org-node.root.empty .org-empty{color:#cbd5e1}
     .org-node.branch{background:#eef2ff;border-color:#c7d2fe}
     .org-node.branch .title{color:#4338ca}
     .org-node.leaf{background:#f8fafc}

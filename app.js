@@ -246,6 +246,7 @@ function defaultPositions() {
   ];
   const assign = {};
   structure.forEach(p => assign[p.id] = []);
+  assign['kedaibiao'] = [];
   const dutyTree = {
     id:'banzhang', label:'班长', roleId:'banzhang', children:[
       { id:'xuexi', label:'学习委员', roleId:'xuexi', children:[
@@ -299,7 +300,18 @@ function defaultPositions() {
     structure, assign, dutyTree,
     dutyWeekly:{}, dutyEditMode:{},
     dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null },
-    deductionKeywords, deductionPoints:1
+    deductionKeywords, deductionPoints:1,
+    representatives: [
+      { id:'rep_yu', subject:'语文', count:1, names:[] },
+      { id:'rep_shu', subject:'数学', count:1, names:[] },
+      { id:'rep_ying', subject:'英语', count:1, names:[] },
+      { id:'rep_wu', subject:'物理', count:1, names:[] },
+      { id:'rep_hua', subject:'化学', count:1, names:[] },
+      { id:'rep_zheng', subject:'政治', count:1, names:[] },
+      { id:'rep_li', subject:'历史', count:1, names:[] },
+      { id:'rep_di', subject:'地理', count:1, names:[] },
+      { id:'rep_sheng', subject:'生物', count:1, names:[] }
+    ]
   };
 }
 
@@ -328,6 +340,8 @@ function migrateState(s) {
   if (!s.positions.deductionKeywords || typeof s.positions.deductionKeywords !== 'object') s.positions.deductionKeywords = defaultPositions().deductionKeywords;
   if (typeof s.positions.deductionPoints !== 'number') s.positions.deductionPoints = 1;
   if (!s.positions.dutyTaskPoints || typeof s.positions.dutyTaskPoints !== 'object') s.positions.dutyTaskPoints = defaultPositions().dutyTaskPoints;
+  if (!Array.isArray(s.positions.representatives)) s.positions.representatives = defaultPositions().representatives;
+  if (!Array.isArray(s.positions.assign.kedaibiao)) s.positions.assign.kedaibiao = [];
   const dp = defaultPoints();
   if (!s.points || typeof s.points !== 'object') s.points = dp;
   if (!Array.isArray(s.points.logs)) s.points.logs = [];
@@ -2713,6 +2727,12 @@ function examTotalRank(name, subject, classIds) {
 
 
 function examClass(id) { return state.examData.classes.find(c => c.id === id); }
+function examStudentGender(name) {
+  const s = (state.students || []).find(x => x.name === name);
+  if (s && s.gender) return s.gender;
+  const c = (state.examData.classes || []).find(x => x.gender && x.gender[name]);
+  return c ? c.gender[name] : '';
+}
 function examById(id) { return state.examData.exams.find(e => e.id === id); }
 function examSubjects() {
   const set = new Set(state.examData.subjects);
@@ -2987,7 +3007,7 @@ function uploadClassNames(clsId) {
   const finish = (text) => {
     const names = text.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const c = examClass(clsId);
-    if (c) { c.studentNames = names; save(); render(); alert(`已导入 ${names.length} 名学生到「${c.name}」`); }
+    if (c) { c.studentNames = names; examSyncClassGender(c); save(); render(); alert(`已导入 ${names.length} 名学生到「${c.name}」`); }
   };
   if (/\.xlsx?$/i.test(file.name)) {
     file.arrayBuffer().then(buf => {
@@ -2998,6 +3018,14 @@ function uploadClassNames(clsId) {
     const r = new FileReader(); r.onload = e => finish(e.target.result); r.readAsText(file);
   }
 }
+function examSyncClassGender(c) {
+  if (!c) return;
+  if (!c.gender || typeof c.gender !== 'object') c.gender = {};
+  (c.studentNames || []).forEach(n => {
+    const s = (state.students || []).find(x => x.name === n);
+    if (s && s.gender) c.gender[n] = s.gender;
+  });
+}
 function saveExamClasses() {
   document.querySelectorAll('[data-cls]').forEach(el => {
     const c = examClass(el.dataset.cls); if (!c) return;
@@ -3006,6 +3034,7 @@ function saveExamClasses() {
   document.querySelectorAll('[data-cls-names]').forEach(el => {
     const c = examClass(el.dataset.clsNames); if (!c) return;
     c.studentNames = el.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    examSyncClassGender(c);
   });
   save(); render();
 }
@@ -3020,14 +3049,14 @@ function renderExamSettings() {
         ${state.examData.classes.length > 1 ? `<button class="text-gray-300 hover:text-red-500" onclick="delExamClass('${c.id}')">🗑️</button>` : ''}
       </div>
       <div class="flex flex-wrap gap-2 mb-3 min-h-[2rem]">
-        ${(c.studentNames || []).length ? c.studentNames.map(n => `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-          <b>${esc(n)}</b>
-          <select data-cls="${c.id}" data-name="${esc(n)}" onchange="setMemberGender(this)" class="bg-transparent text-[11px] border-0 outline-none cursor-pointer">
-            <option value="男" ${(c.gender && c.gender[n] === '男') ? 'selected' : ''}>男</option>
-            <option value="女" ${(c.gender && c.gender[n] === '女') ? 'selected' : ''}>女</option>
-          </select>
+        ${(c.studentNames || []).length ? c.studentNames.map(n => {
+          const g = examStudentGender(n);
+          const genderBadge = g ? `<span class="text-[10px] px-1 py-0.5 rounded bg-white/60 text-slate-500">${esc(g)}</span>` : '';
+          return `<span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+          <b>${esc(n)}</b>${genderBadge}
           <button class="text-gray-400 hover:text-red-500 leading-none" onclick="removeClassStudent('${c.id}', ${c.studentNames.indexOf(n)})">×</button>
-        </span>`).join('') : '<span class="text-xs text-gray-400">暂无学生，请在下方粘贴或上传名单</span>'}
+        </span>`;
+        }).join('') : '<span class="text-xs text-gray-400">暂无学生，请在下方粘贴或上传名单</span>'}
       </div>
       <textarea data-cls-names="${c.id}" rows="4" class="w-full border rounded-lg p-3 text-xs" placeholder="每行一个学生姓名，可批量粘贴">${esc((c.studentNames || []).join('\n'))}</textarea>
       <div class="flex gap-2 mt-2 items-center">
@@ -3043,18 +3072,11 @@ function renderExamSettings() {
         <div class="font-bold text-gray-800">🏫 班级与成员</div>
         <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="addExamClass()">+ 增加班级</button>
       </div>
-      <p class="text-xs text-gray-500 mb-3">可增删班级数量；成员支持 Excel 批量上传或单独增删（含性别）。导入成绩时按姓名自动匹配班级。</p>
+      <p class="text-xs text-gray-500 mb-3">可增删班级数量；成员支持 Excel 批量上传或单独增删。性别自动从「学生管理」同步，无需重复选择。导入成绩时按姓名自动匹配班级。</p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${clsHtml}</div>
       <button class="mt-4 text-sm text-primary hover:underline" onclick="saveExamClasses()">保存班级名称与名单</button>
     </div>
   </div>`;
-}
-function setMemberGender(sel) {
-  const cls = sel.dataset.cls, name = sel.dataset.name, g = sel.value;
-  const c = examClass(cls); if (!c) return;
-  if (!c.gender) c.gender = {};
-  c.gender[name] = g;
-  save();
 }
 function renderExamUpload() {
   const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date || '')}）</option>`).join('') || '<option value="">（先添加考试）</option>';
@@ -4522,7 +4544,7 @@ function pmRefreshAll(){ const b=document.getElementById('pm-body'); if(b) b.inn
 
 /* ===== 页面框架 ===== */
 function renderPositions(){
-  const segs=[['roles','职务架构'],['duty','值日生轮换'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
+  const segs=[['roles','职务架构'],['duty','值日生'],['kedaibiao','课代表'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
   const segHtml=segs.map(([id,label])=>`<button class="pm-seg px-4 py-2 rounded-lg text-sm font-medium ${pmTab===id?'active':'text-slate-600 hover:bg-slate-100'}" data-pmtab="${id}" onclick="pmSwitch('${id}')">${label}</button>`).join('');
   return `<div>
     <div class="flex gap-1 mb-5 bg-white p-1 rounded-xl shadow-sm w-fit">${segHtml}</div>
@@ -4531,6 +4553,7 @@ function renderPositions(){
 }
 function pmRenderTab(tab){
   if(tab==='duty') return pmRenderDuty();
+  if(tab==='kedaibiao') return pmRenderKedaibiao();
   if(tab==='points') return pmRenderPoints();
   if(tab==='tree') return pmRenderTree();
   if(tab==='deduct') return pmRenderDeduct();
@@ -4647,10 +4670,16 @@ function pmBuildAssignBody(selected){
 function pmToggleStu(name){
   let cur;
   if(curCtx.mode==='role') cur=(state.positions.assign[curCtx.key]||[]).slice();
+  else if(curCtx.mode==='rep'){
+    const r=state.positions.representatives.find(x=>x.id===curCtx.key); cur=(r&&r.names?r.names:[]).slice();
+  }
   else cur=((state.positions.dutyWeekly[curCtx.day]&&state.positions.dutyWeekly[curCtx.day][curCtx.task])||[]).slice();
   const i=cur.indexOf(name);
   if(i>=0) cur.splice(i,1); else cur.push(name);
   if(curCtx.mode==='role') state.positions.assign[curCtx.key]=cur;
+  else if(curCtx.mode==='rep'){
+    const r=state.positions.representatives.find(x=>x.id===curCtx.key); if(r) r.names=cur; pmSyncKedaibiaoAssign();
+  }
   else state.positions.dutyWeekly[curCtx.day][curCtx.task]=cur;
   pmBuildAssignBody(cur);
   save(); pmRefreshAll();
@@ -4705,6 +4734,71 @@ function pmExportDutyXlsx(){
   const ws=XLSX.utils.aoa_to_sheet(rows);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'值日生安排');
   XLSX.writeFile(wb,'值日生安排.xlsx');
+}
+
+/* ===== 课代表（按科目管理） ===== */
+function pmSyncKedaibiaoAssign(){
+  const all=[];
+  (state.positions.representatives||[]).forEach(r=>{(r.names||[]).forEach(n=>{if(!all.includes(n)) all.push(n);});});
+  state.positions.assign.kedaibiao=all;
+}
+function pmRenderKedaibiao(){
+  const reps=state.positions.representatives||[];
+  return `<div class="bg-white rounded-2xl shadow-sm p-5">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-bold text-slate-700">课代表（按科目）</div>
+      <button class="text-sm bg-sky-600 text-white rounded-lg px-3 py-1.5 hover:bg-sky-700" onclick="pmAddRepSubject()">＋ 添加科目</button>
+    </div>
+    <div class="space-y-3">${reps.length?reps.map(r=>pmRepRow(r)).join(''):'<div class="text-sm text-slate-400">暂无科目，点击上方按钮添加</div>'}</div>
+    <p class="text-xs text-slate-400 mt-4">人数仅作标记；成员数量可自由增减。保存后会同步到「职务树」的课代表节点。</p>
+  </div>`;
+}
+function pmRepRow(r){
+  const names=r.names||[];
+  return `<div class="border rounded-xl p-4 bg-slate-50">
+    <div class="flex flex-wrap items-center gap-3 mb-2">
+      <input class="flex-1 min-w-[6rem] border rounded-lg p-2 text-sm font-medium" value="${esc(r.subject)}" onchange="pmUpdateRepSubject('${r.id}','subject',this.value)">
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-slate-500">人数</span>
+        <input type="number" min="0" class="w-20 border rounded-lg p-2 text-sm" value="${r.count==null?1:r.count}" onchange="pmUpdateRepSubject('${r.id}','count',this.value)">
+      </div>
+      <button class="text-xs text-red-500 hover:underline px-2" onclick="pmRemoveRepSubject('${r.id}')">删除</button>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center min-h-[2rem]">
+      ${names.length?names.map((n,i)=>`<span class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full border border-indigo-200 cursor-pointer" onclick="pmRemoveRepName('${r.id}',${i})">${esc(n)}<span class="text-indigo-400">×</span></span>`).join(''):'<span class="text-xs text-slate-400">未安排学生</span>'}
+      <span class="inline-flex items-center justify-center bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAddRep('${r.id}')">＋</span>
+    </div>
+  </div>`;
+}
+function pmAddRepSubject(){
+  const name=prompt('请输入新科目名称：'); if(!name||!name.trim()) return;
+  state.positions.representatives.push({ id:'rep_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,5), subject:name.trim(), count:1, names:[] });
+  save(); pmRefreshAll();
+}
+function pmRemoveRepSubject(id){
+  if(!confirm('确定删除这个科目吗？')) return;
+  state.positions.representatives=state.positions.representatives.filter(r=>r.id!==id);
+  pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
+}
+function pmUpdateRepSubject(id,field,value){
+  const r=state.positions.representatives.find(x=>x.id===id); if(!r) return;
+  if(field==='subject') r.subject=value.trim();
+  if(field==='count'){ const v=parseInt(value,10); r.count=isNaN(v)?1:v; }
+  save(); pmRefreshAll();
+}
+function pmRemoveRepName(id,idx){
+  const r=state.positions.representatives.find(x=>x.id===id); if(!r||!r.names) return;
+  r.names.splice(idx,1);
+  pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
+}
+function pmOpenAddRep(id){
+  curCtx={mode:'rep',key:id,day:null,task:null};
+  const r=state.positions.representatives.find(x=>x.id===id);
+  openModal('添加课代表 · '+(r?r.subject:''), `
+    <div class="text-xs text-gray-400 mb-2" id="pmAssignHint"></div>
+    <div id="pmAssignBody" class="grid grid-cols-3 sm:grid-cols-4 gap-2"></div>
+    <div class="flex justify-end mt-4"><button class="bg-primary text-white px-4 py-2 rounded-full text-sm" onclick="closeModal()">完成</button></div>`);
+  pmBuildAssignBody((r&&r.names?r.names:[]).slice());
 }
 
 /* ===== 职务积分 ===== */
@@ -4763,7 +4857,7 @@ function pmIsDraggableNode(node){ return node.roleId && node.id!=='banzhang'; }
 function pmIsDroppableNode(node){ return node.roleId || node.id==='banzhang'; }
 function pmRenderTreeNode(node){
   const hasChildren=node.children&&node.children.length;
-  const cls=pmTreeNodeClass(node)+(pmGetTreeNames(node).length===0&&node.id!=='t_zrs'?' empty':'');
+  const cls=pmTreeNodeClass(node)+(pmGetTreeNames(node).length===0&&node.id!=='t_zrs'&&node.id!=='banzhang'?' empty':'');
   const names=pmGetTreeNames(node);
   const draggable=pmIsDraggableNode(node);
   const droppable=pmIsDroppableNode(node);
