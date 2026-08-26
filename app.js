@@ -3256,17 +3256,22 @@ function syncExamClassesToStudents(s) {
     usedIds.add(obj.id);
     next.push(obj);
   });
+  // 保留导入的全年级参考班级（不在学生管理中）：仅用于算校次 / 年级均分，不进入本班分析
+  s.examData.classes.forEach(c => {
+    if (!c) return;
+    const id = c.id || c.name, name = c.name || c.id;
+    if (usedIds.has(id)) return;
+    let obj = byKey[name] || c;
+    obj.id = id; obj.name = name;
+    if (!obj.gender || typeof obj.gender !== 'object') obj.gender = {};
+    delete obj.studentNames;
+    usedIds.add(id);
+    next.push(obj);
+  });
   s.examData.classes = next;
+  // 仅丢弃 classId 完全缺失/无对应班级的孤儿记录，其余（含参考班）全部保留
   if (Array.isArray(s.examData.records)) {
-    const keptIds = new Set(next.map(c => c.id));
-    s.examData.records = s.examData.records.filter(r => {
-      if (keptIds.has(r.classId)) return true;
-      // 原班级已从学生管理移除：按学生当前班级重新归类；学生已不在学生管理则删除该记录
-      const st = (s.students || []).find(x => x.name === r.studentName);
-      const target = st && next.find(x => x.name === st.class || x.id === st.class);
-      if (target) { r.classId = target.id; return true; }
-      return false;
-    });
+    s.examData.records = s.examData.records.filter(r => r.classId && next.some(c => c.id === r.classId));
   }
 }
 function examById(id) { return state.examData.exams.find(e => e.id === id); }
@@ -4209,6 +4214,14 @@ function attachEIWizard() {
   const ex = document.getElementById('eiExam'); if (ex) ex.addEventListener('change', () => { eiExamId = ex.value; });
   eiRefreshPreview();
 }
+function ensureExamClass(name) {
+  if (!name) return null;
+  if (!state.examData.classes) state.examData.classes = [];
+  let c = state.examData.classes.find(x => x.name === name);
+  if (!c) { c = { id: name, name, gender: {} }; state.examData.classes.push(c); }
+  if (!c.gender || typeof c.gender !== 'object') c.gender = {};
+  return c.id;
+}
 function doExamImportWizard() {
   const examId = eiExamId;
   if (!examId) return alert('请选择考试');
@@ -4227,7 +4240,7 @@ function doExamImportWizard() {
     const name = String(r[eiNameCol] ?? '').trim();
     if (!name) return;
     let cid = null;
-    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv) || {}).id; }
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = ensureExamClass(cv); }
     if (!cid) cid = findClassIdByName(name);
     if (!cid) { unmatched.push(name); return; }
     mapEntries.forEach(([idx, m]) => {
