@@ -3895,7 +3895,7 @@ function renderExamUpload() {
         <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openColumnManager()">⚙️ 管理列</button>
       </div>
       <button class="w-full bg-emerald-600 text-white py-2.5 rounded-full text-sm hover:bg-emerald-700" onclick="openProductImport()">📦 导入工具成品成绩</button>
-      <p class="text-[11px] text-gray-400 leading-relaxed">请先用上方「考试管理」添加考试名称和日期，再点此导入。系统会按文件名自动匹配到同名同日的考试；若匹配不上，会新建一个考试。导入时按「班级 + 姓名」与「学生管理」逐一匹配后保存，对不上的数据会列出并跳过。</p>
+      <p class="text-[11px] text-gray-400 leading-relaxed">点击后先选择或新建考试（名称/日期可手动填写，也可让系统从文件名解析），再选择工具导出的 CSV。导入时按「班级 + 姓名」与「学生管理」逐一匹配后保存，对不上的数据会列出并跳过，不会自动创建重复考试。</p>
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
@@ -4302,7 +4302,7 @@ function doExamImportWizard() {
 }
 
 // ---------- 导入「处理工具」导出的成品成绩（固定格式，按班级+姓名匹配）----------
-let piRows = [], piHeaders = [], piExamId = '';
+let piRows = [], piHeaders = [], piExamId = '', piNewName = '', piNewDate = '', piFileName = '';
 function piNormalizeClass(raw) {
   if (!raw) return '';
   const s = String(raw).trim();
@@ -4330,28 +4330,44 @@ function piDetect(headers) {
   });
 }
 function openProductImport() {
-  piRows = []; piHeaders = [];
-  piExamId = state.examData.exams.length ? state.examData.exams[state.examData.exams.length - 1].id : '';
+  piRows = []; piHeaders = []; piFileName = '';
+  piExamId = state.examData.exams.length ? state.examData.exams[state.examData.exams.length - 1].id : '__new__';
+  piNewName = ''; piNewDate = '';
   openModal('📦 导入工具成品成绩', '<div id="piHost"></div>', 'xl');
   piRender();
 }
 function piRender() {
   const host = document.querySelector('#modal-root .p-6'); if (!host) return;
   const examOpts = state.examData.exams.map(e => `<option value="${e.id}" ${e.id === piExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
+  const isNew = piExamId === '__new__';
+  const newInputs = isNew ? `
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="flex-1 min-w-[160px]">
+        <label class="block text-xs text-gray-500 mb-1">考试名称 *</label>
+        <input id="piNewName" type="text" value="${esc(piNewName)}" class="w-full border rounded-lg p-2 text-sm" placeholder="如：期中">
+      </div>
+      <div class="flex-1 min-w-[160px]">
+        <label class="block text-xs text-gray-500 mb-1">考试日期</label>
+        <input id="piNewDate" type="date" value="${esc(piNewDate)}" class="w-full border rounded-lg p-2 text-sm">
+      </div>
+    </div>` : '';
   const hasData = piRows.length > 0;
   const preview = hasData ? piBuildPreviewHTML() : '<p class="text-xs text-gray-400">请选择工具导出的成品 CSV（也可选 .xlsx/.xls，会自动转为 CSV 解析）。</p>';
   host.innerHTML = `
   <div class="space-y-4">
-    <p class="text-xs text-gray-400 leading-relaxed">适用于「成绩处理工具」导出的固定格式 CSV。系统会自动识别列、按文件名建考试、按 <b>班级 + 姓名</b> 与「学生管理」逐一匹配后再保存；班级或姓名对不上的数据会列出并跳过，绝不会混进其他班级。</p>
-    <div class="flex flex-wrap gap-3 items-end">
-      <div class="flex-1 min-w-[220px]">
-        <label class="block text-xs text-gray-500 mb-1">选择工具导出的成品 CSV</label>
-        <input id="piFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
+    <p class="text-xs text-gray-400 leading-relaxed">适用于「成绩处理工具」导出的固定格式 CSV。系统会自动识别列、按 <b>班级 + 姓名</b> 与「学生管理」逐一匹配后再保存；班级或姓名对不上的数据会列出并跳过。请先选择或新建考试，再选择文件。</p>
+    <div class="bg-gray-50 rounded-xl p-4 space-y-3">
+      <div class="flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-[220px]">
+          <label class="block text-xs text-gray-500 mb-1">选择工具导出的成品 CSV</label>
+          <input id="piFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">导入到考试</label>
+          <select id="piExam" class="border rounded-lg p-2 text-sm">${examOpts}<option value="__new__" ${isNew ? 'selected' : ''}>➕ 新建考试</option></select>
+        </div>
       </div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">导入到考试（可不选，按文件名自动建）</label>
-        <select id="piExam" class="border rounded-lg p-2 text-sm">${examOpts || '<option value="">（无，将自动创建）</option>'}</select>
-      </div>
+      <div id="piNewWrap">${newInputs}</div>
     </div>
     <div id="piPreview">${preview}</div>
     <div class="flex gap-3 pt-1">
@@ -4360,12 +4376,20 @@ function piRender() {
     </div>
   </div>`;
   const f = document.getElementById('piFile'); if (f) f.addEventListener('change', piOnFile);
-  const ex = document.getElementById('piExam'); if (ex) ex.addEventListener('change', () => { piExamId = ex.value; });
+  const ex = document.getElementById('piExam'); if (ex) ex.addEventListener('change', () => { piExamId = ex.value; piRender(); });
+  if (isNew) {
+    const nIn = document.getElementById('piNewName'); if (nIn) nIn.addEventListener('input', () => { piNewName = nIn.value.trim(); });
+    const dIn = document.getElementById('piNewDate'); if (dIn) dIn.addEventListener('change', () => { piNewDate = dIn.value.trim(); });
+  }
 }
 function piOnFile(e) {
   const file = e.target.files && e.target.files[0]; if (!file) return;
-  autoCreateExamFromFilename(file.name);
-  if (state.examData.exams.length && eiExamId) piExamId = eiExamId;
+  piFileName = file.name;
+  if (piExamId === '__new__' && !piNewName && !piNewDate) {
+    const info = parseExamNameFromFilename(file.name);
+    piNewName = info.name || '';
+    piNewDate = info.date || '';
+  }
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   if (['xlsx', 'xls'].includes(ext)) {
     if (typeof XLSX === 'undefined') { alert('Excel 解析库尚未加载，请刷新页面后再试'); return; }
@@ -4420,7 +4444,20 @@ function piBuildPreviewHTML() {
     <div class="overflow-x-auto border rounded-xl"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">姓名</th><th class="px-2 py-1.5 text-left">班级(文件)</th><th class="px-2 py-1.5 text-left">匹配结果</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="text-[10px] text-gray-400 p-2">仅预览前 10 行，共 ${total} 人</div></div>`;
 }
 function doProductImport() {
-  if (!piExamId) return alert('请先选择或自动创建考试（考试名称/时间会从文件名解析）。');
+  let targetExamId = piExamId;
+  if (targetExamId === '__new__') {
+    if (!piNewName) return alert('请输入新考试的名称。');
+    let ex = state.examData.exams.find(e => e.name === piNewName && (e.date || '') === (piNewDate || ''));
+    if (!ex && piNewName) {
+      ex = state.examData.exams.find(e => e.name === piNewName && (!(e.date || '') || !piNewDate));
+    }
+    if (!ex) {
+      state.examData.exams.push({ id: uid(), name: piNewName, date: piNewDate });
+      ex = state.examData.exams[state.examData.exams.length - 1];
+    }
+    targetExamId = ex.id;
+  }
+  if (!targetExamId) return alert('请先选择或新建考试。');
   if (!piRows.length) return alert('没有可导入的数据，请先选择文件。');
   const cols = piDetect(piHeaders);
   const nameCol = cols.find(c => c.kind === 'name');
@@ -4443,9 +4480,9 @@ function doProductImport() {
       if (raw === '') return;
       const sc = parseFloat(raw);
       if (isNaN(sc)) return;
-      const ex = state.examData.records.find(x => x.examId === piExamId && x.classId === classId && x.studentName === name && x.subject === c.label);
+      const ex = state.examData.records.find(x => x.examId === targetExamId && x.classId === classId && x.studentName === name && x.subject === c.label);
       if (ex) { ex.score = sc; ex.colType = c.kind; }
-      else state.examData.records.push({ id: uid(), examId: piExamId, classId, studentName: name, subject: c.label, score: sc, colType: c.kind });
+      else state.examData.records.push({ id: uid(), examId: targetExamId, classId, studentName: name, subject: c.label, score: sc, colType: c.kind });
       n++;
     });
   });
