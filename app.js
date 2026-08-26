@@ -326,7 +326,7 @@ function migrateState(s) {
   ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
-  // 移除已废弃的菜单项（值日表、家校沟通、模板库、班会PPT、成绩分析/成绩管理重复项 scores）
+  // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
   if (Array.isArray(s.nav)) {
     const removedIds = new Set(['duty', 'communication', 'templates', 'ppt', 'scores']);
     s.nav.forEach(item => {
@@ -335,6 +335,8 @@ function migrateState(s) {
     });
     s.nav = s.nav.filter(item => !item._del);
   }
+  // 以默认导航为基准，保留现有分组但补全/重置所有菜单项（导航不可用户自定义，直接对齐最新结构最稳）
+  s.nav = JSON.parse(JSON.stringify(ds.nav));
   // 职务与值日：补全子字段
   if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
   if (!Array.isArray(s.positions.structure) || !s.positions.structure.length) s.positions.structure = defaultPositions().structure;
