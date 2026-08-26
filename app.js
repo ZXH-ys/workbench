@@ -3102,7 +3102,7 @@ let examSelectedStudent = ''; // 当前在榜单中选中的学生
 let eiBook = null, eiSheets = [], eiSheetName = '', eiRows = [], eiHeaders = [];
 let eiNameCol = -1, eiClassCol = -1, eiColMap = {}, eiHeaderRow = 1, eiExamId = '';
 // 成绩查询页状态（仅 UI 偏好，不持久化）
-let eqExamId = '', eqClassIds = [], eqSearch = '';
+let eqExamId = '', eqClassIds = [], eqSearch = '', eqSortCol = '', eqSortDesc = false, eqHiddenCols = new Set();
 // 公示列开关（仅 UI 偏好，不持久化）
 let examAnalysisColumns = {
   score: true,
@@ -4485,6 +4485,13 @@ function doProductImport() {
 }
 
 // ---------- 成绩查询 ----------
+function fmtExamCell(v, isRank) {
+  if (v === '' || v === undefined || v === null || (typeof v === 'number' && isNaN(v))) return '—';
+  const n = Number(v);
+  if (isNaN(n)) return esc(String(v));
+  if (isRank || Math.round(n) === n) return String(Math.round(n));
+  return n.toFixed(1).replace(/\.0$/, '');
+}
 function renderExamQuery() {
   const exams = state.examData.exams;
   if (!exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📋</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
@@ -4492,10 +4499,13 @@ function renderExamQuery() {
   const examOpts = exams.map(e => `<option value="${e.id}" ${e.id === eqExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
   if (!eqClassIds.length) eqClassIds = state.examData.classes.map(c => c.id);
   const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
+  const allCols = examColumns().filter(c => c.enabled);
+  const colChk = allCols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="eq-col" value="${esc(c.key)}" ${eqHiddenCols.has(c.key) ? '' : 'checked'} onchange="eqCollect();"> ${esc(c.key)}</label>`).join('');
+  const sortOpts = [{k:'',l:'默认（班级/姓名）'},{k:'classId',l:'班级'},{k:'name',l:'姓名'},...allCols.map(c=>({k:c.key,l:c.key+(c.type==='rank'?'·排名':'')}))].map(o=>`<option value="${esc(o.k)}" ${eqSortCol===o.k?'selected':''}>${esc(o.l)}</option>`).join('');
   return `
   <div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div>
           <label class="block text-xs text-gray-500 mb-1">选择考试</label>
           <select id="eqExam" class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
@@ -4508,6 +4518,17 @@ function renderExamQuery() {
           <label class="block text-xs text-gray-500 mb-1">搜索学生姓名</label>
           <input id="eqSearch" type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
         </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">排序</label>
+          <div class="flex gap-2">
+            <select id="eqSortCol" class="flex-1 border rounded-lg p-2 text-sm" onchange="eqCollect();">${sortOpts}</select>
+            <button class="border rounded-lg px-3 text-sm hover:bg-gray-50" onclick="eqSortDesc=!eqSortDesc; eqCollect();" title="切换升序/降序">${eqSortDesc ? '↓' : '↑'}</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">显示列</label>
+        <div class="flex flex-wrap gap-2">${colChk}</div>
       </div>
     </div>
     <div id="eqTableWrap">${renderExamQueryTable()}</div>
@@ -4517,13 +4538,36 @@ function eqCollect() {
   eqExamId = document.getElementById('eqExam').value;
   eqClassIds = Array.from(document.querySelectorAll('.eq-cls:checked')).map(b => b.value);
   eqSearch = (document.getElementById('eqSearch').value || '').trim();
+  eqSortCol = document.getElementById('eqSortCol').value;
+  document.querySelectorAll('.eq-col').forEach(b => {
+    if (b.checked) eqHiddenCols.delete(b.value); else eqHiddenCols.add(b.value);
+  });
   const wrap = document.getElementById('eqTableWrap');
   if (wrap) wrap.innerHTML = renderExamQueryTable();
 }
-function renderExamQueryTable() {
-  if (!eqExamId) return '<p class="text-sm text-gray-400">请选择考试。</p>';
-  const cols = examColumns().filter(c => c.enabled);
-  if (!cols.length) return '<p class="text-sm text-gray-400">还没有配置成绩列，请到「班级设置 → 管理列」添加。</p>';
+function eqExportCSV() {
+  if (!eqExamId) return;
+  const cols = examColumns().filter(c => c.enabled && !eqHiddenCols.has(c.key));
+  const data = eqBuildRows();
+  if (!data.rows.length) return alert('没有可导出的数据');
+  const header = ['班级', '姓名', ...cols.map(c => c.key)];
+  const lines = [header.join(',')];
+  data.rows.forEach(row => {
+    const recs = data.records;
+    const vals = cols.map(c => {
+      const rec = recs.find(r => r.classId === row.classId && r.studentName === row.name && r.subject === c.key);
+      return rec ? fmtExamCell(rec.score, c.type === 'rank') : '';
+    });
+    lines.push([row.classId, row.name, ...vals].join(','));
+  });
+  const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `成绩查询_${state.examData.exams.find(e=>e.id===eqExamId)?.name || eqExamId}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+function eqBuildRows() {
   const records = state.examData.records.filter(r => r.examId === eqExamId && eqClassIds.includes(r.classId));
   const rows = [];
   const seen = new Set();
@@ -4534,19 +4578,71 @@ function renderExamQueryTable() {
     if (eqSearch && !r.studentName.includes(eqSearch)) return;
     rows.push({ classId: r.classId, name: r.studentName });
   });
-  rows.sort((a, b) => a.classId.localeCompare(b.classId) || a.name.localeCompare(b.name));
+  const col = examColumns().find(c => c.key === eqSortCol);
+  rows.sort((a, b) => {
+    if (!eqSortCol || eqSortCol === 'classId') {
+      const d = a.classId.localeCompare(b.classId);
+      if (d) return eqSortDesc ? -d : d;
+      return eqSortDesc ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name);
+    }
+    if (eqSortCol === 'name') {
+      return eqSortDesc ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name);
+    }
+    const ra = records.find(r => r.classId === a.classId && r.studentName === a.name && r.subject === eqSortCol);
+    const rb = records.find(r => r.classId === b.classId && r.studentName === b.name && r.subject === eqSortCol);
+    const va = ra ? Number(ra.score) : -Infinity;
+    const vb = rb ? Number(rb.score) : -Infinity;
+    if (isNaN(va) && isNaN(vb)) return a.name.localeCompare(b.name);
+    if (isNaN(va)) return 1; if (isNaN(vb)) return -1;
+    return eqSortDesc ? vb - va : va - vb;
+  });
+  return { rows, records };
+}
+function renderExamQueryTable() {
+  if (!eqExamId) return '<p class="text-sm text-gray-400">请选择考试。</p>';
+  const cols = examColumns().filter(c => c.enabled && !eqHiddenCols.has(c.key));
+  if (!cols.length) return '<p class="text-sm text-gray-400">还没有配置成绩列，请到「班级设置 → 管理列」添加。</p>';
+  const { rows, records } = eqBuildRows();
   if (!rows.length) return `<p class="text-sm text-gray-400 text-center py-10">没有找到匹配的学生。</p>`;
-  const ths = ['<th class="py-2 pl-2 text-left">班级</th>', '<th class="py-2 text-left">姓名</th>'];
-  cols.forEach(c => ths.push(`<th class="py-2 text-right">${esc(c.key)}${c.type === 'rank' ? '<span class="text-blue-500">·排名</span>' : ''}</th>`));
+  const stickyHead = 'position:sticky; top:0; z-index:20; background:#f3f4f6;';
+  const stickyClassTh = 'position:sticky; left:0; z-index:21; background:#f3f4f6;';
+  const stickyNameTh = 'position:sticky; left:3.5rem; z-index:21; background:#f3f4f6;';
+  const stickyClassTd = 'position:sticky; left:0; z-index:10; background:#fff;';
+  const stickyNameTd = 'position:sticky; left:3.5rem; z-index:10; background:#fff;';
+  const ths = [`<th class="py-2 pl-3 pr-2 text-left whitespace-nowrap text-xs font-semibold" style="${stickyHead} ${stickyClassTh}; min-width:3.5rem;">班级</th>`, `<th class="py-2 pr-3 text-left whitespace-nowrap text-xs font-semibold" style="${stickyHead} ${stickyNameTh}; min-width:5rem;">姓名</th>`];
+  cols.forEach(c => {
+    const arrow = eqSortCol === c.key ? (eqSortDesc ? '↓' : '↑') : '';
+    ths.push(`<th class="py-2 px-2 text-right whitespace-nowrap text-xs font-semibold cursor-pointer select-none hover:bg-gray-200 ${c.type==='rank'?'text-blue-600':''}" style="${stickyHead} min-width:3.5rem;" onclick="eqSetSort('${esc(c.key)}')">${esc(c.key)}${c.type==='rank'?'<span class="text-[10px] opacity-70">排</span>':''}${arrow}</th>`);
+  });
   const tbody = rows.map(row => {
     const vals = cols.map(c => {
       const rec = records.find(r => r.classId === row.classId && r.studentName === row.name && r.subject === c.key);
-      const v = rec ? rec.score : '';
-      return `<td class="py-1.5 ${c.type === 'rank' ? 'text-blue-600' : ''} text-right">${v === '' || v === undefined || v === null ? '—' : esc(String(v))}</td>`;
+      const v = rec ? fmtExamCell(rec.score, c.type === 'rank') : '—';
+      return `<td class="py-1.5 px-2 ${c.type === 'rank' ? 'text-blue-600' : ''} text-right whitespace-nowrap text-sm tabular-nums">${v}</td>`;
     }).join('');
-    return `<tr class="border-t hover:bg-gray-50"><td class="py-1.5 pl-2">${esc(row.classId)}</td><td class="py-1.5">${esc(row.name)}</td>${vals}</tr>`;
+    return `<tr class="border-b hover:bg-gray-50"><td class="py-1.5 pl-3 pr-2 text-sm text-gray-600 whitespace-nowrap" style="${stickyClassTd}">${esc(row.classId)}</td><td class="py-1.5 pr-3 text-sm font-medium whitespace-nowrap" style="${stickyNameTd}">${esc(row.name)}</td>${vals}</tr>`;
   }).join('');
-  return `<div class="bg-white rounded-2xl p-5 shadow-sm overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-100 text-gray-600 text-left">${ths.join('')}</tr></thead><tbody>${tbody}</tbody></table></div>`;
+  return `
+  <div class="bg-white rounded-2xl shadow-sm">
+    <div class="flex items-center justify-between p-4 border-b">
+      <div class="text-xs text-gray-500">共 <b>${rows.length}</b> 人</div>
+      <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="eqExportCSV()">📥 导出当前表</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="text-sm border-collapse" style="min-width:100%;">
+        <thead><tr class="bg-gray-100 text-gray-600">${ths.join('')}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+function eqSetSort(col) {
+  if (eqSortCol === col) eqSortDesc = !eqSortDesc;
+  else { eqSortCol = col; eqSortDesc = true; }
+  const wrap = document.getElementById('eqTableWrap');
+  if (wrap) wrap.innerHTML = renderExamQueryTable();
+  const sel = document.getElementById('eqSortCol');
+  if (sel) sel.value = eqSortCol;
 }
 
 // ---------- 成绩分析看板 ----------
