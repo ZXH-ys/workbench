@@ -57,6 +57,9 @@ function defaultHomeworkKeywords() {
 function defaultState() {
   return {
     user: { name: 'Claire', role: '英语 · 班主任' },
+    classes: [{ id: '10班', name: '10班', role: 'head' }, { id: '9班', name: '9班', role: 'teacher' }],
+    headTeacherClass: '10班',
+    activeClass: '10班',
     nav: [
       { id: 'home', label: '工作台首页', icon: '🏠' },
       { section: '日常记录', items: [
@@ -104,20 +107,20 @@ function defaultState() {
       ]
     },
     students: [
-      { id: uid(), name: '张明轩', gender: '男', class: '高一(3)班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Zhang', records: [
+      { id: uid(), name: '张明轩', gender: '男', class: '10班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Zhang', records: [
         { id: uid(), type: 'critic', date: '8月18日', content: '张明轩今天上课迟到了，跟他妈妈沟通了这个问题，后续我们还要跟进' },
         { id: uid(), type: 'critic', date: '8月4日', content: '张明轩今天迟到了' },
         { id: uid(), type: 'praise', date: '8月3日', content: '课堂积极发言，英语口语进步明显' },
         { id: uid(), type: 'chat', date: '7月31日', content: '关于近期学习压力的谈话，学生表示会调整心态' },
       ]},
-      { id: uid(), name: '王浩然', gender: '男', class: '高一(3)班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Wang', records: [
+      { id: uid(), name: '王浩然', gender: '男', class: '10班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Wang', records: [
         { id: uid(), type: 'praise', date: '8月10日', content: '主动帮助同学解答数学题' },
         { id: uid(), type: 'chat', date: '8月1日', content: '谈心：关于与同桌相处的问题' },
       ]},
-      { id: uid(), name: '李思雨', gender: '女', class: '高一(3)班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Li', records: [
+      { id: uid(), name: '李思雨', gender: '女', class: '10班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Li', records: [
         { id: uid(), type: 'praise', date: '8月12日', content: '英语演讲比赛获得二等奖' },
       ]},
-      { id: uid(), name: '陈一诺', gender: '女', class: '高一(3)班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Chen', records: [
+      { id: uid(), name: '陈一诺', gender: '女', class: '10班', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Chen', records: [
         { id: uid(), type: 'critic', date: '8月5日', content: '作业未按时完成，已提醒' },
       ]},
     ],
@@ -142,11 +145,11 @@ function defaultState() {
       { id: uid(), parent: '王浩然爸爸', student: '王浩然', status: '已沟通', content: '课堂状态反馈，家长表示会配合。' },
     ],
     homework: [
-      { id: uid(), subject: '英语', title: 'Unit 1 单词默写', class: '高一(3)班', due: '8月25日' },
+      { id: uid(), subject: '英语', title: 'Unit 1 单词默写', class: '10班', due: '8月25日' },
     ],
     scores: [
-      { id: uid(), name: '张明轩', subject: '英语', exam: '期中考试', score: 78, class: '高一(3)班' },
-      { id: uid(), name: '王浩然', subject: '英语', exam: '期中考试', score: 92, class: '高一(3)班' },
+      { id: uid(), name: '张明轩', subject: '英语', exam: '期中考试', score: 78, class: '10班' },
+      { id: uid(), name: '王浩然', subject: '英语', exam: '期中考试', score: 92, class: '10班' },
     ],
     album: [],
     seating: {
@@ -318,7 +321,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','album','seating','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 移除已废弃的菜单项（值日表、家校沟通、模板库、班会PPT、成绩分析/成绩管理重复项 scores）
@@ -360,6 +363,16 @@ function migrateState(s) {
   if (!Array.isArray(s.homeworkKeywords) || !s.homeworkKeywords.length) s.homeworkKeywords = defaultHomeworkKeywords();
   s.classRecords.forEach(r => { if (!r.studentId && r.studentId !== null) r.studentId = null; if (typeof r.studentName !== 'string') r.studentName = ''; });
   if (!s.user || typeof s.user !== 'object') s.user = { name: '班主任', role: '' };
+  // ===== 双班支持：班级维度 + 旧数据归属班主任班 =====
+  if (!Array.isArray(s.classes) || !s.classes.length) s.classes = [{ id: '10班', name: '10班', role: 'head' }, { id: '9班', name: '9班', role: 'teacher' }];
+  if (!s.headTeacherClass) s.headTeacherClass = '10班';
+  if (!s.activeClass) s.activeClass = s.headTeacherClass;
+  const _knownCls = s.classes.map(c => c.id);
+  const _headCls = s.headTeacherClass;
+  if (Array.isArray(s.students)) s.students.forEach(st => { if (!st.class || !_knownCls.includes(st.class)) st.class = _headCls; });
+  if (Array.isArray(s.classRecords)) s.classRecords.forEach(r => { if (!r.class) r.class = _headCls; });
+  if (Array.isArray(s.homework)) s.homework.forEach(h => { if (!h.class) h.class = _headCls; });
+  if (Array.isArray(s.scores)) s.scores.forEach(sc => { if (!sc.class || !_knownCls.includes(sc.class)) sc.class = _headCls; });
   // 成绩分析 / 折算 / 快照
   if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}], exams: [], records: [], subjects: [] };
   if (!Array.isArray(s.examData.classes) || !s.examData.classes.length) s.examData.classes = [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}];
@@ -695,10 +708,10 @@ function openImportStudents() {
   openModal('批量导入学生', `
     <div class="space-y-4">
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一个学生，用英文逗号或制表符分隔：<br><code>姓名,性别,班级</code>（性别、班级可留空）。首行若是标题则自动跳过。</p>
-      <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,高一(3)班&#10;王浩然,男,高一(3)班"></textarea>
+      <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,10班&#10;王浩然,男,10班"></textarea>
       <div><input id="impStudentFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impStudentText').value='姓名,性别,班级\\n张明轩,男,高一(3)班\\n王浩然,男,高一(3)班'">填入示例</button>
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impStudentText').value='姓名,性别,班级\\n张明轩,男,10班\\n王浩然,男,10班'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportStudents()">导入</button>
       </div>
     </div>`, 'lg');
@@ -727,10 +740,10 @@ function openImportScores() {
   openModal('批量导入成绩', `
     <div class="space-y-4">
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一条：<code>姓名,班级,科目,考试,分数</code>。首行标题自动跳过。</p>
-      <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,高一(3)班,英语,期中考试,78"></textarea>
+      <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,10班,英语,期中考试,78"></textarea>
       <div><input id="impScoreFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impScoreText').value='姓名,班级,科目,考试,分数\\n张明轩,高一(3)班,英语,期中考试,78\\n王浩然,高一(3)班,英语,期中考试,92'">填入示例</button>
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impScoreText').value='姓名,班级,科目,考试,分数\\n张明轩,10班,英语,期中考试,78\\n王浩然,10班,英语,期中考试,92'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportScores()">导入</button>
       </div>
     </div>`, 'lg');
@@ -840,11 +853,17 @@ function renderSidebar() {
     </div>`;
   };
   let itemsHtml = '';
+  // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/相册/座次/职务值日/考勤/周报/待办）隐藏
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders'];
+  const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
+      const items = group.items.filter(it => isHead || !teacherOnly.includes(it.id));
+      if (!items.length) return;
       itemsHtml += `<div class="mt-4 mb-2 px-4 text-xs text-gray-400 font-medium">${group.section}</div>`;
-      itemsHtml += group.items.map(buildItem).join('');
+      itemsHtml += items.map(buildItem).join('');
     } else if (group.id) {
+      if (!isHead && teacherOnly.includes(group.id)) return;
       itemsHtml += buildItem(group);
     }
   });
@@ -886,7 +905,19 @@ function saveUser() {
   save(); closeModal(); render();
 }
 
+function setActiveClass(cls) {
+  if (state.activeClass === cls) return;
+  state.activeClass = cls;
+  // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
+  const teacherOnly = ['schedule','points','classLog','album','seating','positions','attendance','report','reminders'];
+  if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
+  save(); render();
+}
+
 function renderTopBar() {
+  const classSwitch = `<div class="flex items-center gap-1 bg-gray-100 rounded-full p-0.5 mr-2">
+    ${(state.classes || []).map(c => `<button onclick="setActiveClass('${c.id}')" class="text-xs px-3 py-1 rounded-full transition ${state.activeClass===c.id?'bg-white text-primary shadow-sm font-medium':'text-gray-500 hover:text-gray-700'}">${c.name}</button>`).join('')}
+  </div>`;
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     album: '班级相册', seating: '座次表', classRecord: '课堂记录',
@@ -900,7 +931,7 @@ function renderTopBar() {
   let extra = '';
   if (currentRoute === 'points') {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-      ${menuBtn}<h1 class="text-lg font-bold text-gray-800">积分管理</h1>
+      ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">积分管理</h1>
       <div class="flex items-center gap-2 flex-wrap justify-end">
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtRules()">⚙️ 规则</button>
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtLogs()">📜 日志</button>
@@ -921,7 +952,7 @@ function renderTopBar() {
     extra = importBtn + `<button ${data[currentRoute]} class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">${labels[currentRoute]}</button>`;
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-    ${menuBtn}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>
+    ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>
     <div class="flex items-center gap-3">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
   </header>`;
 }
@@ -1196,7 +1227,7 @@ function renderStudents() {
   return `
   <div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-      ${state.students.map(s => `
+      ${state.students.filter(s => s.class === state.activeClass).map(s => `
         <div class="p-4 rounded-2xl bg-gray-50 hover:bg-primary/5 transition cursor-pointer border border-transparent hover:border-primary/20" onclick="openStudentProfile('${s.id}')">
           <div class="flex items-center gap-3">
             <img src="${esc(s.avatar)}" class="w-12 h-12 rounded-full bg-white shadow-sm" alt="">
@@ -1217,7 +1248,9 @@ function openStudentForm(id) {
       <div><label class="block text-xs text-gray-500 mb-1">姓名</label><input id="stName" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.name:'')}"></div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">性别</label><select id="stGender" class="w-full border rounded-lg p-2 text-sm"><option ${s&&s.gender==='男'?'selected':''}>男</option><option ${s&&s.gender==='女'?'selected':''}>女</option></select></div>
-        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.class:'')}" placeholder="如：高一(3)班"></div>
+        ${state.activeClass === state.headTeacherClass
+          ? `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.class:'')}" placeholder="如：10班"></div>`
+          : `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm bg-gray-100" value="${esc(state.activeClass)}" readonly></div>`}
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">头像（可选，留空随机生成）</label><input id="stAvatar" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.avatar:'')}" placeholder="图片链接，留空自动生成"></div>
       <div><label class="block text-xs text-gray-500 mb-1">昵称/别称（可选，用于快速记录识别，多个用空格隔开）</label><input id="stAlias" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.alias:'')}" placeholder="如：小明 明明"></div>
@@ -1483,7 +1516,7 @@ function renderHomework() {
       </div>
       <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
     </div>
-    <div class="grid gap-4">${state.homework.map(h => `
+    <div class="grid gap-4">${state.homework.filter(h => !h.class || h.class === state.activeClass).map(h => `
       <div class="p-4 rounded-xl bg-gray-50 flex justify-between items-center">
         <div><div class="font-bold text-gray-800 text-sm">${esc(h.title)}</div><div class="text-xs text-gray-500 mt-1">${esc(h.class)} · ${esc(h.subject)}</div></div>
         <div class="flex items-center gap-3"><div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full">截止 ${esc(h.due)}</div><button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button></div>
@@ -1496,7 +1529,7 @@ function openHomeworkForm() {
       <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="hwSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
       <div><label class="block text-xs text-gray-500 mb-1">作业标题</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：Unit 1 单词默写"></div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="hwClass" class="w-full border rounded-lg p-2 text-sm" placeholder="高一(3)班"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="hwClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(state.activeClass)}"></div>
         <div><label class="block text-xs text-gray-500 mb-1">截止日期</label><input id="hwDue" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
       </div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHomework()">保存</button>
@@ -1562,7 +1595,7 @@ function openScoreForm() {
   openModal('录入成绩', `
     <div class="space-y-4">
       <div><label class="block text-xs text-gray-500 mb-1">学生姓名</label><input id="scName" class="w-full border rounded-lg p-2 text-sm" placeholder="如：张明轩"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="scClass" class="w-full border rounded-lg p-2 text-sm" placeholder="高一(3)班"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="scClass" class="w-full border rounded-lg p-2 text-sm" placeholder="10班"></div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="scSubject" class="w-full border rounded-lg p-2 text-sm" value="${esc(subj)}"></div>
         <div><label class="block text-xs text-gray-500 mb-1">分数</label><input id="scScore" type="number" class="w-full border rounded-lg p-2 text-sm"></div>
@@ -1944,16 +1977,17 @@ function renderClassRecord() {
   if(!state.classRecords) state.classRecords = [];
   const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
   const nameQ = crSearchName.toLowerCase();
-  const filtered = state.classRecords.filter(r => {
+  const baseRecords = state.classRecords.filter(r => !r.class || r.class === state.activeClass);
+  const filtered = baseRecords.filter(r => {
     const subjOk = !crFilterSubject || (r.subject && subjects.some(s=>s.id===crFilterSubject && s.name===r.subject));
     const nameOk = !nameQ || (r.studentName && r.studentName.toLowerCase().includes(nameQ)) || (r.content && r.content.toLowerCase().includes(nameQ));
     return subjOk && nameOk;
   });
   const subjectCounts = {};
-  state.classRecords.forEach(r => { subjectCounts[r.subject] = (subjectCounts[r.subject] || 0) + 1; });
+  baseRecords.forEach(r => { subjectCounts[r.subject] = (subjectCounts[r.subject] || 0) + 1; });
   const subjTabs = [{id:'', name:'全部'}].concat(subjects).map(s => {
     const active = crFilterSubject === s.id;
-    const count = s.id ? (subjectCounts[s.name] || 0) : state.classRecords.length;
+    const count = s.id ? (subjectCounts[s.name] || 0) : baseRecords.length;
     return `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${active?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="crSetSubjectFilter('${s.id}')">${esc(s.name)} ${count}</button>`;
   }).join('');
   const recordsHtml = filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
@@ -1987,7 +2021,7 @@ function renderClassRecord() {
 function openClassRecordForm() {
   const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
   const subjOptions = subjects.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
-  const stuOptions = state.students.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  const stuOptions = state.students.filter(s => s.class === state.activeClass).map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
   const defaultSubj = crFilterSubject ? (subjects.find(s=>s.id===crFilterSubject)||{}).name : (subjects[0] && subjects[0].name) || '其他';
   openModal('添加课堂记录', `
     <div class="space-y-4">
@@ -2016,6 +2050,7 @@ function saveClassRecord() {
     subject: document.getElementById('crSubject').value.trim()||'—',
     studentId: s ? s.id : null,
     studentName: s ? s.name : '',
+    class: s ? s.class : state.activeClass,
     content
   });
   save(); closeModal(); render();
@@ -4270,10 +4305,11 @@ function qrRenderDraft() {
     const isUnknown = !!seg.unknownName;
     const stuName = seg.student ? seg.student.name : (seg.unknownName || '未识别学生');
     const badge = isUnknown ? `<span class="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded ml-1">未识别</span>` : '';
+    const clsBadge = (!isUnknown && seg.student) ? (() => { const sv = state.students.find(x => x.id === seg.student.id); return (sv && sv.class) ? `<span class="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded ml-1">${esc(sv.class)}</span>` : ''; })() : '';
     const addBtn = isUnknown ? `<button class="text-[11px] text-primary hover:underline" onclick="qrAddUnknownStudent(${si})">➕ 添加到学生管理</button>` : '';
     return `<div class="rounded-xl border p-3 space-y-2 bg-white ${isUnknown ? 'border-orange-200 bg-orange-50/30' : ''}">
       <div class="flex items-center justify-between">
-        <div class="font-medium text-sm">👤 ${esc(stuName)}${badge}</div>
+        <div class="font-medium text-sm">👤 ${esc(stuName)}${badge}${clsBadge}</div>
         <div class="flex items-center gap-2">
           ${addBtn}
           <span class="text-xs text-gray-400">${seg.items.filter(i => i.enabled).length}/${seg.items.length} 项生效</span>
@@ -4286,7 +4322,7 @@ function qrRenderDraft() {
   const unmatched = (qrDraft.unmatchedWords || []).filter(w => !/^[，,、；;。.:：!！?？\s]+$/).slice(0, 5);
   const unmatchedTip = unmatched.length ? `<div class="text-xs text-blue-600 bg-blue-50 rounded-lg p-2">以下词语暂未匹配到任何关键词，可到「设置」补充：<b>${esc(unmatched.join('、'))}</b></div>` : '';
   resultEl.innerHTML = dedHtml + `<div class="space-y-3">
-    <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。可在卡片内修改文本、删除或停用。</div>
+    <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。已按姓名自动归入对应班级（标签显示在姓名后），可在卡片内修改文本、删除或停用。</div>
     ${unknownTip}
     ${unmatchedTip}
     <div class="grid grid-cols-1 ${use2Col ? 'md:grid-cols-2' : ''} gap-3">${list}</div>
@@ -4374,7 +4410,7 @@ function qrAddUnknownStudent(si) {
   if (!name) return;
   state.students.push({
     id: uid(), name,
-    gender: '', class: (state.students[0] && state.students[0].class) || '',
+    gender: '', class: state.activeClass,
     avatar: '', records: []
   });
   qrDraft = parseQuickRecord(qrDraft.raw);
@@ -4443,35 +4479,35 @@ function qrSave() {
     seg.items.forEach(item => {
       if (!item.enabled) return;
       const { recType, subjects, rules, homework, content, dim, pointDelta } = item;
-      // 学生行为记录 / 请假
+      const isHead = s.class === state.headTeacherClass; // 仅班主任班(10班)记行为/积分/请假
+      const stuClass = s.class || state.activeClass;
+      // 学生行为记录 / 请假（仅班主任班）
       if (recType === 'leave') {
-        addLeave(s.name, content || '请假', true);
-        nLeave++;
+        if (isHead) { addLeave(s.name, content || '请假', true); nLeave++; }
       } else if (recType) {
-        s.records.unshift({ id: uid(), type: recType, date, content });
-        nRecord++;
+        if (isHead) { s.records.unshift({ id: uid(), type: recType, date, content }); nRecord++; }
       }
-      // 基础积分（表扬+1 / 批评-1）
-      if (pointDelta !== 0) {
+      // 基础积分（表扬+1 / 批评-1）（仅班主任班）
+      if (isHead && pointDelta !== 0) {
         ptWriteLog(s.id, dim, pointDelta, `一句话记录·${recordTypeLabel(recType)}：${content.slice(0, 20)}`);
         nPoint++;
         autoPointLogs.push(`${s.name} ${dimLabel(dim)}${pointDelta >= 0 ? '+' : ''}${pointDelta}`);
       }
-      // 规则积分
-      rules.forEach(({ rule }) => {
+      // 规则积分（仅班主任班）
+      if (isHead) rules.forEach(({ rule }) => {
         ptWriteLog(s.id, rule.dim, rule.delta, `规则·${rule.label}：${content.slice(0, 20)}`, '', 'rule');
         nPoint++;
         autoPointLogs.push(`${s.name} ${dimLabel(rule.dim)}${rule.delta >= 0 ? '+' : ''}${rule.delta}`);
       });
-      // 课堂记录
+      // 课堂记录（所有班都记，按学生所属班级归档）
       subjects.forEach(sub => {
-        state.classRecords.unshift({ id: uid(), date, subject: sub.name, studentId: s.id, studentName: s.name, content, auto: 'quick' });
+        state.classRecords.unshift({ id: uid(), date, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
         nClass++;
       });
-      // 作业管理（仅当内容像布置/发布作业，而非未完成/未交）
+      // 作业管理（仅当内容像布置/发布作业，而非未完成/未交；按学生所属班级归档）
       if (homework && !/未完成|没交|未做|不交/.test(content)) {
         const hwSubject = subjects[0]?.name || '未指定';
-        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: '', due: date });
+        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: stuClass, due: date });
         nHomework++;
       }
     });
