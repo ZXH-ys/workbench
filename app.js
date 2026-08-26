@@ -4096,7 +4096,7 @@ function eiMatchInfoHTML() {
     if (!hasVal) return;
     total++;
     let cid = null;
-    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); cid = (state.examData.classes.find(c => c.name === cv) || {}).id; }
+    if (eiClassCol >= 0) { const cv = String(r[eiClassCol] ?? '').trim(); if (cv) cid = 'NEW'; }
     if (!cid) cid = findClassIdByName(name);
     if (cid) matched++; else unmatched.push(name);
   });
