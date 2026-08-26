@@ -4194,11 +4194,9 @@ function recognizeClause(text, matched) {
     else if (/请假|病假|事假/.test(text)) recType = 'leave';
     else recType = 'chat';
   }
-  // 清洗内容：保留原始语义，仅剔除高频类型词与引出词
+  // 清洗内容：保留完整事件描述，仅剔除引出词与首尾多余标点
+  // 类型标签词用于识别类型，但不再从内容中删除（如「未完成」「迟到」等事实词需要保留）
   let content = text;
-  for (const t of ['critic', 'praise', 'chat', 'leave']) {
-    for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (content.includes(kw)) content = content.split(kw).join(''); }
-  }
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
