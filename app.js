@@ -1238,6 +1238,11 @@ function renderStudentProfile() {
 
 // ===================== Home =====================
 function renderHome() {
+  return state.activeClass === state.headTeacherClass ? renderHomeHead() : renderHomeTeacher();
+}
+
+// 班主任班（10班）首页：保留全部班主任专属功能
+function renderHomeHead() {
   const todayCourses = state.schedule.courses.filter(c => c.day === todayIndex).sort((a,b)=>a.period-b.period);
   const todayWeekday = ['周一','周二','周三','周四','周五','周六','周日'][todayIndex];
   const dutyTree = state.positions && state.positions.dutyTree;
@@ -1336,6 +1341,95 @@ function renderHome() {
       </div>
       <div class="space-y-3">
         ${state.communications.filter(c=>c.status==='待跟进').slice(0,2).map(c => `<div class="p-3 rounded-xl bg-gray-50 text-sm"><div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(c.student)} · ${esc(c.parent)}</span><span class="text-xs text-red-500">${esc(c.status)}</span></div><div class="text-gray-600 text-xs">${esc(c.content)}</div></div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+// 任课班（9班）首页：只显示与该班教学相关的概览，屏蔽班主任专属模块
+function renderHomeTeacher() {
+  const cls = state.activeClass;
+  const clsName = className(cls);
+  const students = (state.students || []).filter(s => s && s.class === cls);
+  const todayKey = attDateKey(new Date());
+  const records = (state.classRecords || []).filter(r => (!r.class || r.class === cls) && r.date === todayKey).slice(0, 5);
+  const homeworks = (state.homework || []).filter(h => (!h.class || h.class === cls) && (h.due === todayKey || !h.due)).slice(0, 5);
+  const clsExams = (state.examData.exams || [])
+    .filter(e => {
+      const recs = (state.examData.records || []).filter(r => r.examId === e.id);
+      return recs.some(r => {
+        const st = (state.students || []).find(s => s.name === r.studentName);
+        return st && st.class === cls;
+      });
+    })
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, 3);
+  const recentRecords = (state.classRecords || []).filter(r => !r.class || r.class === cls).slice(0, 5);
+  return `
+  <div class="grid grid-cols-12 gap-6">
+    <div class="col-span-12 bg-gradient-to-r from-primary/10 to-transparent rounded-2xl p-6 card-hover">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">当前班级</div>
+          <div class="text-2xl font-bold text-gray-800">${esc(clsName)} 工作台</div>
+          <div class="text-sm text-gray-600 mt-1">${students.length} 名学生 · ${records.length} 条今日课堂记录 · ${homeworks.length} 项今日作业</div>
+        </div>
+        <div class="flex gap-2">
+          <button class="text-sm bg-primary text-white px-4 py-2 rounded-full hover:bg-primaryDark" onclick="openQuickRecord()">+ 一句话记录</button>
+          <button class="text-sm border border-gray-300 px-4 py-2 rounded-full hover:bg-gray-50" onclick="navigate('students')">学生管理</button>
+        </div>
+      </div>
+    </div>
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-4">
+        <div class="font-bold text-gray-800">📝 今日课堂记录</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('classRecord')">查看全部</button>
+      </div>
+      <div class="space-y-3">
+        ${records.length ? records.map(r => `
+          <div class="p-3 rounded-xl bg-gray-50 text-sm">
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(r.studentName || '')}</span></div>
+            <div class="text-gray-600 text-xs">${esc(r.content || '').slice(0, 80)}${(r.content || '').length > 80 ? '…' : ''}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400">今日还没有课堂记录，用右上角「一句话记录」快速添加。</div>`}
+      </div>
+    </div>
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-4">
+        <div class="font-bold text-gray-800">📚 今日作业</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('homework')">作业管理</button>
+      </div>
+      <div class="space-y-3">
+        ${homeworks.length ? homeworks.map(h => `
+          <div class="p-3 rounded-xl bg-gray-50 text-sm">
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(h.subject || '作业')}</span><span class="text-xs text-gray-400">${h.due === todayKey ? '今日' : '无截止日'}</span></div>
+            <div class="text-gray-600 text-xs">${esc(h.title || '').slice(0, 80)}${(h.title || '').length > 80 ? '…' : ''}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400">今日还没有作业，可在「作业管理」中布置。</div>`}
+      </div>
+    </div>
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-4">
+        <div class="font-bold text-gray-800">📊 最近成绩</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('exam')">成绩管理</button>
+      </div>
+      <div class="space-y-3">
+        ${clsExams.length ? clsExams.map(e => `
+          <div class="p-3 rounded-xl bg-gray-50 text-sm">
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(e.name || '考试')}</span><span class="text-xs text-gray-400">${esc(e.date || '')}</span></div>
+            <div class="text-gray-600 text-xs">科目：${[...new Set((state.examData.records || []).filter(r => r.examId === e.id).map(r => r.subject))].slice(0, 6).map(s => `<span class="inline-block bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[10px] mr-1">${esc(s)}</span>`).join('') || '暂无科目数据'}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400">暂无该班成绩，可在「成绩管理」中导入或录入。</div>`}
+      </div>
+    </div>
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
+      <div class="flex items-center justify-between mb-4">
+        <div class="font-bold text-gray-800">🕘 最近记录</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('classRecord')">课堂记录</button>
+      </div>
+      <div class="space-y-3">
+        ${recentRecords.length ? recentRecords.map(r => `
+          <div class="p-3 rounded-xl bg-gray-50 text-sm">
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(r.date || '')}</span></div>
+            <div class="text-gray-600 text-xs">${esc(r.content || '').slice(0, 80)}${(r.content || '').length > 80 ? '…' : ''}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400">还没有课堂记录。</div>`}
       </div>
     </div>
   </div>`;
