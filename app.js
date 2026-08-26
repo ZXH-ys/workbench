@@ -774,10 +774,10 @@ function openImportStudents() {
   openModal('批量导入学生', `
     <div class="space-y-4">
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一个学生，用英文逗号或制表符分隔：<br><code>姓名,性别,班级</code>（性别、班级可留空）。首行若是标题则自动跳过。</p>
-      <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,10班&#10;王浩然,男,10班"></textarea>
+      <textarea id="impStudentText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,男,${esc(state.activeClass)}&#10;王浩然,男,${esc(state.activeClass)}"></textarea>
       <div><input id="impStudentFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impStudentText').value='姓名,性别,班级\\n张明轩,男,10班\\n王浩然,男,10班'">填入示例</button>
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impStudentText').value='姓名,性别,班级\\n张明轩,男,${esc(state.activeClass)}\\n王浩然,男,${esc(state.activeClass)}'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportStudents()">导入</button>
       </div>
     </div>`, 'lg');
@@ -793,7 +793,7 @@ function doImportStudents() {
   for (let i = start; i < rows.length; i++) {
     const name = rows[i][0]; if (!name) continue;
     const gender = rows[i][1] || '未设置';
-    const cls = rows[i][2] || state.activeClass;
+    const cls = resolveClass(rows[i][2]);
     const avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + encodeURIComponent(name);
     state.students.push({ id: uid(), name, gender, class: cls, avatar, records: [] });
     n++;
@@ -806,10 +806,10 @@ function openImportScores() {
   openModal('批量导入成绩', `
     <div class="space-y-4">
       <p class="text-sm text-gray-500 leading-relaxed">支持粘贴、上传 CSV 文本，或直接上传 Excel 文件。每行一条：<code>姓名,班级,科目,考试,分数</code>。首行标题自动跳过。</p>
-      <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,10班,英语,期中考试,78"></textarea>
+      <textarea id="impScoreText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,${esc(state.activeClass)},英语,期中考试,78"></textarea>
       <div><input id="impScoreFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       <div class="flex gap-3">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impScoreText').value='姓名,班级,科目,考试,分数\\n张明轩,10班,英语,期中考试,78\\n王浩然,10班,英语,期中考试,92'">填入示例</button>
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('impScoreText').value='姓名,班级,科目,考试,分数\\n张明轩,${esc(state.activeClass)},英语,期中考试,78\\n王浩然,${esc(state.activeClass)},英语,期中考试,92'">填入示例</button>
         <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doImportScores()">导入</button>
       </div>
     </div>`, 'lg');
@@ -826,7 +826,7 @@ function doImportScores() {
     const name = rows[i][0]; if (!name) continue;
     const score = parseFloat(rows[i][4]);
     if (isNaN(score)) continue;
-    state.scores.unshift({ id: uid(), name, class: rows[i][1] || '', subject: rows[i][2] || '英语', exam: rows[i][3] || '考试', score });
+    state.scores.unshift({ id: uid(), name, class: resolveClass(rows[i][1]), subject: rows[i][2] || '英语', exam: rows[i][3] || '考试', score });
     n++;
   }
   if (!n) return alert('没有解析到有效成绩，请检查格式');
@@ -1481,8 +1481,8 @@ function renderStudents() {
   if (!list.length) {
     const otherClasses = [...new Set(state.students.map(s => s.class).filter(c => c && c !== state.activeClass))];
     const tip = otherClasses.length
-      ? `当前为 <b>${esc(state.activeClass)}</b>，暂无该班学生。其他班级（${otherClasses.map(esc).join('、')}）已有学生，可切换上方班级查看，或在当前班级「+ 新建学生 / 批量导入」录入。`
-      : `当前班级 <b>${esc(state.activeClass)}</b> 还没有学生。点右上角「+ 新建学生」或「批量导入」开始录入。`;
+      ? `当前为 <b>${esc(className(state.activeClass))}</b>，暂无该班学生。其他班级（${otherClasses.map(c => esc(className(c))).join('、')}）已有学生，可切换上方班级查看，或在当前班级「+ 新建学生 / 批量导入」录入。`
+      : `当前班级 <b>${esc(className(state.activeClass))}</b> 还没有学生。点右上角「+ 新建学生」或「批量导入」开始录入。`;
     empty = `<div class="col-span-full text-center py-12 text-gray-400">
       <div class="text-4xl mb-2">👨‍👩‍👧‍👦</div>
       <p class="text-sm">${tip}</p>
@@ -1504,7 +1504,7 @@ function openStudentForm(id) {
         <div><label class="block text-xs text-gray-500 mb-1">性别</label><select id="stGender" class="w-full border rounded-lg p-2 text-sm"><option ${s&&s.gender==='男'?'selected':''}>男</option><option ${s&&s.gender==='女'?'selected':''}>女</option></select></div>
         ${state.activeClass === state.headTeacherClass
           ? `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.class:'')}" placeholder="如：10班"></div>`
-          : `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm bg-gray-100" value="${esc(state.activeClass)}" readonly></div>`}
+          : `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm bg-gray-100" value="${esc(className(state.activeClass))}" readonly></div>`}
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">头像（可选，留空随机生成）</label><input id="stAvatar" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.avatar:'')}" placeholder="图片链接，留空自动生成"></div>
       <div><label class="block text-xs text-gray-500 mb-1">昵称/别称（可选，用于快速记录识别，多个用空格隔开）</label><input id="stAlias" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.alias:'')}" placeholder="如：小明 明明"></div>
@@ -1793,7 +1793,7 @@ function openHomeworkForm() {
       <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="hwSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
       <div><label class="block text-xs text-gray-500 mb-1">作业标题</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：Unit 1 单词默写"></div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="hwClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(state.activeClass)}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="hwClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(className(state.activeClass))}"></div>
         <div><label class="block text-xs text-gray-500 mb-1">截止日期</label><input id="hwDue" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
       </div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHomework()">保存</button>
@@ -2407,7 +2407,7 @@ function renderReport() {
   const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
   const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
   const totalSum = sportSum + dailySum + examSum + postSum;
-  const report = `【${state.activeClass} · ${isMonth ? '月报' : '周报'}】
+  const report = `【${className(state.activeClass)} · ${isMonth ? '月报' : '周报'}】
 时间：${formatDate(now)}
 班级概况：本班共 ${totalStudents} 名学生。
 行为记录统计：${isMonth ? '本月' : '本周'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
@@ -2420,7 +2420,7 @@ function renderReport() {
   const rangeBtn = (r, label) => `<button class="px-3 py-1.5 rounded-full text-sm transition ${reportRange===r?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setReportRange('${r}')">${label}</button>`;
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">${esc(state.activeClass)} · 班级${isMonth ? '月报' : '周报'}</div>
+      <div class="font-bold text-gray-800">${esc(className(state.activeClass))} · 班级${isMonth ? '月报' : '周报'}</div>
       <div class="flex items-center gap-2">
         ${rangeBtn('week','📅 周报')} ${rangeBtn('month','🗓️ 月报')}
         <button class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制报告</button>
@@ -3465,9 +3465,9 @@ function renderExamScore() {
   if (state.activeClass !== state.headTeacherClass) {
     return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm">
       <div class="text-5xl mb-4">📈</div>
-      <div class="font-bold text-gray-800 mb-2">考试赋分（仅班主任班 ${esc(state.headTeacherClass)}）</div>
-      <p class="text-sm text-gray-500 mb-5">当前为 ${esc(state.activeClass)}（任课视角）。考试赋分依据成绩分析自动计算，仅对班主任班生效。</p>
-      <button class="bg-primary text-white px-5 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="setActiveClass('${esc(state.headTeacherClass)}')">切换到 ${esc(state.headTeacherClass)}</button>
+      <div class="font-bold text-gray-800 mb-2">考试赋分（仅班主任班 ${esc(className(state.headTeacherClass))}）</div>
+      <p class="text-sm text-gray-500 mb-5">当前为 ${esc(className(state.activeClass))}（任课视角）。考试赋分依据成绩分析自动计算，仅对班主任班生效。</p>
+      <button class="bg-primary text-white px-5 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="setActiveClass('${esc(state.headTeacherClass)}')">切换到 ${esc(className(state.headTeacherClass))}</button>
     </div>`;
   }
   const cfg = state.examScore;
@@ -3501,7 +3501,7 @@ function renderExamScore() {
     <div class="flex items-center justify-between">
       <div class="font-bold text-gray-800">⚙️ 赋分规则（可自由更改，立即生效）</div>
     </div>
-    <p class="text-xs text-gray-500">规定日期：<b>${esc(start)}</b> 至 <b>${esc(today)}</b>（自首页「积分计算起始日」起）。仅统计 ${esc(state.activeClass)} 在成绩分析中上传的成绩。各次考试成绩积分之和，即为每位学生的考试赋分，并自动计入积分系统的「考试赋分」维度。</p>
+    <p class="text-xs text-gray-500">规定日期：<b>${esc(start)}</b> 至 <b>${esc(today)}</b>（自首页「积分计算起始日」起）。仅统计 ${esc(className(state.activeClass))} 在成绩分析中上传的成绩。各次考试成绩积分之和，即为每位学生的考试赋分，并自动计入积分系统的「考试赋分」维度。</p>
 
     <div class="border rounded-xl p-4">
       <label class="flex items-center gap-2 cursor-pointer">
@@ -3592,7 +3592,7 @@ function renderExamScore() {
     ${rulesCard}
     <div class="bg-white rounded-2xl p-5 shadow-sm">
       <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">📈 考试赋分结果（${esc(state.activeClass)}）</div>
+        <div class="font-bold text-gray-800">📈 考试赋分结果（${esc(className(state.activeClass))}）</div>
         <div class="text-sm text-gray-500">全班合计 <b class="text-sky-600">${fmtScore(classTotal)}</b> 分 · 已计入积分「考试赋分」维度</div>
       </div>
       <div class="overflow-x-auto">
@@ -5169,6 +5169,19 @@ function openFabDefault() {
 // 修改密码固定口令（前后端保持一致，可通过环境变量 RESET_PASSWORD_CODE 覆盖后端默认值）
 const RESET_PASSWORD_CODE = 'teacher2024';
 
+// 班级显示名：内部用 id（如 '10班'），展示用 name（可自定义）
+function className(id) {
+  const c = (state.classes || []).find(x => x.id === id);
+  return c ? c.name : (id || '');
+}
+// 导入时把班级列（可能是显示名或 id）统一解析为内部 id
+function resolveClass(raw) {
+  if (!raw) return state.activeClass;
+  raw = String(raw).trim();
+  const c = (state.classes || []).find(x => x.id === raw || x.name === raw);
+  return c ? c.id : raw;
+}
+
 function openSettings() {
   openModal('设置', `
     <div class="grid grid-cols-2 gap-3 text-sm">
@@ -5178,6 +5191,9 @@ function openSettings() {
       <button class="p-4 rounded-xl border hover:bg-gray-50 flex flex-col items-center gap-2" onclick="closeModal(); importData()">
         <span class="text-2xl">⬆️</span><span>导入数据</span>
       </button>
+      <button class="p-4 rounded-xl border border-indigo-200 text-indigo-600 hover:bg-indigo-50 flex flex-col items-center gap-2" onclick="closeModal(); openClassSettings()">
+        <span class="text-2xl">🏫</span><span>班级设置</span>
+      </button>
       <button class="p-4 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 flex flex-col items-center gap-2" onclick="closeModal(); openClearDataModal()">
         <span class="text-2xl">🗑️</span><span>清理数据</span>
       </button>
@@ -5186,6 +5202,52 @@ function openSettings() {
       </button>
     </div>
     <p class="text-[11px] text-gray-400 mt-4 text-center">修改密码需先验证固定口令，忘记口令请导出数据后重置应用</p>`, 'md');
+}
+
+// 班级设置：只改显示名称与角色，内部 id 保持不变（零数据迁移）
+function openClassSettings() {
+  const items = (state.classes || []).map((c, i) => `
+    <div class="flex items-center gap-3 p-3 rounded-xl border">
+      <div class="flex-1">
+        <label class="block text-xs text-gray-500 mb-1">班级显示名称</label>
+        <input id="clsName${i}" class="w-full border rounded-lg px-3 py-2 text-sm" value="${esc(c.name)}" />
+      </div>
+      <div class="w-32">
+        <label class="block text-xs text-gray-500 mb-1">角色</label>
+        <select id="clsRole${i}" class="w-full border rounded-lg px-2 py-2 text-sm">
+          <option value="head" ${c.role === 'head' ? 'selected' : ''}>班主任班</option>
+          <option value="teacher" ${c.role !== 'head' ? 'selected' : ''}>任课班</option>
+        </select>
+      </div>
+    </div>`).join('');
+  openModal('班级设置', `
+    <p class="text-xs text-gray-500 mb-3">修改显示名称即可，内部标识自动保留，学生、成绩、座次表等数据无需迁移。班主任班仅可设置一个。</p>
+    <div class="space-y-2">${items}</div>
+    <div class="flex gap-2 mt-4">
+      <button class="flex-1 border py-2 rounded-full" onclick="closeModal()">取消</button>
+      <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveClassSettings()">保存</button>
+    </div>`, 'md');
+}
+
+function saveClassSettings() {
+  const classes = state.classes || [];
+  const names = [];
+  let headCount = 0;
+  classes.forEach((c, i) => {
+    const name = (document.getElementById('clsName' + i).value || '').trim();
+    const role = document.getElementById('clsRole' + i).value;
+    if (!name) return alert('班级名称不能为空');
+    if (names.includes(name)) return alert('班级名称不能重复：' + name);
+    names.push(name);
+    c.name = name;
+    c.role = role;
+    if (role === 'head') headCount++;
+  });
+  if (headCount !== 1) return alert('必须且只能设置一个班主任班');
+  state.headTeacherClass = (classes.find(c => c.role === 'head') || classes[0]).id;
+  if (!classes.some(c => c.id === state.activeClass)) state.activeClass = state.headTeacherClass;
+  save(); closeModal(); render();
+  alert('班级设置已保存');
 }
 
 function openChangePassword() {
