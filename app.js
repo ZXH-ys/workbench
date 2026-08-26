@@ -2637,7 +2637,8 @@ function ptDimScore(sid, dim) {
   return v;
 }
 function ptClassSum(dim) {
-  let base = ptSum(ptEffectiveLogs(state.points.logs.filter(l => dim === 'all' || l.dim === dim)));
+  const clsStudentIds = new Set(state.students.filter(s => s.class === state.activeClass).map(s => s.id));
+  let base = ptSum(ptEffectiveLogs(state.points.logs.filter(l => clsStudentIds.has(l.studentId) && (dim === 'all' || l.dim === dim))));
   // 考试赋分：并入自动计算的考试赋分（仅班主任班）
   if ((dim === 'exam' || dim === 'all') && state.activeClass === state.headTeacherClass) {
     const d = examScoreData();
@@ -2646,7 +2647,7 @@ function ptClassSum(dim) {
   return base;
 }
 function ptRanked(dim) {
-  const arr = state.students.map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
+  const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
   return arr;
 }
@@ -2655,7 +2656,9 @@ function ptRecent(days) {
   const cut = new Date();
   cut.setDate(cut.getDate() - days);
   cut.setHours(0, 0, 0, 0);
+  const clsStudentIds = new Set(state.students.filter(s => s.class === state.activeClass).map(s => s.id));
   return state.points.logs.filter(l => {
+    if (!clsStudentIds.has(l.studentId)) return false;
     const d = ptParseDate(l.date);
     if (!d) return false;
     const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -2674,7 +2677,7 @@ function ptConvDim(sid, dim) {
   const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
   // 不折算 或 负分保留原始值
   if (cap <= 0 || raw < 0) return raw;
-  const maxRaw = Math.max(...state.students.map(s => ptDimScore(s.id, dim) || 0), 0);
+  const maxRaw = Math.max(...state.students.filter(s => s.class === state.activeClass).map(s => ptDimScore(s.id, dim) || 0), 0);
   if (maxRaw <= 0) return 0;
   return (raw / maxRaw) * cap;
 }
@@ -2792,7 +2795,7 @@ function openPtAdjust(sid, dim, sign) {
     <div class="space-y-4">
       <div><label class="block text-xs text-gray-500 mb-1">学生</label>
         <select id="ptStudent" class="w-full border rounded-lg p-2 text-sm">
-          ${state.students.map(s => `<option value="${s.id}" ${sid === s.id ? 'selected' : ''}>${esc(s.name)}（${esc(s.class || '')}）</option>`).join('')}
+          ${state.students.filter(s => s.class === state.activeClass).map(s => `<option value="${s.id}" ${sid === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select></div>
       <div><label class="block text-xs text-gray-500 mb-1">积分维度</label>
         <select id="ptDim" class="w-full border rounded-lg p-2 text-sm" onchange="ptRenderRuleChips()">
@@ -2868,7 +2871,7 @@ function openPtBatch() {
           </div>
         </div>
         <div class="max-h-44 overflow-y-auto border rounded-lg p-2 grid grid-cols-2 gap-1">
-          ${state.students.map(s => `<label class="flex items-center gap-2 text-sm p-1.5 rounded hover:bg-gray-50 cursor-pointer">
+          ${state.students.filter(s => s.class === state.activeClass).map(s => `<label class="flex items-center gap-2 text-sm p-1.5 rounded hover:bg-gray-50 cursor-pointer">
             <input type="checkbox" class="pt-batch-st accent-primary" value="${s.id}"><span>${esc(s.name)}</span></label>`).join('')}
         </div>
       </div>
@@ -3034,27 +3037,27 @@ function doPtImport() {
     const name = (rows[i][0] || '').trim();
     const val = parseFloat(rows[i][1]);
     if (!name || isNaN(val)) continue;
-    const stu = state.students.find(s => s.name === name);
+    const stu = state.students.find(s => s.name === name && s.class === state.activeClass);
     if (!stu) { unmatched.push(name); continue; }
     const rowDate = (rows[i][2] || '').trim();
     const date = ptParseDate(rowDate) ? rowDate : defaultDate;
     ptWriteLog(stu.id, dim, val, `Excel导入`, batchId, '', date);
     matched++;
   }
-  if (!matched) return alert('没有匹配到任何学生，请检查姓名是否与「学生管理」一致。');
+  if (!matched) return alert('没有匹配到任何当前班级的学生，请检查姓名是否与「学生管理」一致。');
   // 导入即生成快照
   takeSnapshot('import');
   save(); closeModal();
   render();
   let msg = `成功导入 ${matched} 条（${dimLabel(dim)}）。`;
-  if (unmatched.length) msg += `\n未匹配（姓名不存在）：${unmatched.join('、')}`;
+  if (unmatched.length) msg += `\n未匹配（姓名不存在或非当前班级）：${unmatched.join('、')}`;
   alert(msg);
 }
 
 // ===================== 历史快照（按日期回看积分榜）=====================
 function takeSnapshot(type) {
   const date = new Date().toISOString().slice(0, 10);
-  const ranking = state.students.map(s => ({ name: s.name, score: ptScoreOf(s.id), raw: ptRawTotal(s.id) }))
+  const ranking = state.students.filter(s => s.class === state.activeClass).map(s => ({ name: s.name, score: ptScoreOf(s.id), raw: ptRawTotal(s.id) }))
     .sort((a, b) => b.score - a.score);
   state.snapshots.unshift({ id: uid(), date, type: type || 'manual', ranking });
 }
@@ -4588,7 +4591,8 @@ function setPtLogFilter() {
   if (box) box.innerHTML = renderPtLogList();
 }
 function renderPtLogList() {
-  let logs = state.points.logs.slice();
+  const clsStudentIds = new Set(state.students.filter(s => s.class === state.activeClass).map(s => s.id));
+  let logs = state.points.logs.filter(l => clsStudentIds.has(l.studentId));
   if (ptLogDim !== 'all') logs = logs.filter(l => l.dim === ptLogDim);
   if (ptLogStudent !== 'all') logs = logs.filter(l => l.studentId === ptLogStudent);
   if (!logs.length) return '<div class="text-sm text-gray-400 py-8 text-center">暂无积分记录</div>';
@@ -4619,7 +4623,7 @@ function renderPtLogModal() {
         </select>
         <select id="logStudent" class="flex-1 border rounded-lg p-2 text-sm" onchange="setPtLogFilter()">
           <option value="all" ${ptLogStudent === 'all' ? 'selected' : ''}>全部学生</option>
-          ${state.students.map(s => `<option value="${s.id}" ${ptLogStudent === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+          ${state.students.filter(s => s.class === state.activeClass).map(s => `<option value="${s.id}" ${ptLogStudent === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select>
       </div>
       <div id="ptLogList" class="space-y-2 max-h-[55vh] overflow-y-auto">${renderPtLogList()}</div>
@@ -4640,8 +4644,9 @@ function undoPtBatch(batchId) {
   });
 }
 function clearPtLogs() {
-  confirmModal('将清空所有积分记录，全班积分归零（规则和职务设置保留）。确定？', function(){
-    state.points.logs = [];
+  confirmModal('将清空当前班级的所有积分记录，全班积分归零（规则和职务设置保留）。确定？', function(){
+    const clsStudentIds = new Set(state.students.filter(s => s.class === state.activeClass).map(s => s.id));
+    state.points.logs = state.points.logs.filter(l => !clsStudentIds.has(l.studentId));
     save(); closeModal(); render();
   });
 }
