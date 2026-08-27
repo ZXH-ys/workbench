@@ -6816,6 +6816,39 @@ function pmDutyPointRow(task){
 function pmRepPointRow(r){
   return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td><td class="p-2 text-xs text-slate-400">课代表</td></tr>`;
 }
+// 按职务计算任职分：把每名学生在本班各职务（含课代表）的"日积分"之和 × 距起始日天数，写入 post 维度日志（auto:'job'，可重算覆盖）
+function pmCalcJobScores() {
+  const start = ptCalcStartDate();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const ms = today.getTime() - start.getTime();
+  if (ms <= 0) return alert('任职积分起始日（' + (state.points.calcStartDate || '未设置') + '）需早于今天，才能计算任职分');
+  const days = Math.floor(ms / 86400000) + 1; // 含起始日当天，按"每日计分"理解
+  // 先移除上一次自动计算的任职分记录，保留手动调整的 post 日志
+  state.points.logs = state.points.logs.filter(l => !(l.auto === 'job' && l.dim === 'post'));
+  // 按姓名聚合各职务日积分（同名学生跨多个职务累加）
+  const byName = {};
+  const addPts = (name, pts) => {
+    if (!name) return;
+    const p = parseFloat(pts); if (!(p > 0)) return;
+    byName[name] = (byName[name] || 0) + p;
+  };
+  state.positions.structure.forEach(r => { (state.positions.assign[r.id] || []).forEach(n => addPts(n, r.pts)); });
+  (state.positions.representatives || []).forEach(r => { (r.names || []).forEach(n => addPts(n, r.pts)); });
+  let count = 0; const unmatched = [];
+  Object.keys(byName).forEach(name => {
+    const st = state.students.find(s => s.name === name && s.class === state.headTeacherClass) || state.students.find(s => s.name === name);
+    if (!st) { unmatched.push(name); return; }
+    const daily = byName[name];
+    const total = Math.round(daily * days * 100) / 100;
+    ptWriteLog(st.id, 'post', total, `履职任职分（每日${fmtScore(daily)}分 × ${days}天）`, '', 'job', state.points.calcStartDate);
+    count++;
+  });
+  save();
+  if (typeof render === 'function') { try { render(); } catch (e) {} }
+  let msg = `已按职务计算任职分：${count} 名学生，起始日 ${state.points.calcStartDate} 起共 ${days} 天。`;
+  if (unmatched.length) msg += `（${unmatched.length} 个姓名未匹配到学生：${unmatched.join('、')}，请核对职务分配中的姓名）`;
+  toast(msg);
+}
 function pmRenderPoints(){
   const P=state.positions;
   const banWei=P.structure.filter(p=>p.category==='班委');
@@ -6825,7 +6858,10 @@ function pmRenderPoints(){
   const repRows=reps.map(pmRepPointRow).join('');
   const kdRows=keDaiBiao.map(pmPointRow).join('');
   let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
-    <div class="font-bold text-slate-700 mb-4">职务积分（修改后同步到职务架构）</div>
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-bold text-slate-700">职务积分（修改后同步到职务架构）</div>
+      <button class="text-sm bg-indigo-600 text-white rounded-lg px-3 py-1.5 hover:bg-indigo-700 whitespace-nowrap" onclick="pmCalcJobScores()">🧮 按职务计算任职分</button>
+    </div>
     <div class="grid lg:grid-cols-2 gap-5">
       <div><div class="text-sm font-semibold text-slate-600 mb-2">班委积分</div>
         <div class="overflow-x-auto"><table class="w-full text-sm">
@@ -6840,7 +6876,7 @@ function pmRenderPoints(){
       <div class="overflow-x-auto max-w-md"><table class="w-full text-sm">
         <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">科目 / 职务</th><th class="text-left p-2">日积分</th><th class="text-left p-2">归类</th></tr></thead>
         <tbody>${repRows}${kdRows}</tbody></table></div></div>`:''}
-    <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。第三列「归类」可自由调整职务所属分类。</p>
+    <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。第三列「归类」可自由调整职务所属分类。<br>修改职务或起始日后，点击右上角「🧮 按职务计算任职分」才会把"日积分 × 天数"写入任职赋分（覆盖上次自动计算结果，手动加减的任职分保留）。</p>
   </div>`;
   return html;
 }
