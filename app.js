@@ -3149,6 +3149,9 @@ function renameExamColumn(oldKey, newKey) {
 }
 
 function openColumnManager() {
+  const old = document.getElementById('cmRows');
+  const scrollTop = old ? old.scrollTop : 0;
+  const scrollLeft = old ? old.scrollLeft : 0;
   const cols = examColumns();
   const rows = cols.map(c => `
     <div class="flex items-center gap-2 py-2 border-b last:border-0" data-key="${esc(c.key)}">
@@ -3173,6 +3176,12 @@ function openColumnManager() {
         <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">完成</button>
       </div>
     </div>`, 'lg');
+  if (old) {
+    requestAnimationFrame(() => {
+      const el = document.getElementById('cmRows');
+      if (el) { el.scrollTop = scrollTop; el.scrollLeft = scrollLeft; }
+    });
+  }
 }
 function cmAdd() {
   const key = (document.getElementById('cmNewKey').value || '').trim();
