@@ -3177,6 +3177,7 @@ function openColumnManager() {
         <button class="bg-primary text-white px-4 rounded-lg text-sm hover:bg-primaryDark" onclick="cmAdd()">＋ 添加</button>
       </div>
       <div class="flex gap-2 pt-1">
+        <button class="flex-1 border border-emerald-500 text-emerald-600 py-2 rounded-full hover:bg-emerald-50" onclick="cmAddCommon()">⚡ 一键补全常见科目</button>
         <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">完成</button>
       </div>
     </div>`, 'lg');
@@ -3208,6 +3209,21 @@ function cmSetType(key, type) {
 }
 function cmToggleEnabled(key) {
   toggleExamColumnEnabled(key); save();
+}
+// 一键补全常见科目/排名列（只加标准科目，绝不自动添加带百分比、折合等自定义杂列）
+function cmAddCommon() {
+  const common = [
+    { key: '语文', type: 'score' }, { key: '数学', type: 'score' }, { key: '英语', type: 'score' },
+    { key: '政治', type: 'score' }, { key: '历史', type: 'score' }, { key: '物理', type: 'score' },
+    { key: '化学', type: 'score' }, { key: '生物', type: 'score' }, { key: '地理', type: 'score' },
+    { key: '道法', type: 'score' }, { key: '体育', type: 'score' }, { key: '总分', type: 'score' },
+    { key: '班次', type: 'rank' }, { key: '校次', type: 'rank' }, { key: '县次', type: 'rank' },
+  ];
+  let added = [];
+  common.forEach(c => { if (addExamColumn(c.key, c.type)) added.push(c.key); });
+  save(); openColumnManager();
+  if (added.length) alert('已补全以下常见科目（均已启用）：\n' + added.join('、') + '\n\n不需要的可取消勾选「启用」或删除。');
+  else alert('常见科目已全部存在，无需补全。');
 }
 function cmMoveUp(key) {
   const cols = state.examData.columns || defaultExamColumns();
@@ -4563,6 +4579,17 @@ function olSuggestNewHeader(kind, header, label) {
   }
   return '';
 }
+// 诊断：未匹配列的原因（区分「管理列没有」与「有但禁用」）
+function olDiagnoseMismatch(def) {
+  if (def.kind !== 'score' && def.kind !== 'rank') return '';
+  const all = examColumns().filter(c => c.type === def.kind);
+  const exact = all.find(c => c.key === def.label);
+  const fuzzy = all.find(c => def.label.includes(c.key) || c.key.includes(def.label));
+  const hit = exact || fuzzy;
+  if (!hit) return `管理列里没有「${def.label}」`;
+  if (!hit.enabled) return `管理列里有「${hit.key}」但已禁用`;
+  return '';
+}
 // 纯计算：列识别。返回 [{index, header, kind, label}]，kind: skip|name|class|score|rank
 function olDetectColumns(headers) {
   const list = (headers || []).map((h, i) => {
@@ -4738,7 +4765,8 @@ function olRender() {
       : '<span class="text-gray-300 text-xs">—</span>';
     return `<tr class="border-t"><td class="px-2 py-1 text-xs">${esc(d.header)}</td><td class="px-2 py-1"><select class="border rounded p-1 text-xs" onchange="olSetKind(${d.index}, this.value)">${kindOpts(d.kind)}</select></td><td class="px-2 py-1">${nhCell}</td></tr>`;
   }).join('');
-  const skippedCols = defs.filter(d => (d.kind === 'score' || d.kind === 'rank') && !d.newHeader).map(d => esc(d.header));
+  const skippedDiag = defs.filter(d => (d.kind === 'score' || d.kind === 'rank') && !d.newHeader)
+    .map(d => ({ header: esc(d.header), reason: olDiagnoseMismatch(d) }));
   const allClasses = olAllClasses();
   const clsChips = allClasses.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" onchange="olToggleClass(${JSON.stringify(c)}, this.checked)" ${olSelClasses.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('');
   let preview = '<p class="text-xs text-gray-400">请勾选要保留的班级。</p>';
@@ -4760,7 +4788,7 @@ function olRender() {
       const byClassTxt = Object.entries(byClass).map(([c, v]) => `${c} ${v}人`).join('，');
       preview = `
         <div class="text-xs text-gray-500 mb-1">输出列：${esc(headTxt)}</div>
-        ${skippedCols.length ? `<div class="text-xs text-amber-600 mb-1">以下列未匹配到管理列，将不保存：${skippedCols.slice(0, 10).join('、')}${skippedCols.length > 10 ? '…' : ''}（可在「管理列」添加后重新选择）</div>` : ''}
+        ${skippedDiag.length ? `<div class="text-xs text-amber-600 mb-1">以下列未匹配到管理列，将不保存：<ul class="list-disc pl-5 mt-1 space-y-0.5">${skippedDiag.map(d => `<li>${d.header}：<b>${esc(d.reason)}</b></li>`).join('')}</ul>如需导入，请到「管理列」补全对应科目后重新选择文件。</div>` : ''}
         <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs mb-2">
           <span>原始数据 <b>${product.stats.totalRows}</b> 行</span>
           <span class="text-green-600">命中并保留 <b>${matched}</b> 人 ${byClassTxt ? '（' + byClassTxt + '）' : ''}</span>
