@@ -5676,7 +5676,64 @@ const QR_DIM_KWS = {
   daily: ['课堂','纪律','作业','值日','卫生','主动','帮助','迟到','早退','校服','红领巾','文明'],
 };
 const QR_CONNECTORS = /(?:且|并且|又|还|同时|接着|随后|另外|此外|以及|然后|再|最后)/;
+// 两名学生之间的「间隔文本」必须整体只是分隔符 / 单个连接词，才能判定为并列（避免把含"且"的事件描述误判为连接）
+const BETWEEN_CONN = /^(?:[，,、\s]*)(?:且|并且|又|还|同时|接着|随后|另外|此外|以及|然后|再|最后|和|与|跟|同)?(?:[，,、\s]*)$/;
 const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
+
+// 日期表达式（用于识别"今天/本周三/周一…"等，并解析为星期几）
+const QR_DATE_WORDS = ['今天','今日','昨天','昨日','明天','明日',
+  '本周一','本周二','本周三','本周四','本周五','本周六','本周日',
+  '下周','这周','本周',
+  '星期一','星期二','星期三','星期四','星期五','星期六','星期日','星期天',
+  '礼拜一','礼拜二','礼拜三','礼拜四','礼拜五','礼拜六','礼拜天',
+  '周一','周二','周三','周四','周五','周六','周日'];
+// 收集职务/卫生/值日相关关键词（含用户自定义扣分关键词 + 常见卫生词），用于把"卫生事件"从学生记录中剥离
+function qrDutyKeywordSet() {
+  const s = new Set();
+  const dk = (state.positions && state.positions.deductionKeywords) || {};
+  for (const id in dk) (dk[id] || []).forEach(k => { if (k) s.add(k.toLowerCase()); });
+  ['卫生','室内','室外','值日','值日生','黑板','拖地','垃圾桶','垃圾','窗台','走廊','讲台','包干','清洁','打扫','地面','保洁'].forEach(k => s.add(k));
+  return s;
+}
+// 把文本中的日期词与职务/卫生关键词替换为等长占位符，避免被当成学生姓名提取
+function qrClaimMask(text) {
+  let words = QR_DATE_WORDS.slice();
+  qrDutyKeywordSet().forEach(w => words.push(w));
+  words = [...new Set(words)].filter(Boolean).sort((a, b) => b.length - a.length);
+  const claims = [];
+  words.forEach(w => {
+    const lower = w.toLowerCase();
+    let i = text.toLowerCase().indexOf(lower);
+    while (i !== -1) { claims.push([i, i + w.length]); i = text.toLowerCase().indexOf(lower, i + 1); }
+  });
+  if (!claims.length) return text;
+  claims.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  claims.forEach(c => {
+    if (merged.length && c[0] <= merged[merged.length - 1][1]) merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], c[1]);
+    else merged.push([c[0], c[1]]);
+  });
+  let res = '', p = 0;
+  merged.forEach(([s, e]) => { res += text.slice(p, s) + '\u0003'.repeat(e - s); p = e; });
+  res += text.slice(p);
+  return res;
+}
+// 判断一句是否为「职务/卫生事件」（应走关联扣分，不挂到具体学生）
+function isDutyClause(c) {
+  const DUTY = qrDutyKeywordSet();
+  if (![...DUTY].some(k => c.includes(k))) return false;
+  if (/(今天|今日|昨天|昨日|明天|明日|本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|下周|这周)/.test(c)) return true;
+  if (/(不好|不合格|差劲|糟糕|脏|乱|不到位|没做好|未做好|不干净|马虎|敷衍|没扫|未扫|没拖|没倒|不认真|扣|不合格)/.test(c)) return true;
+  return false;
+}
+// 提取日期表达式原文（用于展示"今天(周四)"）
+function qrDayExpr(text) {
+  if (/今天|今日/.test(text)) return '今天';
+  if (/明天|明日/.test(text)) return '明天';
+  if (/昨天|昨日/.test(text)) return '昨天';
+  const m = text.match(/本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]/);
+  return m ? m[0] : null;
+}
 
 // 从文本中找出可能的学生姓名（不在名册中的）。
 // 策略：在每个分句开头扫描「姓名[,、]姓名[,、]...」序列，遇到事件描述或已知学生边界即停止。
@@ -5773,20 +5830,23 @@ function parseQuickRecord(text) {
     }
   });
   studentHits.sort((a, b) => a.pos - b.pos);
-  // 2) 识别不在名册中的潜在学生名，并合并到所有命中位置
-  const unknownHits = extractUnknownNames(text, studentHits);
+  // 2) 识别不在名册中的潜在学生名，并合并到所有命中位置（先用占位符遮住日期/卫生词，避免误当成姓名）
+  const unknownHits = extractUnknownNames(qrClaimMask(text), studentHits);
   const allHits = studentHits.concat(unknownHits.map(u => ({ ...u, id: null, name: u.name, unknown: true }))).sort((a, b) => a.pos - b.pos);
   // 3) 把学生按「连续并列组」拆分：组内学生之间只有逗号/顿号/连接词，共享组后的一段事件描述
   const rawSegments = []; // [{student?, unknownName?, text}]
   if (!allHits.length) {
-    rawSegments.push({ student: null, text });
+    // 整段无学生：按分句拆分，职务/卫生/值日事件交给「关联扣分」，不生成 phantom 卡片
+    text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean).forEach(cl => {
+      if (!isDutyClause(cl)) rawSegments.push({ student: null, text: cl });
+    });
   } else {
     let i = 0;
     while (i < allHits.length) {
       let j = i;
       while (j + 1 < allHits.length) {
         const between = text.slice(allHits[j].pos + allHits[j].len, allHits[j + 1].pos);
-        if (/^[，,、\s]*$/.test(between) || QR_CONNECTORS.test(between.trim())) {
+        if (BETWEEN_CONN.test(between)) {
           j++;
         } else {
           break;
@@ -5812,7 +5872,10 @@ function parseQuickRecord(text) {
     const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
     const clauses = [];
     rawClauses.forEach(rc => {
-      rc.split(QR_CONNECTORS).map(s => s.trim()).filter(Boolean).forEach(c => clauses.push(c));
+      rc.split(QR_CONNECTORS).map(s => s.trim()).filter(Boolean).forEach(c => {
+        if (isDutyClause(c)) return; // 职务/卫生事件走关联扣分，不挂到学生记录
+        clauses.push(c);
+      });
     });
     if (!clauses.length) clauses.push(seg.text);
     clauses.forEach(clause => {
@@ -5839,6 +5902,7 @@ function parseQuickRecord(text) {
   while ((wm = wordRe.exec(text)) !== null) {
     const start = wm.index, end = start + wm[0].length;
     if (matchedRanges.some(r => start < r.end && end > r.start)) continue;
+    if (QR_DATE_WORDS.some(d => wm[0].includes(d)) || [...qrDutyKeywordSet()].some(d => wm[0].includes(d))) continue;
     if (/^(今天|明天|昨天|上午|下午|晚上|课间|课堂|学校|老师|同学|班主任|家长|孩子|一个|一下|一次|没有|还有|以及|因为|所以|但是|然后|接着|随后|另外|此外|最后|第一|第二|第三|可以|需要|已经|正在|还是|这样|那里|这里|我们|你们|他们|她们|它们)$/.test(wm[0])) continue;
     unmatched.push(wm[0]);
   }
@@ -5945,7 +6009,8 @@ function qrRecognize() {
   try { dedNodeId = pmFindNodeByKeyword(text); } catch (e) { dedNodeId = null; }
   if (dedNodeId) {
     const day = pmExtractDay(text);
-    qrDeductDraft = { nodeId: dedNodeId, text, pts: state.positions.deductionPoints, day };
+    const expr = qrDayExpr(text);
+    qrDeductDraft = { nodeId: dedNodeId, text, pts: state.positions.deductionPoints, day, expr };
   }
   qrRenderDraft();
 }
@@ -5953,7 +6018,8 @@ function qrRecognize() {
 function qrRenderDraft() {
   const resultEl = document.getElementById('qrResult');
   if (!resultEl) return;
-  if (!qrDraft || !qrDraft.segments.length) {
+  const noSegments = !qrDraft || !qrDraft.segments.length;
+  if (noSegments && !qrDeductDraft) {
     resultEl.innerHTML = '<div class="text-sm text-gray-500 text-center py-4">未识别到可记录的内容，请检查学生姓名或补充描述。</div>';
     return;
   }
@@ -5961,18 +6027,19 @@ function qrRenderDraft() {
   if (qrDeductDraft) {
     const dPath = pmGetNodePath(state.positions.dutyTree, qrDeductDraft.nodeId).map(n => n.label).join(' → ');
     const chain = pmGetDeductionChain(qrDeductDraft.nodeId, qrDeductDraft.day);
+    const dayLabel = qrDeductDraft.day ? (qrDeductDraft.expr ? qrDeductDraft.expr + '·' + qrDeductDraft.day : qrDeductDraft.day) : '';
     dedHtml = `<div class="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4 space-y-2 mb-3">
       <div class="text-sm font-bold text-indigo-700">⚠️ 识别到关联扣分</div>
-      <div class="font-medium text-indigo-700 text-sm">${esc(dPath)} ${qrDeductDraft.day ? '（' + esc(qrDeductDraft.day) + '）' : ''}</div>
+      <div class="font-medium text-indigo-700 text-sm">${esc(dPath)} ${dayLabel ? '（' + esc(dayLabel) + '）' : ''}</div>
       <div class="flex flex-wrap gap-1.5">${chain.length ? chain.map(p => `<span class="bg-white border border-slate-200 rounded-full px-2.5 py-1 text-xs">${esc(p.name)} <span class="text-slate-400">(${esc(p.pos)})</span></span>`).join('') : '<span class="text-slate-400 text-xs">该路径上未安排人员</span>'}</div>
       <button class="text-xs bg-red-500 text-white rounded-lg px-3 py-1.5 hover:bg-red-600" onclick="pmConfirmQrDeduct()">确认每人扣 ${qrDeductDraft.pts} 分</button>
     </div>`;
   }
   let totalItems = 0;
-  qrDraft.segments.forEach(seg => totalItems += seg.items.length);
+  if (qrDraft) qrDraft.segments.forEach(seg => totalItems += seg.items.length);
   const use2Col = totalItems > 4;
-  const hasUnknown = qrDraft.segments.some(seg => seg.unknownName);
-  const list = qrDraft.segments.map((seg, si) => {
+  const hasUnknown = qrDraft && qrDraft.segments.some(seg => seg.unknownName);
+  const list = qrDraft ? qrDraft.segments.map((seg, si) => {
     const isUnknown = !!seg.unknownName;
     const stuName = seg.student ? seg.student.name : (seg.unknownName || '未识别学生');
     const badge = isUnknown ? `<span class="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded ml-1">未识别</span>` : '';
@@ -5988,11 +6055,11 @@ function qrRenderDraft() {
       </div>
       ${seg.items.map((item, ii) => qrItemCard(item, si, ii)).join('')}
     </div>`;
-  }).join('');
+  }).join('') : '';
   const unknownTip = hasUnknown ? `<div class="text-xs text-orange-600 bg-orange-50 rounded-lg p-2">检测到未在学生名册中识别到的姓名，请先点击卡片右上角的「添加到学生管理」，或直接在「学生管理」中补全名单后再记录。</div>` : '';
-  const unmatched = (qrDraft.unmatchedWords || []).filter(w => !/^[，,、；;。.:：!！?？\s]+$/).slice(0, 5);
+  const unmatched = (qrDraft && qrDraft.unmatchedWords || []).filter(w => !/^[，,、；;。.:：!！?？\s]+$/).slice(0, 5);
   const unmatchedTip = unmatched.length ? `<div class="text-xs text-blue-600 bg-blue-50 rounded-lg p-2">以下词语暂未匹配到任何关键词，可到「设置」补充：<b>${esc(unmatched.join('、'))}</b></div>` : '';
-  resultEl.innerHTML = dedHtml + `<div class="space-y-3">
+  const studentBody = noSegments ? '' : `<div class="space-y-3">
     <div class="text-xs text-gray-500">识别到 ${qrDraft.segments.length} 名学生，共 ${totalItems} 条记录分项。已按姓名自动归入对应班级（标签显示在姓名后），可在卡片内修改文本、删除或停用。</div>
     ${unknownTip}
     ${unmatchedTip}
@@ -6003,6 +6070,11 @@ function qrRenderDraft() {
       <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal(); openFabDefault()">取消</button>
     </div>
   </div>`;
+  const noteBody = noSegments ? `<div class="space-y-3">
+    <div class="text-sm text-gray-500">未识别到具体学生，但已匹配到职务 / 卫生事件，请在上方「关联扣分」中确认即可。</div>
+    ${unmatchedTip}
+  </div>` : '';
+  resultEl.innerHTML = dedHtml + studentBody + noteBody;
 }
 
 function qrItemCard(item, si, ii) {
@@ -7243,8 +7315,18 @@ function pmExtractDay(text){
 }
 function pmFindNodeByKeyword(text){
   const lower=text.toLowerCase();
-  for(const id in state.positions.deductionKeywords){ for(const kw of state.positions.deductionKeywords[id]){ if(lower.includes(kw.toLowerCase())) return id; } }
-  return null;
+  let best=null, bestScore=-1;
+  for(const id in state.positions.deductionKeywords){
+    for(const kw of state.positions.deductionKeywords[id]){
+      if(!kw) continue;
+      if(lower.includes(kw.toLowerCase())){
+        let depth=0; try{ depth=(pmGetNodePath(state.positions.dutyTree,id)||[]).length; }catch(e){ depth=0; }
+        const score=kw.length*10+depth; // 关键词越长、节点越深（越具体）优先
+        if(score>bestScore){ bestScore=score; best=id; }
+      }
+    }
+  }
+  return best;
 }
 function pmGetPeopleForNode(node,day){
   if(node.repId){
