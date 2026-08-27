@@ -2646,8 +2646,15 @@ function ptClassSum(dim) {
   }
   return base;
 }
+// 全班某维度折算分之和（用于积分管理页顶部卡片，随折算/原始模式切换）
+function ptClassConvSum(dim) {
+  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ptConvDim(s.id, dim), 0);
+}
 function ptRanked(dim) {
-  const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({ s, score: dim === 'all' ? ptScoreOf(s.id) : ptDimScore(s.id, dim) }));
+  const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({
+    s,
+    score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ptConvDim(s.id, dim) : ptDimScore(s.id, dim))
+  }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
   return arr;
 }
@@ -2698,11 +2705,12 @@ function renderPoints() {
   }
   const weekAdd = ptRecent(7);
   const statCards = POINT_DIMS.map(d => {
-    const st = dimStyle(d.id); const sum = ptClassSum(d.id);
+    const st = dimStyle(d.id);
+    const sum = pointsMode === 'conv' ? ptClassConvSum(d.id) : ptClassSum(d.id);
     const active = pointsTab === d.id;
     return `<div class="cursor-pointer rounded-2xl p-4 border ${active ? 'border-primary shadow-sm' : 'border-transparent'} ${st.bg} card-hover" onclick="setPtTab('${d.id}')">
       <div class="text-xs ${st.text} font-medium">${d.icon} ${d.label}</div>
-      <div class="text-2xl font-bold ${st.text} mt-1">${sum}</div>
+      <div class="text-2xl font-bold ${st.text} mt-1">${fmtScore(sum)}</div>
       <div class="text-[10px] text-gray-400 mt-0.5">全班累计</div>
     </div>`;
   }).join('');
@@ -2756,7 +2764,7 @@ function renderPtList() {
   return list.map((x, i) => {
     const rankShow = pointsQuery.trim() ? `<span class="text-xs text-gray-400">#${i + 1}</span>` : (medals[i] || `<span class="text-xs text-gray-400 font-medium">${i + 1}</span>`);
     const pills = dim === 'all'
-      ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = ptDimScore(x.s.id, d.id);
+      ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = pointsMode === 'conv' ? ptConvDim(x.s.id, d.id) : ptDimScore(x.s.id, d.id);
           return `<span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}" title="${d.label}">${d.icon}${fmtScore(v)}</span>`; }).join('')
       : '';
     const w = Math.round(Math.abs(x.score) / maxAbs * 100);
