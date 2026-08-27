@@ -6478,8 +6478,9 @@ let curCtx = { mode:'role', key:null, day:null, task:null };
 let pmDescId = null;
 let pmTreeDragId = null;
 
-function pmStudentNames(){ return (state.students||[]).filter(s=>s&&s.name).map(s=>s.name); }
-function pmStudentIdByName(name){ const s=(state.students||[]).find(x=>x.name===name); return s?s.id:null; }
+function pmStudentNames(){ return (state.students||[]).filter(s=>s&&s.name&&s.class===state.headTeacherClass).map(s=>s.name); }
+function pmStudentIdByName(name){ const s=(state.students||[]).find(x=>x.name===name&&x.class===state.headTeacherClass); return s?s.id:null; }
+function pmHeadClassStudentSet(){ return new Set(pmStudentNames()); }
 function pmSortPriority(a,b){
   const ap=(a.pts!=null||a.seat!=null)?1:0;
   const bp=(b.pts!=null||b.seat!=null)?1:0;
@@ -6525,8 +6526,9 @@ function pmRenderRoles(){
     </div>
   </div>`;
   html+=`<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-3 mb-5">`;
+  const headSet=pmHeadClassStudentSet();
   list.forEach(p=>{
-    const names=P.assign[p.id]||[];
+    const names=(P.assign[p.id]||[]).filter(n=>headSet.has(n));
     const extra=p.pts!=null?('日积 '+p.pts):'';
     const delBtn=pmRolesEdit?`<button class="text-[11px] text-red-500 hover:text-red-700 ml-2" onclick="pmDeletePosition('${p.id}')">删除</button>`:'';
     html+=`<div class="bg-white rounded-2xl shadow-sm p-4 border-l-4 ${p.group==='学生会'?'border-purple-400':'border-indigo-400'}">
@@ -6679,10 +6681,11 @@ function pmRenderDuty(){
     <div class="overflow-x-auto"><table class="w-full text-sm border-collapse">
       <thead><tr class="bg-slate-50"><th class="text-left p-2 font-medium text-slate-500">任务 / 日</th>${pmDays.map(d=>`<th class="p-2 font-medium text-slate-500">${d}</th>`).join('')}</tr></thead>
       <tbody>`;
+  const headSet=pmHeadClassStudentSet();
   pmDutyTasks.forEach(t=>{
     html+=`<tr><td class="p-3 font-medium text-slate-600 bg-slate-50 whitespace-nowrap">${t}</td>`;
     pmDays.forEach(d=>{
-      const names=(P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[];
+      const names=((P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[]).filter(n=>headSet.has(n));
       const editing=P.dutyEditMode[d]&&P.dutyEditMode[d][t];
       const nameRows=names.length?names.map((n,i)=>`<div class="name-col"><span class="inline-flex items-center gap-1 bg-sky-50 text-sky-700 text-sm px-2.5 py-1 rounded border border-sky-200 cursor-pointer" onclick="pmRemoveDuty('${d}','${t}',${i})">${esc(n)}<span class="text-sky-400">×</span></span></div>`).join(''):`<div class="name-col"><span class="text-slate-300 text-sm">空</span></div>`;
       const addRow=editing?`<div class="name-col"><span class="inline-flex items-center justify-center bg-slate-100 text-slate-500 text-sm px-2 py-1 rounded border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAddDuty('${d}','${t}')">＋</span></div>`:'';
@@ -6701,8 +6704,9 @@ function pmToggleDutyEdit(day,task){ state.positions.dutyEditMode[day]=state.pos
 function pmExportDutyXlsx(){
   if(typeof XLSX==='undefined'){ return alert('导出组件未加载，请刷新后重试'); }
   const P=state.positions;
+  const headSet=pmHeadClassStudentSet();
   const rows=[['值日生'].concat(pmDays)];
-  pmDutyTasks.forEach(t=>{ rows.push([t].concat(pmDays.map(d=>{ const ns=(P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[]; return ns.join('、'); }))); });
+  pmDutyTasks.forEach(t=>{ rows.push([t].concat(pmDays.map(d=>{ const ns=((P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[]).filter(n=>headSet.has(n)); return ns.join('、'); }))); });
   const ws=XLSX.utils.aoa_to_sheet(rows);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'值日生安排');
   XLSX.writeFile(wb,'值日生安排.xlsx');
@@ -6710,8 +6714,9 @@ function pmExportDutyXlsx(){
 
 /* ===== 课代表（按科目管理） ===== */
 function pmSyncKedaibiaoAssign(){
+  const headSet=pmHeadClassStudentSet();
   const all=[];
-  (state.positions.representatives||[]).forEach(r=>{(r.names||[]).forEach(n=>{if(!all.includes(n)) all.push(n);});});
+  (state.positions.representatives||[]).forEach(r=>{(r.names||[]).forEach(n=>{if(headSet.has(n)&&!all.includes(n)) all.push(n);});});
   state.positions.assign.kedaibiao=all;
 }
 // 把课代表各科同步到职务树（kedaibiao 节点下挂各科子节点）并维护关联扣分关键词
@@ -6746,7 +6751,8 @@ function pmRenderKedaibiao(){
   </div>`;
 }
 function pmRepRow(r){
-  const names=r.names||[];
+  const headSet=pmHeadClassStudentSet();
+  const names=(r.names||[]).filter(n=>headSet.has(n));
   return `<div class="border rounded-xl p-4 bg-slate-50">
     <div class="flex flex-wrap items-center gap-3 mb-2">
       <input class="flex-1 min-w-[6rem] border rounded-lg p-2 text-sm font-medium" value="${esc(r.subject)}" onchange="pmUpdateRepSubject('${r.id}','subject',this.value)">
