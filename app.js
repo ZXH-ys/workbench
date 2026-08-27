@@ -60,8 +60,9 @@ function defaultState() {
     classes: [{ id: '10班', name: '10班', role: 'head' }, { id: '9班', name: '9班', role: 'teacher' }],
     headTeacherClass: '10班',
     activeClass: '10班',
-    locked: false,
-    lockPass: '',
+    locked: true,
+    lockPass: '1234',
+    defaultLocked: true,
     nav: [
       { id: 'home', label: '工作台首页', icon: '🏠' },
       { section: '日常记录', items: [
@@ -323,7 +324,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass','defaultLocked'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
@@ -2560,32 +2561,109 @@ function renderReport() {
     const m = {};
     recent.forEach(l => { m[l.studentId] = (m[l.studentId] || 0) + l.delta; });
     return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3)
-      .map(([sid, v]) => `${ptStudentName(sid)}(${ptSigned(v)})`).join('、') || '暂无';
+      .map(([sid, v]) => ({ name: ptStudentName(sid), delta: v }));
   })();
   const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
   const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
   const totalSum = sportSum + dailySum + examSum + postSum;
-  const report = `【${className(state.activeClass)} · ${isMonth ? '月报' : '周报'}】
+  const reportText = `【${className(state.activeClass)} · ${isMonth ? '月报' : '周报'}】
 时间：${formatDate(now)}
 班级概况：本班共 ${totalStudents} 名学生。
 行为记录统计：${isMonth ? '本月' : '本周'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
 积分概况：全班累计 ${fmtScore(totalSum)} 分（体育打卡 ${fmtScore(sportSum)}、日常积分 ${fmtScore(dailySum)}、考试赋分 ${fmtScore(examSum)}、任职赋分 ${fmtScore(postSum)}）。
 积分排行前三：${top3.length ? top3.map((x, i) => `${i + 1}. ${x.s.name} ${fmtScore(x.score)}分`).join('，') : '暂无'}
-近${dayWin}天积分进步：${weekTop}
+近${dayWin}天积分进步：${weekTop.length ? weekTop.map(x => `${x.name}(${ptSigned(x.delta)})`).join('、') : '暂无'}
 家校沟通：待跟进 ${pendingComm} 项。
 班级日志摘要：${state.classLogs.slice(0,3).map(l=>l.date+' '+l.content).join('；') || '暂无'}
 待办重点：${state.todos.filter(t=>!t.done).slice(0,3).map(t=>t.title).join('；') || '无'}`;
+
   const rangeBtn = (r, label) => `<button class="px-3 py-1.5 rounded-full text-sm transition ${reportRange===r?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setReportRange('${r}')">${label}</button>`;
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">${esc(className(state.activeClass))} · 班级${isMonth ? '月报' : '周报'}</div>
-      <div class="flex items-center gap-2">
-        ${rangeBtn('week','📅 周报')} ${rangeBtn('month','🗓️ 月报')}
-        <button class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制报告</button>
+  const medals = ['🥇', '🥈', '🥉'];
+  const dimBadge = (icon, label, value, color) => `<div class="flex-1 min-w-[110px] rounded-xl p-3 ${color} text-center">
+    <div class="text-xs opacity-80 mb-1">${icon} ${label}</div>
+    <div class="font-bold text-lg">${fmtScore(value)}</div>
+  </div>`;
+  const statCard = (icon, label, value, color) => `<div class="flex items-center gap-3 rounded-xl p-3 bg-gray-50 flex-1 min-w-[140px]">
+    <div class="w-10 h-10 rounded-full ${color} flex items-center justify-center text-lg">${icon}</div>
+    <div>
+      <div class="text-xs text-gray-500">${label}</div>
+      <div class="font-bold text-xl text-gray-800">${value}</div>
+    </div>
+  </div>`;
+
+  const visualReport = `<div id="reportVisual" class="rounded-2xl border border-gray-100 bg-gradient-to-br from-white to-gray-50 p-5 sm:p-6 ${reportParentMode ? 'report-parent' : ''}">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+      <div>
+        <div class="text-xl sm:text-2xl font-bold text-gray-800">${esc(className(state.activeClass))} · 班级${isMonth ? '月报' : '周报'}</div>
+        <div class="text-sm text-gray-500 mt-1">${formatDate(now)} · 共 ${totalStudents} 名学生</div>
+      </div>
+      <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      ${statCard('👨‍👩‍👧‍👦', '学生人数', totalStudents, 'bg-blue-100')}
+      ${statCard('👍', `${isMonth?'本月':'本周'}表扬`, praiseCount, 'bg-emerald-100')}
+      ${statCard('👎', `${isMonth?'本月':'本周'}批评`, criticCount, 'bg-rose-100')}
+      ${statCard('📞', '家校待跟进', pendingComm, 'bg-amber-100')}
+    </div>
+    <div class="rounded-2xl p-4 sm:p-5 bg-primary/5 border border-primary/10 mb-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-sm text-gray-600 font-medium">积分概况</div>
+        <div class="text-2xl sm:text-3xl font-bold text-primary">${fmtScore(totalSum)} <span class="text-sm font-normal text-gray-500">分</span></div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        ${dimBadge('🏃', '体育打卡', sportSum, 'bg-orange-100 text-orange-700')}
+        ${dimBadge('📋', '日常积分', dailySum, 'bg-sky-100 text-sky-700')}
+        ${dimBadge('📝', '考试赋分', examSum, 'bg-violet-100 text-violet-700')}
+        ${dimBadge('📋', '任职赋分', postSum, 'bg-pink-100 text-pink-700')}
       </div>
     </div>
-    <pre id="reportText" class="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed bg-gray-50 rounded-xl p-4">${esc(report)}</pre>
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行前三</div>
+        ${top3.length ? top3.map((x, i) => `<div class="flex items-center justify-between py-2 ${i < top3.length-1 ? 'border-b border-gray-200/60' : ''}">
+          <div class="flex items-center gap-2"><span class="text-lg">${medals[i]}</span><span class="text-sm text-gray-700">${esc(x.s.name)}</span></div>
+          <span class="font-bold text-primary text-sm">${fmtScore(x.score)}</span>
+        </div>`).join('') : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
+      </div>
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-3">📈 近${dayWin}天积分进步</div>
+        ${weekTop.length ? weekTop.map((x, i) => `<div class="flex items-center justify-between py-2 ${i < weekTop.length-1 ? 'border-b border-gray-200/60' : ''}">
+          <div class="flex items-center gap-2"><span class="text-sm text-gray-500 w-5">${i+1}</span><span class="text-sm text-gray-700">${esc(x.name)}</span></div>
+          <span class="font-bold text-emerald-600 text-sm">${ptSigned(x.delta)}</span>
+        </div>`).join('') : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-2">📓 班级日志摘要</div>
+        <div class="text-sm text-gray-600 leading-relaxed">${state.classLogs.slice(0,3).map(l=>`<div class="py-1">• ${esc(l.date)} ${esc(l.content)}</div>`).join('') || '暂无'}</div>
+      </div>
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-2">📌 待办重点</div>
+        <div class="text-sm text-gray-600 leading-relaxed">${state.todos.filter(t=>!t.done).slice(0,3).map(t=>`<div class="py-1">• ${esc(t.title)}</div>`).join('') || '无'}</div>
+      </div>
+    </div>
   </div>`;
+
+  const toolbar = reportParentMode ? '' : `<div class="flex items-center justify-between mb-4">
+    <div class="font-bold text-gray-800 text-lg">${esc(className(state.activeClass))} · 班级${isMonth ? '月报' : '周报'}</div>
+    <div class="flex items-center gap-2 flex-wrap justify-end">
+      ${rangeBtn('week','📅 周报')} ${rangeBtn('month','🗓️ 月报')}
+      <button class="text-sm ${reportParentMode ? 'bg-primary text-white' : 'text-primary border border-primary'} px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="toggleReportParentMode()">${reportParentMode ? '退出截图模式' : '📸 家长群截图'}</button>
+      <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制纯文本</button>
+    </div>
+  </div>`;
+
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+    ${toolbar}
+    ${visualReport}
+    <pre id="reportText" class="hidden">${esc(reportText)}</pre>
+  </div>`;
+}
+
+function toggleReportParentMode() {
+  reportParentMode = !reportParentMode;
+  render();
 }
 
 // （「班会 PPT」生成功能曾提供，已在菜单精简时移除入口，相关函数已清理为死代码并删除）
@@ -2594,6 +2672,9 @@ function renderReport() {
 let pointsTab = 'all';
 let pointsQuery = '';
 let pointsMode = 'conv'; // 'conv' 折算分 | 'raw' 原始分
+
+// ===================== Report: 周报月报 =====================
+let reportParentMode = false; // 家长群截图模式：隐藏操作按钮、放大字号
 
 function setPtMode(m) {
   pointsMode = m;
@@ -6208,24 +6289,50 @@ function isLocked() { return !!state.locked; }
 
 function openLockSettings() {
   const hasPass = !!(state.lockPass && state.lockPass.length);
+  const locked = isLocked();
+  const statusHtml = locked
+    ? `<div class="rounded-xl p-4 bg-amber-50 border border-amber-100 text-center"><div class="text-2xl mb-1">🔒</div><div class="font-bold text-amber-700">当前已锁定</div><div class="text-xs text-amber-600 mt-1">学生只能查看，不能修改</div></div>`
+    : `<div class="rounded-xl p-4 bg-emerald-50 border border-emerald-100 text-center"><div class="text-2xl mb-1">🔓</div><div class="font-bold text-emerald-700">当前可编辑</div><div class="text-xs text-emerald-600 mt-1">锁定时学生将无法修改任何数据</div></div>`;
+  const actionHtml = locked
+    ? `<div class="space-y-3">
+        <label class="block text-xs text-gray-500">输入锁定口令解锁</label>
+        <input id="unlockPass" type="password" data-lock-allow class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="锁定口令 / 账号重置码" onkeydown="if(event.key==='Enter')doUnlock()" />
+        <p id="unlockMsg" class="text-xs h-4"></p>
+        <div class="flex gap-2">
+          <button class="flex-1 border py-2 rounded-full" data-lock-allow onclick="closeModal()">取消</button>
+          <button class="flex-1 bg-primary text-white py-2 rounded-full" data-lock-allow onclick="doUnlock()">🔓 解锁</button>
+        </div>
+      </div>`
+    : `<div class="space-y-3">
+        <button class="w-full bg-primary text-white py-2.5 rounded-full hover:bg-primaryDark" onclick="doLock()">🔒 进入只读锁定</button>
+        <details class="text-sm">
+          <summary class="text-xs text-gray-500 cursor-pointer select-none">${hasPass ? '修改锁定口令' : '首次使用，请设置锁定口令'}</summary>
+          <div class="mt-2 space-y-2">
+            <label class="block text-xs text-gray-500">${hasPass ? '新口令（留空则不修改）' : '设置口令（至少4位，锁定/解锁时都需要）'}</label>
+            <input id="lockPassInput" type="password" data-lock-allow class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="${hasPass ? '输入新口令' : '设置新口令'}" />
+          </div>
+        </details>
+      </div>`;
   openModal('只读锁定', `
     <div class="space-y-4">
-      <div class="text-sm text-gray-600 rounded-xl p-3 bg-gray-50">🔓 当前：<b>可编辑</b>。点击「进入只读锁定」后，学生只能查看、不能修改；解锁需输入口令。</div>
-      <div>
-        <label class="block text-xs text-gray-500 mb-1">${hasPass ? '输入口令（或留空沿用已设口令；输入新口令可重置）' : '设置锁定口令（至少4位）'}</label>
-        <input id="lockPassInput" type="password" data-lock-allow class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="${hasPass ? '输入口令' : '设置新口令'}" />
-      </div>
-      <button class="w-full bg-primary text-white py-2.5 rounded-full hover:bg-primaryDark" onclick="doLock()">🔒 进入只读锁定</button>
-      <p class="text-[11px] text-gray-400">忘记口令时，可用账号固定重置码（teacher2024）解锁。</p>
+      ${statusHtml}
+      ${actionHtml}
+      <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+        <input type="checkbox" id="defaultLockedCheck" data-lock-allow ${state.defaultLocked ? 'checked' : ''} onchange="state.defaultLocked=this.checked; save();" class="w-4 h-4 text-primary rounded" />
+        <span>每次打开工作台自动进入只读锁定</span>
+      </label>
+      <p class="text-[11px] text-gray-400 leading-relaxed">忘记口令时，可用账号固定重置码 <b>teacher2024</b> 解锁。</p>
     </div>`, 'sm');
 }
 function doLock() {
-  const v = (document.getElementById('lockPassInput').value || '').trim();
+  const v = (document.getElementById('lockPassInput') ? document.getElementById('lockPassInput').value : '').trim();
+  const chk = document.getElementById('defaultLockedCheck');
+  if (chk) state.defaultLocked = chk.checked;
   if (!state.lockPass) {
     if (v.length < 4) { toast('请先设置至少4位口令'); return; }
     state.lockPass = v;
   } else if (v.length >= 4) {
-    state.lockPass = v; // 重置口令
+    state.lockPass = v;
   }
   state.locked = true;
   save(); closeModal(); render();
@@ -6251,6 +6358,8 @@ function doUnlockPrompt() {
 function doUnlock() {
   const v = _lockPassVal();
   if (v === state.lockPass || v === RESET_PASSWORD_CODE) {
+    const chk = document.getElementById('defaultLockedCheck');
+    if (chk) state.defaultLocked = chk.checked;
     state.locked = false; save(); closeModal(); render();
     toast('已解锁，可正常编辑');
   } else {
@@ -7295,6 +7404,7 @@ function doLogin() {
       apiGet('/api/data').then(res => {
         if (res && res.state) {
           try { state = migrateState(res.state); } catch (e) { state = defaultState(); }
+          applyDefaultLock();
           save(); // 写回本地兜底
         }
         render();
@@ -7310,6 +7420,10 @@ function doLogout() {
   showLogin();
 }
 
+function applyDefaultLock() {
+  if (state && state.defaultLocked && state.lockPass) state.locked = true;
+}
+
 function maybeOnboard() {
   if (!onboarded && (!state.students || state.students.length === 0)) {
     openOnboard();
@@ -7322,6 +7436,7 @@ if (AUTH_TOKEN) {
     if (res && res.state) {
       try { state = migrateState(res.state); } catch (e) { state = defaultState(); }
     }
+    applyDefaultLock();
     render();
     maybeOnboard();
   }).catch(() => { render(); maybeOnboard(); });
