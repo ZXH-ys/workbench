@@ -85,6 +85,21 @@ function defaultState() {
       { id: 'reminders', label: '待办提醒', icon: '🔔' },
     ],
     positions: defaultPositions(),
+    // ===== 一句话记录关键词（运行时可配置，随数据持久化；缺失时回退 REC_TYPE_LABELS_WORDS / REC_TYPE_DESC）=====
+    recKeywords: {
+      labels: {
+        critic: ['批评','罚站','罚抄','处罚','违纪','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话','不认真','不专心'],
+        praise: ['表扬','夸奖','夸','赞','得奖','获奖','奖励','突出','满分','高分','守纪律','好人好事'],
+        chat:   ['谈心','谈话','沟通','家访','约谈','开导','安慰','鼓励','交流'],
+        leave:  ['请假','病假','事假','请假条','缺席'],
+      },
+      desc: {
+        critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位'],
+        praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒','拾金不昧','诚实守信','团结同学','热爱劳动','文明守纪','乐于助人'],
+        chat:   ['心理疏导','聊天','聊到','聊了','情绪低落'],
+        leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
+      }
+    },
     classRecordSubjects: defaultClassRecordSubjects(),
     homeworkKeywords: defaultHomeworkKeywords(),
     schedule: {
@@ -308,6 +323,7 @@ function defaultPositions() {
     dutyWeekly:{}, dutyEditMode:{},
     dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null },
     deductionKeywords, deductionPoints:1,
+    dutyRota:{ startDate:'', stepDays:1, spanDays:30, scope:'all', schedule:[] },
     representatives: [
       { id:'rep_yu', subject:'语文', count:1, pts:null, names:[] },
       { id:'rep_shu', subject:'数学', count:1, pts:null, names:[] },
@@ -406,6 +422,16 @@ function migrateState(s) {
   if (!s.convertRatios || typeof s.convertRatios !== 'object') s.convertRatios = { sport: 0, daily: 0, exam: 0, post: 0 };
   ['sport','daily','exam','post'].forEach(k => { if (typeof s.convertRatios[k] !== 'number') s.convertRatios[k] = 0; });
   if (!Array.isArray(s.snapshots)) s.snapshots = [];
+  // 一句话记录关键词：确保结构完整（缺失时回退硬编码默认）
+  if (!s.recKeywords || typeof s.recKeywords !== 'object') s.recKeywords = {};
+  if (!s.recKeywords.labels || typeof s.recKeywords.labels !== 'object') s.recKeywords.labels = {};
+  if (!s.recKeywords.desc || typeof s.recKeywords.desc !== 'object') s.recKeywords.desc = {};
+  ['critic','praise','chat','leave'].forEach(t => {
+    if (!Array.isArray(s.recKeywords.labels[t])) s.recKeywords.labels[t] = (REC_TYPE_LABELS_WORDS[t] || []).slice();
+    if (!Array.isArray(s.recKeywords.desc[t])) s.recKeywords.desc[t] = (REC_TYPE_DESC[t] || []).slice();
+  });
+  if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
+  if (!s.positions.dutyRota || typeof s.positions.dutyRota !== 'object') s.positions.dutyRota = { startDate:'', stepDays:1, spanDays:30, scope:'all', schedule:[] };
   // 考勤管理
   if (!s.attendance || typeof s.attendance !== 'object') s.attendance = { members: [], current: null, logs: [] };
   if (!Array.isArray(s.attendance.members)) s.attendance.members = [];
@@ -2767,7 +2793,14 @@ function ptParseDate(str) {
     return new Date(+m[1], +m[2] - 1, +m[3]);
   }
   if ((m = String(str).match(/^(\d{1,2})[\.\/月](\d{1,2})[日\s]*$/))) {
-    return new Date(currentYear, +m[1] - 1, +m[2]);
+    const mm = +m[1], dd = +m[2];
+    let year = currentYear;
+    const cand = new Date(year, mm - 1, dd);
+    const now = new Date();
+    const diffDays = (cand - now) / 86400000;
+    if (diffDays > 182) year -= 1;        // 今年此日还在很远的未来 → 实为去年（跨年边界）
+    else if (diffDays < -182) year += 1;  // 今年此日已过去很久 → 实为明年（跨年边界）
+    return new Date(year, mm - 1, dd);
   }
   const d = new Date(str);
   return isNaN(d.getTime()) ? null : d;
@@ -3301,12 +3334,31 @@ function doPtImport() {
     matched++;
   }
   if (!matched) return alert('没有匹配到任何当前班级的学生，请检查姓名是否与「学生管理」一致。');
+  // 起始日过滤警告：日志日期早于「积分计算起始日」会被过滤不计分
+  let warn = '';
+  const sd = ptCalcStartDate();
+  if (sd) {
+    const sdDay = new Date(sd.getFullYear(), sd.getMonth(), sd.getDate());
+    let filtered = 0;
+    for (let i = start; i < rows.length; i++) {
+      const name = (rows[i][0] || '').trim();
+      const val = parseFloat(rows[i][1]);
+      if (!name || isNaN(val)) continue;
+      const stu = state.students.find(s => s.name === name && s.class === state.activeClass);
+      if (!stu) continue;
+      const rowDate = (rows[i][2] || '').trim();
+      const d = ptParseDate(rowDate);
+      if (d && d < sdDay) filtered++;
+    }
+    if (filtered > 0) warn = `\n⚠️ 有 ${filtered} 条日志日期早于「积分计算起始日(${state.points.calcStartDate})」，将被过滤不计分；如需计入请先把起始日调早。`;
+  }
   // 导入即生成快照
   takeSnapshot('import');
   save(); closeModal();
   render();
   let msg = `成功导入 ${matched} 条（${dimLabel(dim)}）。`;
   if (unmatched.length) msg += `\n未匹配（姓名不存在或非当前班级）：${unmatched.join('、')}`;
+  msg += warn;
   alert(msg);
 }
 
@@ -5725,11 +5777,14 @@ const REC_TYPE_LABELS_WORDS = {
 };
 // 仅用于识别的描述性短语（不剔除，保证正文完整）
 const REC_TYPE_DESC = {
-  critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架'],
-  praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒'],
+  critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位'],
+  praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒','拾金不昧','诚实守信','团结同学','热爱劳动','文明守纪','乐于助人'],
   chat:   ['心理疏导','聊天','聊到','聊了','情绪低落'],
   leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
 };
+// 运行时可配置的关键词读取（优先 state.recKeywords，缺失回退硬编码默认）
+function getRecLabels(t) { return (state.recKeywords && state.recKeywords.labels && Array.isArray(state.recKeywords.labels[t])) ? state.recKeywords.labels[t] : (REC_TYPE_LABELS_WORDS[t] || []); }
+function getRecDesc(t) { return (state.recKeywords && state.recKeywords.desc && Array.isArray(state.recKeywords.desc[t])) ? state.recKeywords.desc[t] : (REC_TYPE_DESC[t] || []); }
 // 识别/剔除用的「引出词」（如「提出表扬」的「提出」）
 const REC_LEADIN = ['提出','给予','予以','进行','做了','被'];
 const REC_TYPE_LABELS = { critic:'批评', praise:'表扬', chat:'谈心', leave:'请假' };
@@ -5791,6 +5846,9 @@ function qrClaimMask(text) {
 function isDutyClause(c) {
   const DUTY = qrDutyKeywordSet();
   if (![...DUTY].some(k => c.includes(k))) return false;
+  // 正向卫生/值日描述（如"卫生很好""值日认真"）不视为需扣分事件
+  const POS = /(干净|整洁|整齐|到位|认真|优秀|棒|好|达标|合格)/;
+  if (POS.test(c) && !/(不|没|未|别|无)(干净|整洁|整齐|到位|认真|优秀|棒|好|达标|合格)/.test(c)) return false;
   if (/(今天|今日|昨天|昨日|明天|明日|本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]|下周|这周)/.test(c)) return true;
   if (/(不好|不合格|差劲|糟糕|脏|乱|不到位|没做好|未做好|不干净|马虎|敷衍|没扫|未扫|没拖|没倒|不认真|扣|不合格)/.test(c)) return true;
   return false;
@@ -5988,13 +6046,14 @@ function parseQuickRecord(text) {
     const segment = { student: seg.student || null, unknownName: seg.unknownName || '', items: [], date: seg.date || qrResolveDate(seg.text) || null };
     const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
     const clauses = [];
+    const hasKnownStudent = !!seg.student; // 仅当片段含具名学生时，卫生/值日事件也落到该生头上（避免归因丢失）
     rawClauses.forEach(rc => {
       rc.split(QR_CONNECTORS).map(s => s.trim()).filter(Boolean).forEach(c => {
-        if (isDutyClause(c)) return; // 职务/卫生事件走关联扣分，不挂到学生记录
+        if (isDutyClause(c) && !hasKnownStudent) return; // 无具名学生才整体走关联扣分
         clauses.push(c);
       });
     });
-    if (!clauses.length && !isDutyClause(seg.text)) clauses.push(seg.text);
+    if (!clauses.length && (!isDutyClause(seg.text) || hasKnownStudent)) clauses.push(seg.text);
     clauses.forEach(clause => {
       const item = recognizeClause(clause, matched);
       if (item) segment.items.push(item);
@@ -6069,8 +6128,8 @@ function recognizeClause(text, matched) {
   let recType = '';
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
     let hitKw = '';
-    for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (text.includes(kw)) { hitKw = kw; break; } }
-    if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw) && !hasNegBefore(text, kw)) { hitKw = kw; break; } }
+    for (const kw of getRecLabels(t)) { if (text.includes(kw)) { hitKw = kw; break; } }
+    if (!hitKw) for (const kw of getRecDesc(t)) { if (text.includes(kw) && !hasNegBefore(text, kw)) { hitKw = kw; break; } }
     if (hitKw) { recType = t; matched.push({ kind: 'type', value: hitKw, type: t }); break; }
   }
   // 具体分值「加N分 / 扣N分」直接决定类型与正负
@@ -6502,8 +6561,38 @@ function openSettings() {
       <button class="p-4 rounded-xl border border-amber-200 text-amber-600 hover:bg-amber-50 flex flex-col items-center gap-2" onclick="closeModal(); openLockSettings()">
         <span class="text-2xl">🔒</span><span>只读锁定</span>
       </button>
+      <button class="p-4 rounded-xl border border-emerald-200 text-emerald-600 hover:bg-emerald-50 flex flex-col items-center gap-2" onclick="closeModal(); openRecKeywordEditor()">
+        <span class="text-2xl">🔤</span><span>关键词管理</span>
+      </button>
     </div>
     <p class="text-[11px] text-gray-400 mt-4 text-center">修改密码需先验证固定口令，忘记口令请导出数据后重置应用</p>`, 'md');
+}
+function openRecKeywordEditor(){
+  const types=[['critic','批评类'],['praise','表扬类'],['chat','谈心类'],['leave','请假类']];
+  const blocks=types.map(([t,label])=>{
+    const arr=[...new Set(getRecLabels(t).concat(getRecDesc(t)))];
+    return `<div class="mb-3">
+      <label class="block text-xs text-gray-500 mb-1">${label}（空格 / 逗号 / 顿号分隔）</label>
+      <textarea id="kw_${t}" rows="3" class="w-full border rounded-lg p-2 text-sm">${esc(arr.join('、'))}</textarea>
+    </div>`;
+  }).join('');
+  openModal('一句话记录 · 关键词管理', `
+    <p class="text-xs text-gray-400 mb-3">这些词决定「一句话记录」如何自动归类。修改后立即生效并随数据保存。批评 / 表扬类的「类型动词」与「描述词」已合并编辑。</p>
+    <div>${blocks}</div>
+    <div class="flex gap-2 mt-2">
+      <button class="flex-1 border py-2 rounded-full" onclick="closeModal()">取消</button>
+      <button class="flex-1 bg-primary text-white py-2 rounded-full" onclick="saveRecKeywords()">保存</button>
+    </div>`, 'lg');
+}
+function saveRecKeywords(){
+  const types=['critic','praise','chat','leave'];
+  types.forEach(t=>{
+    const raw=document.getElementById('kw_'+t).value;
+    const arr=[...new Set(raw.split(/[\s,，、]+/).map(s=>s.trim()).filter(Boolean))];
+    state.recKeywords.labels[t]=arr.slice();
+    state.recKeywords.desc[t]=arr.slice();
+  });
+  save(); closeModal(); toast('关键词已更新');
 }
 
 // ===================== 只读锁定（大屏展示防误改） =====================
@@ -6964,7 +7053,7 @@ function pmRefreshAll(){ const b=document.getElementById('pm-body'); if(b) b.inn
 
 /* ===== 页面框架 ===== */
 function renderPositions(){
-  const segs=[['roles','职务架构'],['duty','值日生'],['kedaibiao','课代表'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
+  const segs=[['roles','职务架构'],['duty','值日生'],['kedaibiao','课代表'],['dutymonitor','值日班长轮值'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
   const segHtml=segs.map(([id,label])=>`<button class="pm-seg px-4 py-2 rounded-lg text-sm font-medium ${pmTab===id?'active':'text-slate-600 hover:bg-slate-100'}" data-pmtab="${id}" onclick="pmSwitch('${id}')">${label}</button>`).join('');
   return `<div>
     <div class="flex gap-1 mb-5 bg-white p-1 rounded-xl shadow-sm w-fit">${segHtml}</div>
@@ -6974,6 +7063,7 @@ function renderPositions(){
 function pmRenderTab(tab){
   if(tab==='duty') return pmRenderDuty();
   if(tab==='kedaibiao') return pmRenderKedaibiao();
+  if(tab==='dutymonitor') return pmRenderDutyMonitor();
   if(tab==='points') return pmRenderPoints();
   if(tab==='tree') return pmRenderTree();
   if(tab==='deduct') return pmRenderDeduct();
@@ -7183,6 +7273,73 @@ function pmExportDutyXlsx(){
   const ws=XLSX.utils.aoa_to_sheet(rows);
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'值日生安排');
   XLSX.writeFile(wb,'值日生安排.xlsx');
+}
+
+/* ===== 值日班长轮值自动生成 ===== */
+function pmRenderDutyMonitor(){
+  const P=state.positions;
+  const rota=P.dutyRota||{};
+  const todayKey=new Date().toISOString().slice(0,10);
+  let html=`<div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
+    <div class="font-bold text-slate-700">🗓️ 值日班长轮值自动生成</div>
+    <p class="text-xs text-slate-400">按班级学生顺序自动轮值，每 N 天换一人，生成后可一键保存。</p>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div><label class="block text-xs text-gray-500 mb-1">起始日期</label><input id="dmStart" type="date" value="${rota.startDate||todayKey}" class="w-full border rounded-lg p-2 text-sm"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">每位任期(天)</label><input id="dmStep" type="number" min="1" value="${rota.stepDays||1}" class="w-full border rounded-lg p-2 text-sm"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">生成天数</label><input id="dmSpan" type="number" min="1" value="${rota.spanDays||30}" class="w-full border rounded-lg p-2 text-sm"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">轮值人员</label>
+        <select id="dmScope" class="w-full border rounded-lg p-2 text-sm">
+          <option value="all" ${(rota.scope||'all')!=='banwei'?'selected':''}>全班学生</option>
+          <option value="banwei" ${(rota.scope||'all')==='banwei'?'selected':''}>仅班委</option>
+        </select>
+      </div>
+    </div>
+    <div class="flex gap-2">
+      <button class="bg-indigo-600 text-white px-4 py-2 rounded-full text-sm hover:bg-indigo-700" onclick="pmGenDutyMonitor()">⚡ 生成预览</button>
+      ${rota.schedule&&rota.schedule.length?`<button class="border px-4 py-2 rounded-full text-sm hover:bg-gray-50" onclick="pmSaveDutyMonitor()">💾 保存轮值表</button>`:''}
+    </div>
+    <div id="dmPreview"></div>
+  </div>`;
+  if(rota.schedule&&rota.schedule.length){
+    html+=`<div class="mt-2 overflow-x-auto"><table class="w-full text-sm border-collapse"><thead><tr class="bg-slate-50"><th class="text-left p-2 font-medium text-slate-500">日期</th><th class="text-left p-2 font-medium text-slate-500">值日班长</th></tr></thead><tbody>`;
+    rota.schedule.forEach(r=>{ html+=`<tr><td class="p-2 border">${r.date}</td><td class="p-2 border">${esc(r.name)}</td></tr>`; });
+    html+=`</tbody></table></div><p class="text-xs text-slate-400 mt-2">共 ${rota.schedule.length} 天轮值；保存后此表会随数据持久化，可随时回看或重新生成。</p>`;
+  }
+  return html;
+}
+function pmDutyMonitorMembers(){
+  const scope=(document.getElementById('dmScope')?document.getElementById('dmScope').value:'all');
+  const all=pmStudentNames();
+  if(scope==='banwei'){
+    const headSet=pmHeadClassStudentSet();
+    const officers=new Set();
+    state.positions.structure.forEach(p=>{ if(p.category==='班委'){ (state.positions.assign[p.id]||[]).forEach(n=>{ if(headSet.has(n)) officers.add(n); }); } });
+    return all.filter(n=>officers.has(n));
+  }
+  return all;
+}
+function pmGenDutyMonitor(){
+  const start=(document.getElementById('dmStart').value)||new Date().toISOString().slice(0,10);
+  const step=Math.max(1, parseInt(document.getElementById('dmStep').value)||1);
+  const span=Math.max(1, parseInt(document.getElementById('dmSpan').value)||30);
+  const scope=document.getElementById('dmScope').value;
+  const members=pmDutyMonitorMembers();
+  if(!members.length){ alert('当前班级没有可选学生，请先在「学生管理」录入'); return; }
+  const schedule=[]; let mi=0;
+  for(let d=0; d<span; d+=step){
+    const dt=new Date(start); dt.setDate(dt.getDate()+d);
+    const dateKey=dt.toISOString().slice(0,10);
+    schedule.push({date:dateKey, name:members[mi%members.length]});
+    mi++;
+  }
+  state.positions.dutyRota={startDate:start, stepDays:step, spanDays:span, scope, schedule};
+  pmRefreshAll();
+  toast('已生成 '+schedule.length+' 天轮值预览');
+}
+function pmSaveDutyMonitor(){
+  if(!state.positions.dutyRota||!state.positions.dutyRota.schedule||!state.positions.dutyRota.schedule.length){ return toast('请先生成预览'); }
+  save();
+  toast('值日班长轮值表已保存');
 }
 
 /* ===== 课代表（按科目管理） ===== */
