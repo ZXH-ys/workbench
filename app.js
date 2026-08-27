@@ -4654,6 +4654,9 @@ function olBuildProduct() {
 function olRender() {
   const panel = document.getElementById('olPanel'); if (!panel) return;
   if (!olHeaders.length) { panel.innerHTML = ''; return; }
+  // 记忆列识别容器的滚动位置，避免 select 切换后重绘导致回跳
+  const oldColScroll = document.getElementById('olColScroll');
+  const savedScroll = oldColScroll ? { top: oldColScroll.scrollTop, left: oldColScroll.scrollLeft } : null;
   const defs = olColDefs();
   const kindLabel = { skip: '跳过', name: '姓名', class: '班级', score: '分数', rank: '排名' };
   const kindOpts = (cur) => ['skip', 'name', 'class', 'score', 'rank'].map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${kindLabel[k]}</option>`).join('');
@@ -4692,7 +4695,7 @@ function olRender() {
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div>
         <div class="text-xs text-gray-500 mb-1">列识别（如有误请调整）</div>
-        <div class="overflow-x-auto border rounded-xl max-h-48"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">原表头</th><th class="px-2 py-1.5 text-left">识别为</th></tr></thead><tbody>${colRows}</tbody></table></div>
+        <div id="olColScroll" class="overflow-x-auto border rounded-xl max-h-48"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">原表头</th><th class="px-2 py-1.5 text-left">识别为</th></tr></thead><tbody>${colRows}</tbody></table></div>
       </div>
       <div class="space-y-3">
         <div>
@@ -4717,6 +4720,10 @@ function olRender() {
       <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('olFile').value=''; olHeaders=[]; olRows=[]; olRender();">重新选择文件</button>
       <button class="flex-1 bg-emerald-600 text-white py-2 rounded-full hover:bg-emerald-700" onclick="olSave()">处理并保存</button>
     </div>`;
+  if (savedScroll) {
+    const el = document.getElementById('olColScroll');
+    if (el) { el.scrollTop = savedScroll.top; el.scrollLeft = savedScroll.left; }
+  }
 }
 function olSave() {
   const nameIn = document.getElementById('olName');
