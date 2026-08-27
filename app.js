@@ -3900,6 +3900,21 @@ function renderExamUpload() {
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-gray-800">🛠️ 在线处理成绩（原始成绩文件）</h3>
+        <span class="text-xs text-gray-400">无需先用离线工具导出</span>
+      </div>
+      <p class="text-[11px] text-gray-400 leading-relaxed">直接选择年级原始 Excel/CSV，系统自动识别列、按全年级各单科排名计算单科校次、只保留你勾选的班级，再按「班级 + 姓名」匹配保存到工作台。全流程在浏览器内完成，不增加服务器负担。</p>
+      <div class="flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-[220px]">
+          <label class="block text-xs text-gray-500 mb-1">选择原始成绩文件（全年级）</label>
+          <input id="olFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm" onchange="olOnFile(this)">
+        </div>
+      </div>
+      <div id="olPanel"></div>
+    </div>
+
+    <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
       <h3 class="font-bold text-gray-800">➕ 单条录入 / 覆盖</h3>
       <div class="grid grid-cols-2 gap-3">
         <select id="exClass" class="border rounded-lg p-2 text-sm">${clsOpts}</select>
@@ -4482,6 +4497,218 @@ function doProductImport() {
   if (byClassTxt) msg += `\n匹配成功：${byClassTxt}`;
   if (unmatched.length) msg += `\n未匹配（班级或姓名未命中，已跳过）：${unmatched.slice(0, 20).join('、')}${unmatched.length > 20 ? '…' : ''}`;
   alert(msg);
+}
+
+// ---------- 在线处理成绩（整合自离线「成绩处理工具」，全流程浏览器端，不增加服务器负担）----------
+// 纯计算：列识别。返回 [{index, header, kind, label}]，kind: skip|name|class|score|rank
+function olDetectColumns(headers) {
+  const list = (headers || []).map((h, i) => {
+    const s = String(h == null ? '' : h).trim();
+    let kind = 'score', label = s;
+    if (/考号|学号|座位号|id|序号/i.test(s)) { kind = 'skip'; label = s; }
+    else if (/姓名|名字|name|学生/i.test(s)) { kind = 'name'; label = '姓名'; }
+    else if (/次|排名|rank|位次/i.test(s)) { kind = 'rank'; label = s; }
+    else if (/班级|class/i.test(s)) { kind = 'class'; label = '班级'; }
+    else { kind = 'score'; label = s; }
+    return { index: i, header: s, kind, label, isClassCandidate: (kind === 'class') };
+  });
+  const classCands = list.filter(c => c.isClassCandidate);
+  if (classCands.length > 1) {
+    const preferred = classCands.filter(c => /原|行政/.test(c.header))[0];
+    const keep = preferred || classCands[0];
+    classCands.forEach(c => { if (c !== keep) { c.kind = 'skip'; c.label = c.header; c.isClassCandidate = false; } });
+  }
+  return list;
+}
+// 纯计算：按全量行该科分数降序排名，同分同名次
+function olComputeSubjectRank(rows, scoreIdx) {
+  const scored = [];
+  (rows || []).forEach((r, ri) => {
+    const v = parseFloat(String(r[scoreIdx] == null ? '' : r[scoreIdx]).trim());
+    if (!isNaN(v)) scored.push({ ri, v });
+  });
+  scored.sort((a, b) => b.v - a.v);
+  const rankByIdx = {}; let lastV = null, lastRank = 0;
+  scored.forEach((o, i) => {
+    if (o.v === lastV) rankByIdx[o.ri] = lastRank;
+    else { lastRank = i + 1; lastV = o.v; rankByIdx[o.ri] = lastRank; }
+  });
+  return rankByIdx;
+}
+// 纯计算：构建成品（计算单科校次 + 只保留所选班级）
+function olBuildOutput(rows, colDefs, selectedClasses, classNorm) {
+  const nameDef = colDefs.find(c => c.kind === 'name');
+  const classDef = colDefs.find(c => c.kind === 'class');
+  const scoreDefs = colDefs.filter(c => c.kind === 'score');
+  const rankDefs = colDefs.filter(c => c.kind === 'rank');
+  if (!nameDef) throw new Error('未找到姓名列，请在列映射中指定一列作为「姓名」');
+  if (!classDef) throw new Error('未找到班级列，无法筛选你的班级');
+  const subjectScoreDefs = scoreDefs.filter(d => d.label !== '总分');
+  const subjectRanks = subjectScoreDefs.map(d => ({ def: d, map: olComputeSubjectRank(rows, d.index) }));
+  const sel = new Set((selectedClasses || []).map(s => String(s).trim()));
+  let totalAll = 0, matched = 0; const outRows = [];
+  (rows || []).forEach((r, ri) => {
+    const nm = String(r[nameDef.index] == null ? '' : r[nameDef.index]).trim();
+    if (!nm) return;
+    totalAll++;
+    const cv = String(r[classDef.index] == null ? '' : r[classDef.index]).trim();
+    const norm = classNorm ? classNorm(cv) : cv;
+    if (!sel.has(norm)) return;
+    matched++;
+    const row = [nm, norm];
+    scoreDefs.forEach(d => row.push(String(r[d.index] == null ? '' : r[d.index]).trim()));
+    rankDefs.forEach(d => row.push(String(r[d.index] == null ? '' : r[d.index]).trim()));
+    subjectRanks.forEach(sr => row.push(sr.map[ri] != null ? sr.map[ri] : ''));
+    outRows.push(row);
+  });
+  const outHeaders = ['姓名', '班级'];
+  scoreDefs.forEach(d => outHeaders.push(d.label));
+  rankDefs.forEach(d => outHeaders.push(d.label));
+  subjectRanks.forEach(sr => outHeaders.push(sr.def.label + '校次'));
+  return { headers: outHeaders, rows: outRows, stats: { totalRows: totalAll, matched } };
+}
+// 取得可选班级（优先学生管理中的班级，确保能匹配）
+function olAllClasses() {
+  const set = new Set((state.students || []).map(x => x.class).filter(Boolean));
+  if (!set.size) (state.examData.classes || []).forEach(c => set.add(c.id));
+  return [...set];
+}
+let olHeaders = [], olRows = [], olKindMap = {}, olSelClasses = [], olName = '', olDate = '';
+function olOnFile(input) {
+  const file = input.files && input.files[0]; if (!file) return;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const done = (headers, rows) => {
+    olHeaders = headers; olRows = rows;
+    const det = olDetectColumns(olHeaders);
+    olKindMap = {}; det.forEach(c => { olKindMap[c.index] = c.kind; });
+    const all = olAllClasses();
+    olSelClasses = all.filter(c => /9班|10班/.test(c));
+    if (!olSelClasses.length) olSelClasses = all.slice();
+    const info = parseExamNameFromFilename(file.name);
+    olName = info.name || ''; olDate = info.date || '';
+    olRender();
+  };
+  if (['xlsx', 'xls'].includes(ext)) {
+    if (typeof XLSX === 'undefined') { alert('Excel 解析库尚未加载，请刷新页面后再试'); return; }
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        const header = (raw[0] || []).map(c => String(c == null ? '' : c).trim());
+        const rows = raw.slice(1).filter(r => Array.isArray(r) && r.some(c => c !== '' && c !== undefined && c !== null));
+        done(header, rows.map(r => { const o = r.slice(); while (o.length < header.length) o.push(''); return o; }));
+      } catch (e) { alert('解析 Excel 失败：' + (e && e.message ? e.message : e)); }
+    };
+    r.readAsArrayBuffer(file);
+  } else {
+    const r = new FileReader();
+    r.onload = ev => { const rows = parseCSV(ev.target.result); done(rows[0] || [], rows.slice(1)); };
+    r.readAsText(file);
+  }
+}
+function olColDefs() {
+  return olHeaders.map((h, i) => {
+    const kind = olKindMap[i] || 'score';
+    const s = String(h || '').trim();
+    let label = s;
+    if (kind === 'name') label = '姓名';
+    else if (kind === 'class') label = '班级';
+    return { index: i, header: s, kind, label };
+  });
+}
+function olSetKind(i, kind) { olKindMap[i] = kind; olRender(); }
+function olToggleClass(c, on) {
+  if (on) { if (!olSelClasses.includes(c)) olSelClasses.push(c); }
+  else olSelClasses = olSelClasses.filter(x => x !== c);
+  olRender();
+}
+function olBuildProduct() {
+  const defs = olColDefs().filter(c => c.kind !== 'skip');
+  return olBuildOutput(olRows, defs, olSelClasses, piNormalizeClass);
+}
+function olRender() {
+  const panel = document.getElementById('olPanel'); if (!panel) return;
+  if (!olHeaders.length) { panel.innerHTML = ''; return; }
+  const defs = olColDefs();
+  const kindLabel = { skip: '跳过', name: '姓名', class: '班级', score: '分数', rank: '排名' };
+  const kindOpts = (cur) => ['skip', 'name', 'class', 'score', 'rank'].map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${kindLabel[k]}</option>`).join('');
+  const colRows = defs.map(d => `<tr class="border-t"><td class="px-2 py-1 text-xs">${esc(d.header)}</td><td class="px-2 py-1"><select class="border rounded p-1 text-xs" onchange="olSetKind(${d.index}, this.value)">${kindOpts(d.kind)}</select></td></tr>`).join('');
+  const allClasses = olAllClasses();
+  const clsChips = allClasses.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" onchange="olToggleClass(${JSON.stringify(c)}, this.checked)" ${olSelClasses.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('');
+  let preview = '<p class="text-xs text-gray-400">请勾选要保留的班级。</p>';
+  if (olSelClasses.length) {
+    try {
+      const product = olBuildProduct();
+      let total = 0, matched = 0; const unmatched = []; const byClass = {};
+      product.rows.forEach(r => {
+        const name = String(r[0] || '').trim(); const cid = String(r[1] || '').trim();
+        total++;
+        if (piMatchStudent(name, cid)) { matched++; byClass[cid] = (byClass[cid] || 0) + 1; } else unmatched.push(name + '（' + cid + '）');
+      });
+      const headTxt = product.headers.join(' | ');
+      const rowsHtml = product.rows.slice(0, 8).map(r => {
+        const name = String(r[0] || '').trim(); const cid = String(r[1] || '').trim();
+        const ok = piMatchStudent(name, cid);
+        return `<tr class="border-t"><td class="px-2 py-1" style="background:${ok ? '#f0fdf4' : '#fef2f2'}">${esc(name)}</td><td class="px-2 py-1" style="background:${ok ? '#f0fdf4' : '#fef2f2'}">${esc(cid)}</td><td class="px-2 py-1" style="background:${ok ? '#f0fdf4' : '#fef2f2'}">${ok ? '✓' : '✗ 未匹配'}</td></tr>`;
+      }).join('');
+      const byClassTxt = Object.entries(byClass).map(([c, v]) => `${c} ${v}人`).join('，');
+      preview = `
+        <div class="text-xs text-gray-500 mb-1">输出列：${esc(headTxt)}</div>
+        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs mb-2">
+          <span>原始数据 <b>${product.stats.totalRows}</b> 行</span>
+          <span class="text-green-600">命中并保留 <b>${matched}</b> 人 ${byClassTxt ? '（' + byClassTxt + '）' : ''}</span>
+          ${unmatched.length ? `<span class="text-red-500">未匹配 <b>${unmatched.length}</b> 人（${esc(unmatched.slice(0, 6).join('、'))}${unmatched.length > 6 ? '…' : ''}）</span>` : '<span class="text-green-600">✓ 全部匹配</span>'}
+          <span class="text-gray-400">单科校次已按全年级排名计算</span>
+        </div>
+        <div class="overflow-x-auto border rounded-xl"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">姓名</th><th class="px-2 py-1.5 text-left">班级</th><th class="px-2 py-1.5 text-left">匹配</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="text-[10px] text-gray-400 p-2">仅预览前 8 行，共 ${matched} 人</div></div>`;
+    } catch (e) { preview = `<p class="text-xs text-red-500">${esc(e.message || e)}</p>`; }
+  }
+  panel.innerHTML = `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <div class="text-xs text-gray-500 mb-1">列识别（如有误请调整）</div>
+        <div class="overflow-x-auto border rounded-xl max-h-48"><table class="w-full text-xs"><thead><tr class="bg-gray-100 text-gray-600"><th class="px-2 py-1.5 text-left">原表头</th><th class="px-2 py-1.5 text-left">识别为</th></tr></thead><tbody>${colRows}</tbody></table></div>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">保留班级（默认只选你的班）</div>
+          <div class="flex flex-wrap gap-2">${clsChips}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">本次考试名称 *</div>
+          <input id="olName" type="text" class="w-full border rounded-lg p-2 text-sm" value="${esc(olName)}" placeholder="如：期中">
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">考试日期</div>
+          <input id="olDate" type="date" class="w-full border rounded-lg p-2 text-sm" value="${esc(olDate)}">
+        </div>
+      </div>
+    </div>
+    <div class="mt-4">
+      <div class="text-xs text-gray-500 mb-1">预览（自动计算单科校次并只保留所选班级）</div>
+      ${preview}
+    </div>
+    <div class="flex gap-3 pt-3">
+      <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('olFile').value=''; olHeaders=[]; olRows=[]; olRender();">重新选择文件</button>
+      <button class="flex-1 bg-emerald-600 text-white py-2 rounded-full hover:bg-emerald-700" onclick="olSave()">处理并保存</button>
+    </div>`;
+}
+function olSave() {
+  const nameIn = document.getElementById('olName');
+  const dateIn = document.getElementById('olDate');
+  olName = nameIn ? nameIn.value.trim() : olName;
+  olDate = dateIn ? dateIn.value.trim() : olDate;
+  if (!olName) return alert('请输入本次考试的名称。');
+  if (!olSelClasses.length) return alert('请至少选择一个要保留的班级。');
+  let product;
+  try { product = olBuildProduct(); } catch (e) { return alert(e.message || e); }
+  if (!product.rows.length) return alert('没有可导入的数据，请检查班级选择或列识别。');
+  // 复用「导入工具成品成绩」的保存通道：成品格式一致，按班级+姓名匹配写入
+  piHeaders = product.headers; piRows = product.rows;
+  piNewName = olName; piNewDate = olDate;
+  doProductImport();
 }
 
 // ---------- 成绩查询 ----------
