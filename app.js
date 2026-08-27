@@ -4356,7 +4356,7 @@ function doExamImportWizard() {
 }
 
 // ---------- 导入「处理工具」导出的成品成绩（固定格式，按班级+姓名匹配）----------
-let piRows = [], piHeaders = [], piExamId = '', piNewName = '', piNewDate = '', piFileName = '';
+let piRows = [], piHeaders = [], piExamId = '', piNewName = '', piNewDate = '', piFileName = '', piExtraInfo = '';
 function piNormalizeClass(raw) {
   if (!raw) return '';
   const s = String(raw).trim();
@@ -4539,6 +4539,7 @@ function doProductImport() {
   const byClassTxt = Object.entries(matchedByClass).map(([c, v]) => `${c} ${v}人`).join('，');
   if (byClassTxt) msg += `\n匹配成功：${byClassTxt}`;
   if (unmatched.length) msg += `\n未匹配（班级或姓名未命中，已跳过）：${unmatched.slice(0, 20).join('、')}${unmatched.length > 20 ? '…' : ''}`;
+  if (piExtraInfo) msg += `\n${piExtraInfo}`;
   alert(msg);
 }
 
@@ -4633,11 +4634,10 @@ function olBuildOutput(rows, colDefs, selectedClasses, classNorm) {
   const rankDefs = colDefs.filter(c => c.kind === 'rank' && c.newHeader);
   if (!nameDef) throw new Error('未找到姓名列，请在列映射中指定一列作为「姓名」');
   if (!classDef) throw new Error('未找到班级列，无法筛选你的班级');
-  const enabledRankCols = new Set(examColumns().filter(c => c.type === 'rank' && c.enabled).map(c => c.key));
   const subjectScoreDefs = scoreDefs.filter(d => d.newHeader !== '总分');
+  // 单科校次是系统按全年级计算得出的派生列，始终计算并输出（非文件列，不受管理列开关影响）
   const subjectRanks = subjectScoreDefs
-    .map(d => ({ def: d, map: olComputeSubjectRank(rows, d.index), target: d.newHeader + '校次' }))
-    .filter(sr => enabledRankCols.has(sr.target));
+    .map(d => ({ def: d, map: olComputeSubjectRank(rows, d.index), target: d.newHeader + '校次' }));
   const sel = new Set((selectedClasses || []).map(s => String(s).trim()));
   let totalAll = 0, matched = 0; const outRows = [];
   (rows || []).forEach((r, ri) => {
@@ -4745,6 +4745,20 @@ function olBuildProduct() {
   const defs = olColDefs().filter(c => c.kind !== 'skip');
   return olBuildOutput(olRows, defs, olSelClasses, piNormalizeClass);
 }
+// 确保单科校次等派生排名列在管理列中存在（派生列由系统按全年级计算，非文件列，因此允许自动创建/启用）
+function olEnsureDerivedRankColumns(headers) {
+  const created = [];
+  (headers || []).forEach(h => {
+    if (typeof h !== 'string') return;
+    if (/校次$/.test(h) && h !== '校次') {
+      const c = examColumnByKey(h);
+      if (!c) { if (addExamColumn(h, 'rank')) created.push(h); }
+      else if (!c.enabled) { c.enabled = true; }
+    }
+  });
+  if (created.length) save();
+  return created;
+}
 function olRender() {
   const panel = document.getElementById('olPanel'); if (!panel) return;
   if (!olHeaders.length) { panel.innerHTML = ''; return; }
@@ -4847,6 +4861,9 @@ function olSave() {
   // 复用「导入工具成品成绩」的保存通道：成品格式一致，按班级+姓名匹配写入
   piHeaders = product.headers; piRows = product.rows;
   piNewName = olName; piNewDate = olDate;
+  piExtraInfo = '';
+  const created = olEnsureDerivedRankColumns(product.headers);
+  if (created.length) piExtraInfo = `已自动创建单科校次列：${created.join('、')}（派生列，由系统按全年级排名计算，可在「管理列」中关闭显示）`;
   doProductImport();
 }
 
