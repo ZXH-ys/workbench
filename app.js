@@ -1279,10 +1279,27 @@ function renderHome() {
   return state.activeClass === state.headTeacherClass ? renderHomeHead() : renderHomeTeacher();
 }
 
+// 首页今日值日班长（取轮值表中与今天匹配的条目，兼容本地/UTC两种日期格式）
+function homeDutyMonitorToday() {
+  const rota = state.positions && state.positions.dutyRota;
+  if (!rota || !rota.schedule || !rota.schedule.length) return null;
+  const tk = attDateKey(new Date());
+  const uk = new Date().toISOString().slice(0, 10);
+  return rota.schedule.find(r => r.date === tk || r.date === uk) || null;
+}
+function homeDutyMonitorNext() {
+  const rota = state.positions && state.positions.dutyRota;
+  if (!rota || !rota.schedule || !rota.schedule.length) return null;
+  const tk = attDateKey(new Date());
+  return rota.schedule.find(r => r.date > tk) || null;
+}
+
 // 班主任班（10班）首页：保留全部班主任专属功能
 function renderHomeHead() {
   const todayCourses = state.schedule.courses.filter(c => c.day === todayIndex).sort((a,b)=>a.period-b.period);
   const todayWeekday = ['周一','周二','周三','周四','周五','周六','周日'][todayIndex];
+  const nowD = new Date();
+  const dateLabel = (nowD.getMonth()+1) + '月' + nowD.getDate() + '日';
   const dutyTree = state.positions && state.positions.dutyTree;
   const dutyTasks = dutyTree ? (function collect(node){
     let list=[];
@@ -1293,53 +1310,69 @@ function renderHomeHead() {
     if(node.children) node.children.forEach(c=>{ list=list.concat(collect(c)); });
     return list;
   })(dutyTree) : [];
+  const dmToday = homeDutyMonitorToday();
+  const dmNext = homeDutyMonitorNext();
+  const dmHasRota = !!(state.positions && state.positions.dutyRota && state.positions.dutyRota.schedule && state.positions.dutyRota.schedule.length);
   const startDate = state.points.calcStartDate || '2026-01-01';
   return `
-  <div class="grid grid-cols-12 gap-6">
-    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">📅 积分计算起始日</div>
-        <span class="text-xs text-gray-400">设置后，所有积分排行与统计均从该日开始计算</span>
-      </div>
-      <div class="flex flex-wrap items-center gap-3">
-        <input id="homeCalcStart" type="date" value="${esc(startDate)}" class="border rounded-lg p-2 text-sm">
-        <button class="bg-primary text-white px-4 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveHomeCalcStart()">保存起始日</button>
-        <span class="text-xs text-gray-400">当前显示：${esc(startDate)} 起的积分</span>
+  <div class="grid grid-cols-12 gap-4">
+    <div class="col-span-12 bg-white rounded-2xl p-3 card-hover flex items-center justify-between flex-wrap gap-2">
+      <div class="font-bold text-gray-800 text-sm">📅 ${todayWeekday} ${dateLabel} · 积分起算 ${esc(startDate)}</div>
+      <div class="flex items-center gap-2">
+        <input id="homeCalcStart" type="date" value="${esc(startDate)}" class="border rounded-lg p-1 text-sm">
+        <button class="bg-primary text-white px-3 py-1 rounded-full text-xs hover:bg-primaryDark" onclick="saveHomeCalcStart()">保存起算日</button>
       </div>
     </div>
-    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">🧹 今日值日</div>
+
+    <div class="col-span-12 md:col-span-4 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-gray-800 text-sm">🗓️ 今日值日班长</div>
+        <button class="text-xs text-primary hover:underline" onclick="navigate('positions')">轮值表</button>
+      </div>
+      ${dmToday
+        ? `<div class="text-2xl font-bold text-primary leading-tight">${esc(dmToday.name)}</div>
+           <div class="text-xs text-gray-400 mt-1">${dmNext ? ('下次：'+esc(dmNext.name)+'（'+esc(dmNext.date.slice(5).replace('-','月')+'日')+'）') : '本轮轮值已结束'}</div>`
+        : (dmHasRota
+          ? `<div class="text-sm text-gray-500 leading-relaxed">本轮轮值已结束。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」重新生成</button></div>`
+          : `<div class="text-sm text-gray-500 leading-relaxed">尚未生成轮值表。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」生成</button></div>`)}
+    </div>
+
+    <div class="col-span-12 md:col-span-4 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-gray-800 text-sm">🧹 今日值日</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('positions')">职务与值日</button>
       </div>
-      ${dutyTasks.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">${dutyTasks.map(t=>`<div class="p-3 rounded-xl bg-gray-50"><div class="text-xs font-medium text-gray-600 mb-1">${esc(t.label)}</div><div class="flex flex-wrap gap-1">${t.names.map(n=>`<span class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">${esc(n)}</span>`).join('')}</div></div>`).join('')}</div>` : `<div class="text-sm text-gray-500">今天还没有安排值日生，可在「职务与值日」中设置。</div>`}
+      ${dutyTasks.length ? `<div class="grid grid-cols-1 gap-2">${dutyTasks.map(t=>`<div><div class="text-xs font-medium text-gray-600">${esc(t.label)}</div><div class="flex flex-wrap gap-1 mt-0.5">${t.names.map(n=>`<span class="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">${esc(n)}</span>`).join('')}</div></div>`).join('')}</div>` : `<div class="text-sm text-gray-500">今天还没有安排值日生</div>`}
     </div>
-    <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800">✅ 今日考勤</div>
+
+    <div class="col-span-12 md:col-span-4 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-gray-800 text-sm">✅ 今日考勤</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('attendance')">考勤管理</button>
       </div>
       ${(() => {
         const st = attStats(); const a = state.attendance; const cur = a.current || {home:{},leave:{}};
         const leave = Object.entries(cur.leave||{});
-        return `<div class="text-sm text-gray-600 mb-2">应到 ${st.total} · 实到 ${st.present} · 固定回家 ${st.home} · 请假 ${st.leave}</div>
-          <div class="flex flex-wrap items-center gap-2">
-            ${leave.length ? leave.map(([n,r])=>`<span class="text-xs px-2 py-1 rounded-full bg-red-50 text-red-600">${esc(n)}${r?('·'+esc(r)):''}</span>`).join('') : '<span class="text-xs text-gray-400">今日暂无请假</span>'}
-            <button class="text-xs px-2 py-1 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="openAddLeaveModal()">+ 记请假</button>
+        return `<div class="text-sm text-gray-600 mb-2">应到 ${st.total} · 实到 ${st.present} · 回家 ${st.home} · 请假 ${st.leave}</div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            ${leave.length ? leave.map(([n,r])=>`<span class="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600">${esc(n)}${r?('·'+esc(r)):''}</span>`).join('') : '<span class="text-xs text-gray-400">今日暂无请假</span>'}
+            <button class="text-xs px-2 py-0.5 rounded-full border border-primary text-primary hover:bg-primary/5" onclick="openAddLeaveModal()">+ 请假</button>
           </div>`;
       })()}
     </div>
+
     ${renderHomePointsCard()}
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-4">
-        <div class="font-bold text-gray-800">📚 今日课程</div>
+
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800 text-sm">📚 今日课程</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('schedule')">课程表</button>
       </div>
-      <div class="space-y-3">
-        ${todayCourses.length ? todayCourses.map(c => {
+      <div class="space-y-2">
+        ${todayCourses.length ? todayCourses.slice(0,6).map(c => {
           const p = state.schedule.periods.find(x=>x.id===c.period);
           return `
-          <div class="flex items-start gap-3 p-3 rounded-xl course-card cursor-pointer" onclick="editCourse(${c.day},${c.period})">
+          <div class="flex items-start gap-3 p-2 rounded-xl course-card cursor-pointer" onclick="editCourse(${c.day},${c.period})">
             <div class="text-center min-w-[3rem]">
               <div class="text-xs font-bold text-primary">${p ? (p.label || `第${p.id}节`) : `第${c.period}节`}</div>
               <div class="text-xs text-gray-500">${p ? ((p.start||'') + (p.end?'-'+p.end:'')) : ''}</div>
@@ -1349,36 +1382,39 @@ function renderHomeHead() {
         }).join('') : '<div class="text-sm text-gray-400">今天没有课程安排</div>'}
       </div>
     </div>
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-4">
-        <div class="font-bold text-gray-800">🔔 待办事项</div>
+
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800 text-sm">🔔 待办事项</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('reminders')">查看全部</button>
       </div>
-      <div class="space-y-3">
-        ${state.todos.slice(0,5).map(t => `
-          <div class="flex items-start gap-3 p-3 rounded-xl bg-gray-50">
+      <div class="space-y-2">
+        ${state.todos.slice(0,4).map(t => `
+          <div class="flex items-start gap-3 p-2 rounded-xl bg-gray-50">
             <input type="checkbox" class="mt-1 w-4 h-4 accent-primary" ${t.done?'checked':''} onchange="toggleTodo('${t.id}')">
             <div class="flex-1"><div class="text-sm ${t.done?'line-through text-gray-400':'text-gray-700'}">${esc(t.title)}</div>
             <div class="flex gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-600">${esc(t.level)}</span><span class="text-[10px] text-gray-400">${esc(t.due)}</span></div></div>
           </div>`).join('')}
       </div>
     </div>
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-4">
-        <div class="font-bold text-gray-800">📝 最近班级日志</div>
+
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800 text-sm">📝 最近班级日志</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('classLog')">查看全部</button>
       </div>
-      <div class="space-y-3">
-        ${state.classLogs.slice(0,2).map(l => `<div class="p-3 rounded-xl bg-gray-50 text-sm"><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-gray-700">${esc(l.content)}</div></div>`).join('')}
+      <div class="space-y-2">
+        ${state.classLogs.slice(0,2).map(l => `<div class="p-2 rounded-xl bg-gray-50 text-sm"><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-gray-700">${esc(l.content)}</div></div>`).join('')}
       </div>
     </div>
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
-      <div class="flex items-center justify-between mb-4">
-        <div class="font-bold text-gray-800">💬 待跟进沟通</div>
+
+    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-bold text-gray-800 text-sm">💬 待跟进沟通</div>
         <button class="text-xs text-primary hover:underline" onclick="openCommListModal()">查看全部</button>
       </div>
-      <div class="space-y-3">
-        ${state.communications.filter(c=>c.status==='待跟进').slice(0,2).map(c => `<div class="p-3 rounded-xl bg-gray-50 text-sm"><div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(c.student)} · ${esc(c.parent)}</span><span class="text-xs text-red-500">${esc(c.status)}</span></div><div class="text-gray-600 text-xs">${esc(c.content)}</div></div>`).join('')}
+      <div class="space-y-2">
+        ${state.communications.filter(c=>c.status==='待跟进').slice(0,2).map(c => `<div class="p-2 rounded-xl bg-gray-50 text-sm"><div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(c.student)} · ${esc(c.parent)}</span><span class="text-xs text-red-500">${esc(c.status)}</span></div><div class="text-gray-600 text-xs">${esc(c.content)}</div></div>`).join('')}
       </div>
     </div>
   </div>`;
@@ -5744,15 +5780,15 @@ function renderHomePointsCard() {
   const week = ptRecent(7);
   const medals = ['🥇', '🥈', '🥉'];
   return `
-  <div class="col-span-12 bg-white rounded-2xl p-5 card-hover">
-    <div class="flex items-center justify-between mb-4">
-      <div class="font-bold text-gray-800">🏆 积分榜（Top 5）</div>
+  <div class="col-span-12 bg-white rounded-2xl p-4 card-hover">
+    <div class="flex items-center justify-between mb-3">
+      <div class="font-bold text-gray-800 text-sm">🏆 积分榜（Top 5）</div>
       <div class="flex items-center gap-3">
         <span class="text-xs text-gray-400">近7天 ${ptSum(week) >= 0 ? '+' : ''}${ptSum(week)} 分 / ${week.length} 条</span>
         <button class="text-xs text-primary hover:underline" onclick="navigate('points')">积分管理</button>
       </div>
     </div>
-    ${top.length ? `<div class="grid grid-cols-1 sm:grid-cols-5 gap-3">
+    ${top.length ? `<div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
       ${top.map((x, i) => `<div class="p-3 rounded-xl bg-gray-50 text-center cursor-pointer hover:bg-primary/5 transition" onclick="openPtStudent('${x.s.id}')">
         <div class="text-lg">${medals[i] || `<span class="text-xs text-gray-400">${i + 1}</span>`}</div>
         <img src="${esc(x.s.avatar)}" class="w-9 h-9 rounded-full bg-white mx-auto my-1" alt="">
@@ -5760,7 +5796,7 @@ function renderHomePointsCard() {
         <div class="text-lg font-bold text-primary">${fmtScore(x.score)}</div>
       </div>`).join('')}
     </div>` : '<div class="text-sm text-gray-400">还没有学生或积分记录，去「积分管理」开始吧。</div>'}
-    <div class="flex gap-2 mt-4">
+    <div class="flex gap-2 mt-3">
       <button class="flex-1 text-sm border border-primary text-primary py-2 rounded-full hover:bg-primary/5" onclick="openPtAdjust(null,'daily',1)">＋ 快速加减分</button>
       <button class="flex-1 text-sm border border-gray-300 py-2 rounded-full hover:bg-gray-50" onclick="openPtBatch()">批量加减分</button>
     </div>
@@ -7319,7 +7355,7 @@ function pmDutyMonitorMembers(){
   return all;
 }
 function pmGenDutyMonitor(){
-  const start=(document.getElementById('dmStart').value)||new Date().toISOString().slice(0,10);
+  const start=(document.getElementById('dmStart').value)||attDateKey(new Date());
   const step=Math.max(1, parseInt(document.getElementById('dmStep').value)||1);
   const span=Math.max(1, parseInt(document.getElementById('dmSpan').value)||30);
   const scope=document.getElementById('dmScope').value;
@@ -7328,7 +7364,7 @@ function pmGenDutyMonitor(){
   const schedule=[]; let mi=0;
   for(let d=0; d<span; d+=step){
     const dt=new Date(start); dt.setDate(dt.getDate()+d);
-    const dateKey=dt.toISOString().slice(0,10);
+    const dateKey=attDateKey(dt);
     schedule.push({date:dateKey, name:members[mi%members.length]});
     mi++;
   }
