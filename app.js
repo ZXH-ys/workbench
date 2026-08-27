@@ -2583,7 +2583,10 @@ let pointsTab = 'all';
 let pointsQuery = '';
 let pointsMode = 'conv'; // 'conv' 折算分 | 'raw' 原始分
 
-function setPtMode(m) { pointsMode = m; render(); }
+function setPtMode(m) {
+  pointsMode = m;
+  ptRefreshMode(); ptRefreshCards(); ptRefreshList();
+}
 function ptScoreOf(sid) { return pointsMode === 'conv' ? ptConvTotal(sid) : ptRawTotal(sid); }
 function saveHomeCalcStart() {
   const v = document.getElementById('homeCalcStart').value;
@@ -2626,34 +2629,62 @@ function nowStamp() {
 }
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
 function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId === sid); }
-function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
-function ptDimScore(sid, dim) {
+// ========== 积分计算缓存：进入页面/数据变化时一次性构建，之后点击 tab、切换折算只读取缓存，不再 O(n²) 重算 ==========
+let _ptCache = { sig: '', raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
+function ptCacheKey() {
+  examScoreData(); // 确保考试数据缓存与签名最新，复用 _escSig 作为考试部分签名
+  const logsSig = (state.points.logs || []).map(l => (l.id || '') + ':' + (l.delta || 0) + ':' + (l.dim || '') + ':' + (l.studentId || '') + ':' + (l.date || '')).join('|');
+  const stSig = (state.students || []).map(s => (s.id || '') + ':' + (s.class || '')).join('|');
+  return [state.activeClass, state.headTeacherClass, state.points.calcStartDate, logsSig, stSig, JSON.stringify(state.convertRatios), _escSig].join('#');
+}
+// 底层：单人单维度原始分（含考试赋分并入，仅班主任班）
+function ptDimScoreRaw(sid, dim) {
   let v = ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim)));
-  // 考试赋分：并入自动计算的考试赋分（仅班主任班）
   if (dim === 'exam' && state.activeClass === state.headTeacherClass) {
     const s = state.students.find(x => x.id === sid);
     if (s) v += examScoreStudentTotal(s.name);
   }
   return v;
 }
+function ptEnsureCache() {
+  const sig = ptCacheKey();
+  if (_ptCache.sig === sig) return;
+  _ptCache.sig = sig;
+  _ptCache.raw = {}; _ptCache.conv = {}; _ptCache.totalConv = {}; _ptCache.totalRaw = {};
+  const clsStudents = state.students.filter(s => s.class === state.activeClass);
+  const ids = clsStudents.map(s => s.id);
+  POINT_DIMS.forEach(d => {
+    _ptCache.raw[d.id] = {}; _ptCache.conv[d.id] = {};
+    let mx = 0;
+    ids.forEach(sid => { const v = ptDimScoreRaw(sid, d.id) || 0; _ptCache.raw[d.id][sid] = v; if (v > mx) mx = v; });
+    const cap = state.convertRatios[d.id] != null ? state.convertRatios[d.id] : 0;
+    ids.forEach(sid => {
+      const raw = _ptCache.raw[d.id][sid] || 0;
+      _ptCache.conv[d.id][sid] = (cap <= 0 || raw < 0) ? raw : (mx > 0 ? (raw / mx) * cap : 0);
+    });
+  });
+  ids.forEach(sid => {
+    let c = 0; POINT_DIMS.forEach(d => { c += _ptCache.conv[d.id][sid] || 0; });
+    _ptCache.totalConv[sid] = c;
+    _ptCache.totalRaw[sid] = ptTotal(sid); // 纯日志和（不含考试赋分并入），与原 ptRawTotal 语义一致
+  });
+}
+function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
+function ptDimScore(sid, dim) { ptEnsureCache(); return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
 function ptClassSum(dim) {
-  const clsStudentIds = new Set(state.students.filter(s => s.class === state.activeClass).map(s => s.id));
-  let base = ptSum(ptEffectiveLogs(state.points.logs.filter(l => clsStudentIds.has(l.studentId) && (dim === 'all' || l.dim === dim))));
-  // 考试赋分：并入自动计算的考试赋分（仅班主任班）
-  if ((dim === 'exam' || dim === 'all') && state.activeClass === state.headTeacherClass) {
-    const d = examScoreData();
-    base += Object.values(d.students).reduce((a, b) => a + b.total, 0);
-  }
-  return base;
+  ptEnsureCache();
+  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + (ptDimScore(s.id, dim) || 0), 0);
 }
 // 全班某维度折算分之和（用于积分管理页顶部卡片，随折算/原始模式切换）
 function ptClassConvSum(dim) {
-  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ptConvDim(s.id, dim), 0);
+  ptEnsureCache();
+  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0), 0);
 }
 function ptRanked(dim) {
+  ptEnsureCache();
   const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({
     s,
-    score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ptConvDim(s.id, dim) : ptDimScore(s.id, dim))
+    score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0) : ptDimScore(s.id, dim))
   }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
   return arr;
@@ -2679,19 +2710,33 @@ function fmtScore(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
 function ptSigned(d) { return (d >= 0 ? '+' : '') + fmtScore(d); }
 function ptStudentName(sid) { const s = state.students.find(x => x.id === sid); return s ? s.name : '（已删除学生）'; }
 // ===== 折算：各维度原始分最高分映射到设置的折算满分 =====
-function ptConvDim(sid, dim) {
-  const raw = ptDimScore(sid, dim) || 0;
-  const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
-  // 不折算 或 负分保留原始值
-  if (cap <= 0 || raw < 0) return raw;
-  const maxRaw = Math.max(...state.students.filter(s => s.class === state.activeClass).map(s => ptDimScore(s.id, dim) || 0), 0);
-  if (maxRaw <= 0) return 0;
-  return (raw / maxRaw) * cap;
-}
-function ptConvTotal(sid) { return POINT_DIMS.reduce((a, d) => a + ptConvDim(sid, d.id), 0); }
-function ptRawTotal(sid) { return ptTotal(sid); }
+function ptConvDim(sid, dim) { ptEnsureCache(); return (_ptCache.conv[dim] && _ptCache.conv[dim][sid]) || 0; }
+function ptConvTotal(sid) { ptEnsureCache(); return _ptCache.totalConv[sid] || 0; }
+function ptRawTotal(sid) { ptEnsureCache(); return _ptCache.totalRaw[sid] || 0; }
 
-function setPtTab(t) { pointsTab = t; render(); }
+function ptRefreshTabs() {
+  document.querySelectorAll('[data-pt-tab]').forEach(b => {
+    const on = b.getAttribute('data-pt-tab') === pointsTab;
+    b.className = `px-4 py-1.5 rounded-full text-sm transition ${on ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}`;
+  });
+}
+function ptRefreshMode() {
+  document.querySelectorAll('[data-pt-mode]').forEach(b => {
+    const on = b.getAttribute('data-pt-mode') === pointsMode;
+    b.className = `px-3 py-1.5 rounded-full ${on ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600'}`;
+  });
+}
+function ptRefreshCards() {
+  POINT_DIMS.forEach(d => {
+    const el = document.querySelector(`[data-pt-card="${d.id}"]`);
+    if (el) el.textContent = fmtScore(pointsMode === 'conv' ? ptClassConvSum(d.id) : ptClassSum(d.id));
+  });
+}
+function ptRefreshList() {
+  const el = document.getElementById('pt-list');
+  if (el) el.innerHTML = renderPtList();
+}
+function setPtTab(t) { pointsTab = t; ptRefreshTabs(); ptRefreshList(); }
 function ptFilter(v) { pointsQuery = v; const el = document.getElementById('pt-list'); if (el) el.innerHTML = renderPtList(); }
 
 function renderPoints() {
@@ -2710,18 +2755,18 @@ function renderPoints() {
     const active = pointsTab === d.id;
     return `<div class="cursor-pointer rounded-2xl p-4 border ${active ? 'border-primary shadow-sm' : 'border-transparent'} ${st.bg} card-hover" onclick="setPtTab('${d.id}')">
       <div class="text-xs ${st.text} font-medium">${d.icon} ${d.label}</div>
-      <div class="text-2xl font-bold ${st.text} mt-1">${fmtScore(sum)}</div>
+      <div class="text-2xl font-bold ${st.text} mt-1" data-pt-card="${d.id}">${fmtScore(sum)}</div>
       <div class="text-[10px] text-gray-400 mt-0.5">全班累计</div>
     </div>`;
   }).join('');
 
   const tabs = [{ id: 'all', label: '总分排行', icon: '🏅' }].concat(POINT_DIMS).map(t =>
-    `<button class="px-4 py-1.5 rounded-full text-sm transition ${pointsTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setPtTab('${t.id}')">${t.icon} ${t.label}</button>`
+    `<button class="px-4 py-1.5 rounded-full text-sm transition ${pointsTab === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-primary/10'}" data-pt-tab="${t.id}" onclick="setPtTab('${t.id}')">${t.icon} ${t.label}</button>`
   ).join('');
 
   const modeToggle = `<div class="flex gap-1 text-xs">
-    <button class="px-3 py-1.5 rounded-full ${pointsMode==='conv'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" onclick="setPtMode('conv')">折算分</button>
-    <button class="px-3 py-1.5 rounded-full ${pointsMode==='raw'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" onclick="setPtMode('raw')">原始分</button>
+    <button class="px-3 py-1.5 rounded-full ${pointsMode==='conv'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" data-pt-mode="conv" onclick="setPtMode('conv')">折算分</button>
+    <button class="px-3 py-1.5 rounded-full ${pointsMode==='raw'?'bg-primary text-white':'bg-gray-100 text-gray-600'}" data-pt-mode="raw" onclick="setPtMode('raw')">原始分</button>
   </div>`;
 
   return `
