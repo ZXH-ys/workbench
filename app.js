@@ -2843,8 +2843,8 @@ function ptComputeDim(dim) {
   _ptCache.sig[dim] = ptDimSig(dim);
 }
 
-// 懒加载：只在没有缓存时计算一次；不主动刷新脏数据
-function ptEnsureCacheDim(dim) { if (!_ptCache.sig[dim]) ptComputeDim(dim); }
+// 懒加载：签名缺失或与当前数据签名不一致（如更改积分计算起始日/日志/职务/折算）时自动重算
+function ptEnsureCacheDim(dim) { if (!_ptCache.sig[dim] || _ptCache.sig[dim] !== ptDimSig(dim)) ptComputeDim(dim); }
 // 该维度当前数据是否与缓存不一致
 function ptIsDimDirty(dim) { return !!_ptCache.sig[dim] && _ptCache.sig[dim] !== ptDimSig(dim); }
 // 显式刷新单个维度（卡片按钮用）
@@ -2867,8 +2867,8 @@ function ptComputeAll() {
   _ptCache.sig.all = ptAllSig();
 }
 function ptEnsureCacheAll() {
-  POINT_DIMS.forEach(d => { if (!_ptCache.sig[d.id]) ptComputeDim(d.id); });
-  if (!_ptCache.sig.all) ptComputeAll();
+  POINT_DIMS.forEach(d => { if (!_ptCache.sig[d.id] || _ptCache.sig[d.id] !== ptDimSig(d.id)) ptComputeDim(d.id); });
+  if (!_ptCache.sig.all || _ptCache.sig.all !== ptAllSig()) ptComputeAll();
 }
 
 function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
@@ -5866,11 +5866,16 @@ function extractUnknownNames(text, knownHits) {
     const sep = clauses[i + 1] || '';
     let pos = offset;
     while (pos < offset + clause.length) {
+      // 跳过占位符(\u0003)与非中文字符（qrClaimMask 把日期/卫生词替换成 \u0003，避免被当成姓名起点）
+      while (pos < text.length && !/^[\u4e00-\u9fa5]$/.test(text[pos])) pos++;
+      if (pos >= offset + clause.length) break;
       // 从当前位置尝试2-4字中文，选择「后面紧跟关键词」的最长合法长度
       let name = '', namePos = pos, nextPos = pos;
       for (let len = 2; len <= 4 && pos + len <= text.length; len++) {
         const candidate = text.slice(pos, pos + len);
         if (!/^[\u4e00-\u9fa5]{2,4}$/.test(candidate)) break;
+        if (startsWithNoise(candidate)) break; // 候选本身以事件词开头，不是姓名
+        if (/^[和与会跟同且又还]/.test(text.slice(pos + len))) { name = candidate; nextPos = pos + len; break; } // 连接词后接下一姓名
         if (startsWithNoise(text.slice(pos + len))) {
           name = candidate;
           nextPos = pos + len;
@@ -5884,8 +5889,9 @@ function extractUnknownNames(text, knownHits) {
       if (isKnownOverlap(namePos, name.length)) {
         if (isKnownAt(namePos, name.length)) {
           pos = nextPos;
-          if (!/[，,、]/.test(text[pos])) break;
-          pos++;
+          if (!/[，,、]/.test(text[pos]) && !/^[和与会跟同且又还]$/.test(text[pos])) break;
+          if (/^[和与会跟同且又还]$/.test(text[pos])) pos++;
+          else pos++;
           continue;
         }
         break;
@@ -5893,8 +5899,9 @@ function extractUnknownNames(text, knownHits) {
       if (isNoise(name)) break;
       names.push({ pos: namePos, len: name.length, name });
       pos = nextPos;
-      if (!/[，,、]/.test(text[pos])) break;
-      pos++; // skip separator
+      // 姓名之间可用 顿号/逗号 或 连接词(和/与/跟/同/且/又/还) 连续
+      if (!/[，,、]/.test(text[pos]) && !/^[和与会跟同且又还]$/.test(text[pos])) break;
+      if (/^[和与会跟同且又还]$/.test(text[pos])) pos++;
     }
     offset += clause.length + sep.length;
   }
@@ -5987,7 +5994,7 @@ function parseQuickRecord(text) {
         clauses.push(c);
       });
     });
-    if (!clauses.length) clauses.push(seg.text);
+    if (!clauses.length && !isDutyClause(seg.text)) clauses.push(seg.text);
     clauses.forEach(clause => {
       const item = recognizeClause(clause, matched);
       if (item) segment.items.push(item);
