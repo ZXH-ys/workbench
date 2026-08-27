@@ -4346,7 +4346,8 @@ function piDetect(headers) {
     else if (/班级|class/i.test(s)) kind = 'class';
     else if (/次|排名|rank|位次/i.test(s)) kind = 'rank';
     else kind = 'score';
-    return { i, header: s, kind, label: s };
+    const label = (kind === 'score' || kind === 'rank') ? olNormalizeSubjectLabel(s) : s;
+    return { i, header: s, kind, label };
   });
 }
 function openProductImport() {
@@ -4490,7 +4491,14 @@ function doProductImport() {
     });
   });
   Object.keys(matchedByClass).forEach(cid => ensureExamClass(cid));
-  save(); closeModal(); render();
+  save(); closeModal();
+  if (currentRoute === 'exam') {
+    examTab = 'query';
+    eqExamId = targetExamId;
+    eqClassIds = state.examData.classes.map(c => c.id);
+    eqSearch = '';
+  }
+  render();
   let msg = `✅ 成功导入 / 更新 ${n} 条记录（已按「班级 + 姓名」与「学生管理」匹配）`;
   if (newCols.length) msg += `\n新建列：${newCols.join('、')}`;
   const byClassTxt = Object.entries(matchedByClass).map(([c, v]) => `${c} ${v}人`).join('，');
@@ -4500,6 +4508,21 @@ function doProductImport() {
 }
 
 // ---------- 在线处理成绩（整合自离线「成绩处理工具」，全流程浏览器端，不增加服务器负担）----------
+// 规范化科目/排名列名：语文成绩→语文，数学分数→数学，语文名次→语文校次，校次→校次
+function olNormalizeSubjectLabel(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  // 分数列：去掉成绩/分数/得分/原始分/标准分后缀
+  const scoreStripped = s.replace(/(成绩|分数|得分|原始分|标准分)$/i, '').trim();
+  if (scoreStripped !== s && scoreStripped.length > 1 && !/^(总|全|综合)$/i.test(scoreStripped)) return scoreStripped;
+  // 排名列：X名次/X排名→X校次；名次/排名→校次
+  const rankMatch = s.match(/^(.*?)(校次|名次|排名)$/);
+  if (rankMatch) {
+    const prefix = rankMatch[1].trim();
+    return prefix ? prefix + '校次' : '校次';
+  }
+  return s;
+}
 // 纯计算：列识别。返回 [{index, header, kind, label}]，kind: skip|name|class|score|rank
 function olDetectColumns(headers) {
   const list = (headers || []).map((h, i) => {
@@ -4615,6 +4638,7 @@ function olColDefs() {
     let label = s;
     if (kind === 'name') label = '姓名';
     else if (kind === 'class') label = '班级';
+    else if (kind === 'score' || kind === 'rank') label = olNormalizeSubjectLabel(s);
     return { index: i, header: s, kind, label };
   });
 }
