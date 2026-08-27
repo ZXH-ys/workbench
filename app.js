@@ -233,19 +233,19 @@ function defaultPoints() {
 // 职务与值日管理：职务架构 / 值日生 / 职务积分 / 职务树 / 关联扣分
 function defaultPositions() {
   const structure = [
-    { id:'banzhang', name:'班长', group:'班委', count:1, pts:5, seat:2, duties:['兼任音乐、美术课代表、心理委员','考勤（早、中、课上）','班级全部工作检查提醒','配合学校工作安排'], req:'品学兼优、以身作则' },
-    { id:'xuexi', name:'学习委员', group:'班委', count:1, pts:3.5, seat:1, duties:['本周课堂学习/违纪汇总（周末汇总周一交）','上周作业检查汇总（周一）','考试整理考场（周三）','班级学习工作检查提醒'], req:'品学兼优、以身作则' },
-    { id:'jilu', name:'记录员', group:'班委', count:1, pts:null, seat:null, duties:['班会内容记录（周一）','本周作业传达（周五晚）','1530 安全记录（每天）'], req:'书写工整' },
-    { id:'shenghuo', name:'生活委员', group:'班委', count:1, pts:3.5, seat:1, duties:['桌椅板凳摆放','整理讲桌','书橱/空桌整理','生活工作检查提醒'], req:'个人生活有条理' },
-    { id:'jiexian', name:'接线员', group:'班委', count:1, pts:null, seat:null, duties:['电脑/电灯/窗帘/空调开关（室内无人就关）'], req:'有时间观念' },
-    { id:'guangbo', name:'广播员', group:'班委', count:1, pts:null, seat:null, duties:['路队古诗（放学）','跑操口号（课间操）'], req:'嗓门大' },
-    { id:'linghang', name:'领航员', group:'班委', count:1, pts:null, seat:null, duties:['举旗/拿旗放旗（课间操）'], req:'体力好、眼神好' },
-    { id:'weisheng', name:'卫生委员', group:'班委', count:1, pts:3.5, seat:1, duties:['全天卫生检查','值日生提醒/替补','卫生工具整理','卫生工作检查提醒'], req:'爱干净' },
-    { id:'jiancha', name:'监察员', group:'班委', count:1, pts:3.5, seat:1, duties:['提醒班委履职','监督班委工作（周末汇总周一报）','提醒组长管课前纪律'], req:'公平公正、遵守纪律' },
-    { id:'jifen', name:'计分员', group:'班委', count:1, pts:null, seat:null, duties:['每周积分汇总汇报','整理积分表格'], req:'仔细、会加减法' },
-    { id:'zuzhang', name:'组长', group:'班委', count:6, pts:3.5, seat:1, duties:['检查小组作业报课代表','管理小组纪律计分','统计吃饭人数'], req:'公平公正、遵守纪律' },
-    { id:'zhiban', name:'值日班长', group:'班委', count:1, pts:null, seat:null, duties:['午休在讲台上值班'], req:'' },
-    { id:'xuehui', name:'学生会', group:'学生会', count:5, pts:null, seat:null, duties:['配合学校学生会工作'], req:'认真负责' },
+    { id:'banzhang', name:'班长', group:'班委', category:'班委', count:1, pts:5, seat:2, duties:['兼任音乐、美术课代表、心理委员','考勤（早、中、课上）','班级全部工作检查提醒','配合学校工作安排'], req:'品学兼优、以身作则' },
+    { id:'xuexi', name:'学习委员', group:'班委', category:'班委', count:1, pts:3.5, seat:1, duties:['本周课堂学习/违纪汇总（周末汇总周一交）','上周作业检查汇总（周一）','考试整理考场（周三）','班级学习工作检查提醒'], req:'品学兼优、以身作则' },
+    { id:'jilu', name:'记录员', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['班会内容记录（周一）','本周作业传达（周五晚）','1530 安全记录（每天）'], req:'书写工整' },
+    { id:'shenghuo', name:'生活委员', group:'班委', category:'班委', count:1, pts:3.5, seat:1, duties:['桌椅板凳摆放','整理讲桌','书橱/空桌整理','生活工作检查提醒'], req:'个人生活有条理' },
+    { id:'jiexian', name:'接线员', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['电脑/电灯/窗帘/空调开关（室内无人就关）'], req:'有时间观念' },
+    { id:'guangbo', name:'广播员', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['路队古诗（放学）','跑操口号（课间操）'], req:'嗓门大' },
+    { id:'linghang', name:'领航员', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['举旗/拿旗放旗（课间操）'], req:'体力好、眼神好' },
+    { id:'weisheng', name:'卫生委员', group:'班委', category:'班委', count:1, pts:3.5, seat:1, duties:['全天卫生检查','值日生提醒/替补','卫生工具整理','卫生工作检查提醒'], req:'爱干净' },
+    { id:'jiancha', name:'监察员', group:'班委', category:'班委', count:1, pts:3.5, seat:1, duties:['提醒班委履职','监督班委工作（周末汇总周一报）','提醒组长管课前纪律'], req:'公平公正、遵守纪律' },
+    { id:'jifen', name:'计分员', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['每周积分汇总汇报','整理积分表格'], req:'仔细、会加减法' },
+    { id:'zuzhang', name:'组长', group:'班委', category:'班委', count:6, pts:3.5, seat:1, duties:['检查小组作业报课代表','管理小组纪律计分','统计吃饭人数'], req:'公平公正、遵守纪律' },
+    { id:'zhiban', name:'值日班长', group:'班委', category:'非班委', count:1, pts:null, seat:null, duties:['午休在讲台上值班'], req:'' },
+    { id:'xuehui', name:'学生会', group:'学生会', category:'非班委', count:5, pts:null, seat:null, duties:['配合学校学生会工作'], req:'认真负责' },
   ];
   const assign = {};
   structure.forEach(p => assign[p.id] = []);
@@ -339,7 +339,12 @@ function migrateState(s) {
   if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
   if (!Array.isArray(s.positions.structure) || !s.positions.structure.length) s.positions.structure = defaultPositions().structure;
   if (!s.positions.assign || typeof s.positions.assign !== 'object') s.positions.assign = {};
-  s.positions.structure.forEach(p => { if (!Array.isArray(s.positions.assign[p.id])) s.positions.assign[p.id] = []; });
+  const _catMap = {};
+  defaultPositions().structure.forEach(p => { _catMap[p.id] = p.category || '班委'; });
+  s.positions.structure.forEach(p => {
+    if (!Array.isArray(s.positions.assign[p.id])) s.positions.assign[p.id] = [];
+    if (!p.category) p.category = _catMap[p.id] || (p.group === '学生会' ? '非班委' : '班委');
+  });
   if (!s.positions.dutyTree || typeof s.positions.dutyTree !== 'object') s.positions.dutyTree = defaultPositions().dutyTree;
   if (!s.positions.dutyWeekly || typeof s.positions.dutyWeekly !== 'object') s.positions.dutyWeekly = {};
   if (!s.positions.deductionKeywords || typeof s.positions.deductionKeywords !== 'object') s.positions.deductionKeywords = defaultPositions().deductionKeywords;
@@ -6801,40 +6806,48 @@ function pmOpenAddRep(id){
 
 /* ===== 职务积分 ===== */
 function pmPointRow(p){
-  return `<tr><td class="p-2 font-medium">${esc(p.name)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${p.pts==null?'':p.pts}" onchange="pmUpdatePoint('${p.id}','pts',this.value)"></td></tr>`;
+  const catOpts=['班委','非班委','课代表'].map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${c}</option>`).join('');
+  return `<tr><td class="p-2 font-medium">${esc(p.name)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${p.pts==null?'':p.pts}" onchange="pmUpdatePoint('${p.id}','pts',this.value)"></td><td class="p-2"><select class="border rounded-lg p-1 text-xs" onchange="pmSetCategory('${p.id}',this.value)">${catOpts}</select></td></tr>`;
 }
 function pmDutyPointRow(task){
   const v=state.positions.dutyTaskPoints[task];
-  return `<tr><td class="p-2 font-medium">${esc(task)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${v==null?'':v}" onchange="pmUpdateDutyPoint('${esc(task)}',this.value)"></td></tr>`;
+  return `<tr><td class="p-2 font-medium">${esc(task)}</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${v==null?'':v}" onchange="pmUpdateDutyPoint('${esc(task)}',this.value)"></td><td class="p-2 text-xs text-slate-400">值日任务</td></tr>`;
 }
 function pmRepPointRow(r){
-  return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td></tr>`;
+  return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td><td class="p-2 text-xs text-slate-400">课代表</td></tr>`;
 }
 function pmRenderPoints(){
   const P=state.positions;
-  const banWei=P.structure.filter(p=>p.pts!=null);
-  const feiBanWei=P.structure.filter(p=>p.pts==null);
+  const banWei=P.structure.filter(p=>p.category==='班委');
+  const feiBanWei=P.structure.filter(p=>p.category==='非班委');
+  const keDaiBiao=P.structure.filter(p=>p.category==='课代表');
   const reps=P.representatives||[];
   const repRows=reps.map(pmRepPointRow).join('');
+  const kdRows=keDaiBiao.map(pmPointRow).join('');
   let html=`<div class="bg-white rounded-2xl shadow-sm p-5">
     <div class="font-bold text-slate-700 mb-4">职务积分（修改后同步到职务架构）</div>
     <div class="grid lg:grid-cols-2 gap-5">
       <div><div class="text-sm font-semibold text-slate-600 mb-2">班委积分</div>
         <div class="overflow-x-auto"><table class="w-full text-sm">
-          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务</th><th class="text-left p-2">日积分</th></tr></thead>
+          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务</th><th class="text-left p-2">日积分</th><th class="text-left p-2">归类</th></tr></thead>
           <tbody>${banWei.map(pmPointRow).join('')}</tbody></table></div></div>
       <div><div class="text-sm font-semibold text-slate-600 mb-2">非班委职务</div>
         <div class="overflow-x-auto"><table class="w-full text-sm">
-          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务 / 值日任务</th><th class="text-left p-2">日积分</th></tr></thead>
+          <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">职务 / 值日任务</th><th class="text-left p-2">日积分</th><th class="text-left p-2">归类</th></tr></thead>
           <tbody>${feiBanWei.map(pmPointRow).join('')}${pmDutyTasks.map(pmDutyPointRow).join('')}</tbody></table></div></div>
     </div>
-    ${reps.length?`<div class="mt-5"><div class="text-sm font-semibold text-slate-600 mb-2">课代表积分</div>
+    ${reps.length||keDaiBiao.length?`<div class="mt-5"><div class="text-sm font-semibold text-slate-600 mb-2">课代表积分</div>
       <div class="overflow-x-auto max-w-md"><table class="w-full text-sm">
-        <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">科目</th><th class="text-left p-2">日积分</th></tr></thead>
-        <tbody>${repRows}</tbody></table></div></div>`:''}
-    <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。</p>
+        <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-2">科目 / 职务</th><th class="text-left p-2">日积分</th><th class="text-left p-2">归类</th></tr></thead>
+        <tbody>${repRows}${kdRows}</tbody></table></div></div>`:''}
+    <p class="text-xs text-slate-400 mt-4">清空日积分则视为该职务不享受积分奖励。第三列「归类」可自由调整职务所属分类。</p>
   </div>`;
   return html;
+}
+function pmSetCategory(id, cat){
+  const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
+  p.category=cat;
+  save(); pmRefreshAll();
 }
 function pmUpdatePoint(id,field,val){
   const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
