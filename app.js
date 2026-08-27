@@ -3102,7 +3102,7 @@ let examSelectedStudent = ''; // 当前在榜单中选中的学生
 let eiBook = null, eiSheets = [], eiSheetName = '', eiRows = [], eiHeaders = [];
 let eiNameCol = -1, eiClassCol = -1, eiColMap = {}, eiHeaderRow = 1, eiExamId = '';
 // 成绩查询页状态（仅 UI 偏好，不持久化）
-let eqExamId = '', eqClassIds = [], eqSearch = '', eqSortCol = '', eqSortDesc = false, eqHiddenCols = new Set();
+let eqExamId = '', eqClassIds = [], eqSearch = '', eqSortCol = '', eqSortDesc = false, eqHiddenCols = new Set(), eqPinnedKey = '';
 // 公示列开关（仅 UI 偏好，不持久化）
 let examAnalysisColumns = {
   score: true,
@@ -3892,11 +3892,10 @@ function renderExamUpload() {
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
       <div class="flex items-center justify-between">
-        <h3 class="font-bold text-gray-800">📥 批量导入成绩（多科目 / 多列）</h3>
+        <h3 class="font-bold text-gray-800">⚙️ 成绩列管理（科目 / 排名列）</h3>
         <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openColumnManager()">⚙️ 管理列</button>
       </div>
-      <button class="w-full bg-emerald-600 text-white py-2.5 rounded-full text-sm hover:bg-emerald-700" onclick="openProductImport()">📦 导入工具成品成绩</button>
-      <p class="text-[11px] text-gray-400 leading-relaxed">点击后先填写本次考试的名称和日期（也可让系统从文件名自动解析），再选择工具导出的 CSV。导入时按「班级 + 姓名」与「学生管理」逐一匹配后保存；若名称/日期与已有考试一致，会覆盖到该考试，不会重复创建。</p>
+      <p class="text-[11px] text-gray-400 leading-relaxed">统一管理成绩中显示的科目与排名列（如语文、数学、校次、县次等）。在「成绩查询」「成绩分析」中按需勾选显示。直接处理原始成绩文件请使用上方「🛠️ 在线处理成绩」。</p>
     </div>
 
     <div class="bg-white rounded-2xl p-5 shadow-sm space-y-4">
@@ -4795,9 +4794,7 @@ function eqCollect() {
   document.querySelectorAll('.eq-col').forEach(b => {
     if (b.checked) eqHiddenCols.delete(b.value); else eqHiddenCols.add(b.value);
   });
-  const wrap = document.getElementById('eqTableWrap');
-  if (wrap) wrap.innerHTML = renderExamQueryTable();
-  eqBindScrollSync();
+  eqRerenderTable();
 }
 function eqExportCSV() {
   if (!eqExamId) return;
@@ -4870,38 +4867,54 @@ function renderExamQueryTable() {
     ths.push(`<th class="py-2 px-2 text-right whitespace-nowrap text-xs font-semibold cursor-pointer select-none hover:bg-gray-200 ${activeClass}" style="${stickyHead} min-width:3.5rem;" onclick="eqSetSort('${esc(c.key)}', event)">${esc(c.key)}${c.type==='rank'?'<span class="text-[10px] opacity-70">排</span>':''}${arrow}</th>`);
   });
   const tbody = rows.map(row => {
+    const pinned = (row.classId + '|' + row.name) === eqPinnedKey;
+    const rowBg = pinned ? 'background:#fef3c7;' : '';
     const vals = cols.map(c => {
       const rec = records.find(r => r.classId === row.classId && r.studentName === row.name && r.subject === c.key);
       const v = rec ? fmtExamCell(rec.score, c.type === 'rank') : '—';
       const activeClass = eqSortCol === c.key ? 'bg-blue-50 text-blue-700' : '';
-      return `<td class="py-1.5 px-2 text-right whitespace-nowrap text-sm tabular-nums ${activeClass}">${v}</td>`;
+      return `<td class="py-1.5 px-2 text-right whitespace-nowrap text-sm tabular-nums ${activeClass}" style="${rowBg}">${v}</td>`;
     }).join('');
-    return `<tr class="border-b hover:bg-gray-50"><td class="py-1.5 pl-3 pr-2 text-sm text-gray-600 whitespace-nowrap" style="${stickyClassTd}">${esc(row.classId)}</td><td class="py-1.5 pr-3 text-sm font-medium whitespace-nowrap" style="${stickyNameTd}">${esc(row.name)}</td>${vals}</tr>`;
+    return `<tr class="border-b hover:bg-gray-50" style="${rowBg}"><td class="py-1.5 pl-3 pr-2 text-sm text-gray-600 whitespace-nowrap" style="${stickyClassTd} ${rowBg}">${esc(row.classId)}</td><td class="py-1.5 pr-3 text-sm font-medium whitespace-nowrap cursor-pointer hover:text-blue-600" style="${stickyNameTd} ${rowBg}" onclick="eqPinRow('${esc(row.classId)}','${esc(row.name)}', event)">${esc(row.name)}</td>${vals}</tr>`;
   }).join('');
+  const pinTip = eqPinnedKey ? ' · 已常亮 <b>' + esc(eqPinnedKey.split('|')[1]) + '</b> 的成绩行（点姓名取消）' : '';
   return `
   <div class="bg-white rounded-2xl shadow-sm">
     <div class="flex items-center justify-between p-4 border-b">
-      <div class="text-xs text-gray-500">共 <b>${rows.length}</b> 人</div>
+      <div class="text-xs text-gray-500">共 <b>${rows.length}</b> 人${pinTip}</div>
       <button class="text-xs text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="eqExportCSV()">📥 导出当前表</button>
     </div>
     <div id="eqTopScroll" class="overflow-x-auto" style="height:10px; background:#f9fafb; border-bottom:1px solid #e5e7eb;">
       <div id="eqTopScrollInner" style="height:1px; min-width:100%;"></div>
     </div>
-    <div id="eqTableScroll" class="overflow-x-auto">
-      <table class="text-sm border-collapse" style="min-width:100%;">
+    <div id="eqTableScroll" class="overflow-auto" style="max-height:calc(100vh - 320px);">
+      <table class="text-sm border-separate border-spacing-0" style="min-width:100%;">
         <thead><tr class="bg-gray-100 text-gray-600">${ths.join('')}</tr></thead>
         <tbody>${tbody}</tbody>
       </table>
     </div>
   </div>`;
 }
+function eqRerenderTable() {
+  const wrap = document.getElementById('eqTableWrap');
+  const sc = document.getElementById('eqTableScroll');
+  const left = sc ? sc.scrollLeft : 0;
+  if (wrap) wrap.innerHTML = renderExamQueryTable();
+  const sc2 = document.getElementById('eqTableScroll');
+  if (sc2) sc2.scrollLeft = left;
+  eqBindScrollSync();
+}
+function eqPinRow(classId, name, event) {
+  if (event) { event.preventDefault(); event.stopPropagation(); }
+  const key = classId + '|' + name;
+  eqPinnedKey = (eqPinnedKey === key) ? '' : key;
+  eqRerenderTable();
+}
 function eqSetSort(col, event) {
   if (event) { event.preventDefault(); event.stopPropagation(); }
   if (eqSortCol === col) eqSortDesc = !eqSortDesc;
   else { eqSortCol = col; eqSortDesc = true; }
-  const wrap = document.getElementById('eqTableWrap');
-  if (wrap) wrap.innerHTML = renderExamQueryTable();
-  eqBindScrollSync();
+  eqRerenderTable();
   const sel = document.getElementById('eqSortCol');
   if (sel) sel.value = eqSortCol;
 }
