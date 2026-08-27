@@ -73,6 +73,7 @@ function defaultState() {
         { id: 'seating', label: '座次表', icon: '🪑' },
         { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
+        { id: 'behavior', label: '行为记录', icon: '📋' },
       ]},
       { section: '减负工具', items: [
         { id: 'exam', label: '成绩管理', icon: '📊' },
@@ -945,7 +946,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -998,7 +999,7 @@ function setActiveClass(cls) {
   selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore'];
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(); render();
 }
@@ -1013,7 +1014,7 @@ function renderTopBar() {
   </div>`;
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
-    seating: '座次表', classRecord: '课堂记录',
+    seating: '座次表', classRecord: '课堂记录', behavior: '行为记录',
     homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
     examscore: '考试赋分', positions: '职务与值日管理',
   };
@@ -1063,7 +1064,7 @@ function renderFab() {
 function renderPage() {
   const map = {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
-    seating: renderSeating, classRecord: renderClassRecord,
+    seating: renderSeating, classRecord: renderClassRecord, behavior: renderBehavior,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
     search: renderGlobalSearch, profile: renderStudentProfile,
@@ -1813,18 +1814,26 @@ function pickRecordType(btn) {
   btn.classList.add('bg-primary','text-white'); btn.classList.remove('border-gray-200');
   recordType = btn.dataset.type;
 }
+// 行为记录同步写入班级日志（带 behaviorId 反向标记，便于删除时清理）
+function logBehaviorToClassLog(recId, name, type, content, date) {
+  if (!state.classLogs) state.classLogs = [];
+  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId });
+}
 function saveRecord(id) {
   const content = document.getElementById('recContent').value.trim();
   const date = document.getElementById('recDate').value.trim() || todayLabel;
   if(!content) return alert('请输入记录内容');
   lastRecordContent = content;
   const s = state.students.find(x=>x.id===id);
-  s.records.unshift({ id: uid(), type: recordType, date, content });
+  const recId = uid();
+  s.records.unshift({ id: recId, type: recordType, date, content });
+  logBehaviorToClassLog(recId, s.name, recordType, content, date);
   save(); closeModal(); openStudentProfile(id);
 }
 function deleteRecord(sid, rid) {
   const s = state.students.find(x=>x.id===sid);
   if(!s) return;
+  if (state.classLogs) state.classLogs = state.classLogs.filter(l => l.behaviorId !== rid);
   doDelete(()=>s.records, rid, '记录', () => openStudentProfile(sid));
 }
 
@@ -2494,9 +2503,64 @@ function saveClassRecord() {
   save(); closeModal(); render();
 }
 function deleteClassRecord(id) {
-  const r = state.classRecords.find(x=>x.id===id);
-  if(!r) return;
-  doDelete(()=>state.classRecords, id, (r.content || '课堂记录').slice(0,12));
+  const r = state.classRecords.find(x => x.id === id);
+  if (!r) return;
+  doDelete(() => state.classRecords, id, (r.content || '课堂记录').slice(0, 12));
+}
+
+// ===================== 行为记录（独立页，与课堂记录/班级日志平级） =====================
+let behFilterType = '';
+let behSearchName = '';
+function behSetType(t) { behFilterType = t; render(); }
+function behSetSearch(v) { behSearchName = v; render(); }
+// 聚合当前班级全部学生的非课堂行为（来自各学生 s.records），按类型/姓名筛选
+function renderBehavior() {
+  if (!state.students) state.students = [];
+  const cls = state.activeClass;
+  const list = [];
+  state.students.forEach(s => {
+    if (s.class !== cls) return;
+    (s.records || []).forEach(r => list.push({ sid: s.id, name: s.name, type: r.type, date: r.date, content: r.content, rid: r.id }));
+  });
+  const q = behSearchName.trim().toLowerCase();
+  const filtered = list.filter(r => {
+    const tOk = !behFilterType || r.type === behFilterType;
+    const nOk = !q || r.name.toLowerCase().includes(q) || (r.content || '').toLowerCase().includes(q);
+    return tOk && nOk;
+  });
+  const tabs = [
+    { id: '', label: '全部' }, { id: 'critic', label: '批评' }, { id: 'praise', label: '表扬' },
+    { id: 'chat', label: '谈心' }, { id: 'leave', label: '请假' },
+  ].map(t => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${behFilterType === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="behSetType('${t.id}')">${t.label}</button>`).join('');
+  const rows = filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
+    <div class="flex-1">
+      <div class="flex items-center gap-2 mb-1 flex-wrap">
+        <span class="text-xs font-medium text-gray-700">${esc(r.name)}</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span>
+        <span class="text-xs text-gray-400">${esc(r.date || '')}</span>
+      </div>
+      <div class="text-sm text-gray-700">${esc(r.content || '')}</div>
+    </div>
+    <button class="text-gray-300 hover:text-red-500 ml-3" onclick="deleteRecord('${r.sid}','${r.rid}')">🗑️</button>
+  </div>`).join('');
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex items-center justify-between">
+      <div class="font-bold text-gray-800">行为记录 <span class="text-xs text-gray-400 font-normal">（共 ${list.length} 条 · 仅显示「${esc(cls)}」非课堂行为，已同步班级日志）</span></div>
+      <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openBehaviorAdd()">+ 添加记录</button>
+    </div>
+    <div class="flex flex-wrap gap-2">${tabs}</div>
+    <div class="relative">
+      <input id="behSearch" value="${esc(behSearchName)}" placeholder="按学生姓名 / 内容搜索…" oninput="behSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
+    </div>
+    <div class="space-y-3">${rows || '<div class="text-gray-400 text-sm">暂无符合条件的行为记录</div>'}</div>
+  </div>`;
+}
+// 选择学生后打开「添加行为记录」表单
+function openBehaviorAdd() {
+  const opts = state.students.filter(s => s.class === state.activeClass)
+    .map(s => `<button class="w-full text-left px-4 py-2.5 rounded-lg hover:bg-primary/5 text-sm" onclick="closeModal(); openRecordForm('${s.id}')">${esc(s.name)} <span class="text-xs text-gray-400">${esc(s.class || '')}</span></button>`).join('');
+  openModal('添加行为记录 · 选择学生', `<div class="space-y-1 max-h-[60vh] overflow-y-auto">${opts || '<div class="text-gray-400 text-sm">当前班级暂无学生，请先在「学生管理」中添加。</div>'}</div>`);
 }
 // 课堂记录科目识别关键词设置
 function openClassRecordSubjectSettings() {
@@ -5649,7 +5713,7 @@ function renderHomePointsCard() {
 // ===================== 一句话记录（自然语言识别） =====================
 // 记录类型：类型标签词（既用于识别、也会从内容中剔除，都是明确的「类型动词」）
 const REC_TYPE_LABELS_WORDS = {
-  critic: ['批评','罚站','罚抄','处罚','违纪','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话'],
+  critic: ['批评','罚站','罚抄','处罚','违纪','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话','不认真','不专心'],
   praise: ['表扬','夸奖','夸','赞','得奖','获奖','奖励','突出','满分','高分','守纪律','好人好事'],
   chat:   ['谈心','谈话','沟通','家访','约谈','开导','安慰','鼓励','交流'],
   leave:  ['请假','病假','事假','请假条','缺席'],
@@ -5733,6 +5797,43 @@ function qrDayExpr(text) {
   if (/昨天|昨日/.test(text)) return '昨天';
   const m = text.match(/本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]/);
   return m ? m[0] : null;
+}
+// 把日期表达式解析为具体日期（格式与记录系统一致：X月X日）
+function qrResolveDate(text) {
+  if (!text) return null;
+  const base = new Date();
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const addDays = n => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const fmt = x => (x.getMonth() + 1) + '月' + x.getDate() + '日';
+  if (/今天|今日/.test(text)) return fmt(d);
+  if (/明天|明日/.test(text)) return fmt(addDays(1));
+  if (/昨天|昨日/.test(text)) return fmt(addDays(-1));
+  if (/前天/.test(text)) return fmt(addDays(-2));
+  const wmap = { '一': 0, '二': 1, '三': 2, '四': 3, '五': 4, '六': 5, '日': 6, '天': 6 };
+  const m = text.match(/[周礼拜]([一二三四五六日天])/);
+  if (!m) return null;
+  const wd = wmap[m[1]];
+  let weekOffset = 0;
+  if (/上周/.test(text)) weekOffset = -1;
+  else if (/下周|下星期|下礼拜/.test(text)) weekOffset = 1;
+  else if (/本周|这周|本星期|本礼拜/.test(text)) weekOffset = 0;
+  const dow = (d.getDay() + 6) % 7; // 周一=0
+  const monday = addDays(-dow);
+  const target = new Date(monday);
+  target.setDate(target.getDate() + wd + weekOffset * 7);
+  return fmt(target);
+}
+// 否定前缀检测：关键字前 1~2 字含 不/没/未/别/无 则视为否定（如「不认真」不是表扬）
+function hasNegBefore(text, kw) {
+  const i = text.indexOf(kw);
+  if (i <= 0) return false;
+  return /[不没未别无]$/.test(text.slice(Math.max(0, i - 2), i));
+}
+// 正向情感词（需排除否定形式）
+const QR_POS_WORDS = ['完成', '满分', '优秀', '帮助', '主动', '认真', '进步', '棒', '突出', '得奖'];
+function hasPos(text) {
+  for (const w of QR_POS_WORDS) { if (text.includes(w) && !hasNegBefore(text, w)) return true; }
+  return false;
 }
 
 // 从文本中找出可能的学生姓名（不在名册中的）。
@@ -5838,10 +5939,11 @@ function parseQuickRecord(text) {
   if (!allHits.length) {
     // 整段无学生：按分句拆分，职务/卫生/值日事件交给「关联扣分」，不生成 phantom 卡片
     text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean).forEach(cl => {
-      if (!isDutyClause(cl)) rawSegments.push({ student: null, text: cl });
+      if (!isDutyClause(cl)) rawSegments.push({ student: null, text: cl, date: qrResolveDate(cl) || null });
     });
   } else {
     let i = 0;
+    let prevEnd = 0; // 上一组结束位置，用于把学生名「前面」的日期词（如「昨天李雷…」）也纳入解析
     while (i < allHits.length) {
       let j = i;
       while (j + 1 < allHits.length) {
@@ -5854,21 +5956,24 @@ function parseQuickRecord(text) {
       }
       const groupStart = allHits[j].pos + allHits[j].len;
       const groupEnd = j + 1 < allHits.length ? allHits[j + 1].pos : text.length;
+      const before = text.slice(prevEnd, allHits[i].pos); // 本组首个学生之前的上下文（含前置日期词）
       let sharedText = text.slice(groupStart, groupEnd).trim().replace(/^[，,、；;。.:：!！?？\s]+/, '');
+      const segDate = qrResolveDate(before + sharedText) || null;
       for (let k = i; k <= j; k++) {
         if (allHits[k].unknown) {
-          rawSegments.push({ student: null, unknownName: allHits[k].name, text: sharedText });
+          rawSegments.push({ student: null, unknownName: allHits[k].name, text: sharedText, date: segDate });
         } else {
-          rawSegments.push({ student: allHits[k], text: sharedText });
+          rawSegments.push({ student: allHits[k], text: sharedText, date: segDate });
         }
       }
+      prevEnd = groupEnd;
       i = j + 1;
     }
   }
   // 4) 每个学生片段再按连接词/标点拆分为多个记录项
   const result = { raw: text, segments: [], matched };
   rawSegments.forEach(seg => {
-    const segment = { student: seg.student || null, unknownName: seg.unknownName || '', items: [] };
+    const segment = { student: seg.student || null, unknownName: seg.unknownName || '', items: [], date: seg.date || qrResolveDate(seg.text) || null };
     const rawClauses = seg.text.split(QR_CLAUSE_SPLIT).map(s => s.trim()).filter(Boolean);
     const clauses = [];
     rawClauses.forEach(rc => {
@@ -5953,13 +6058,19 @@ function recognizeClause(text, matched) {
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
     let hitKw = '';
     for (const kw of REC_TYPE_LABELS_WORDS[t]) { if (text.includes(kw)) { hitKw = kw; break; } }
-    if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw)) { hitKw = kw; break; } }
+    if (!hitKw) for (const kw of (REC_TYPE_DESC[t] || [])) { if (text.includes(kw) && !hasNegBefore(text, kw)) { hitKw = kw; break; } }
     if (hitKw) { recType = t; matched.push({ kind: 'type', value: hitKw, type: t }); break; }
   }
-  // 未明确类型时，根据情感/规则推断
+  // 具体分值「加N分 / 扣N分」直接决定类型与正负
+  const mNum = text.match(/([加扣])\s*(\d+(?:\.\d+)?)\s*分|(\d+(?:\.\d+)?)\s*分/);
+  if (mNum) {
+    if (mNum[1] === '加') recType = 'praise';
+    else if (mNum[1] === '扣') recType = 'critic';
+  }
+  // 未明确类型时，根据情感/规则推断（注意否定词：不认真≠表扬）
   if (!recType) {
     if (rules.some(r => r.rule.delta < 0) || /未完成|没交|未做|迟到|说话|违纪|不合格|捣乱|走神|睡觉|抄袭|作弊|打架/.test(text)) recType = 'critic';
-    else if (rules.some(r => r.rule.delta > 0) || /完成|满分|优秀|帮助|主动|认真|进步|棒|突出|优秀|得奖/.test(text)) recType = 'praise';
+    else if (rules.some(r => r.rule.delta > 0) || hasPos(text)) recType = 'praise';
     else if (/请假|病假|事假/.test(text)) recType = 'leave';
     else recType = 'chat';
   }
@@ -5981,7 +6092,18 @@ function recognizeClause(text, matched) {
       if (dim !== 'daily') break;
     }
   }
-  const pointDelta = (recType === 'praise' ? 1 : recType === 'critic' ? -1 : 0);
+  // 具体分值解析：「加N分 / 扣N分 / N分」覆盖固定 ±1；仅对表扬/批评生效
+  let pointDelta = (recType === 'praise' ? 1 : recType === 'critic' ? -1 : 0);
+  if (mNum && (recType === 'praise' || recType === 'critic')) {
+    const val = parseFloat(mNum[2] || mNum[3]);
+    if (mNum[1] === '加') pointDelta = Math.abs(val);
+    else if (mNum[1] === '扣') pointDelta = -Math.abs(val);
+    else pointDelta = (recType === 'critic' ? -1 : 1) * Math.abs(val);
+  }
+  // 严重程度：严重/加重/屡教不改 → 幅度翻倍
+  if (/严重|加重|屡教不改|多次违纪/.test(text)) {
+    pointDelta = pointDelta < 0 ? -Math.abs(pointDelta) * 2 : Math.abs(pointDelta) * 2;
+  }
   return { text, content, subjects, homework: !!homeworkHit, homeworkKeyword: homeworkHit, rules, recType, dim, pointDelta, enabled: true };
 }
 
@@ -6219,18 +6341,31 @@ function qrSave() {
     if (!seg.student) return;
     const s = state.students.find(x => x.id === seg.student.id);
     if (!s) return;
+    const recDate = seg.date || date; // 真实日期归档：优先用识别出的日期（今天/本周三/昨天…）
     seg.items.forEach(item => {
       if (!item.enabled) return;
       const { recType, subjects, rules, homework, content, dim, pointDelta } = item;
       const isHead = s.class === state.headTeacherClass; // 仅班主任班(10班)记行为/积分/请假
       const stuClass = s.class || state.activeClass;
-      // 学生行为记录 / 请假（仅班主任班）
+      const isClassroom = subjects.length > 0; // 带科目 → 视为课堂/作业行为
+      // 学生行为记录 / 请假（仅班主任班；课堂行为只进课堂记录，不重复进行为档案）
       if (recType === 'leave') {
-        if (isHead) { addLeave(s.name, content || '请假', true); nLeave++; }
+        if (isHead) {
+          addLeave(s.name, content || '请假', true);
+          const recId = uid();
+          s.records.unshift({ id: recId, type: 'leave', date: recDate, content: content || '请假' });
+          logBehaviorToClassLog(recId, s.name, 'leave', content || '请假', recDate);
+          nLeave++;
+        }
       } else if (recType) {
-        if (isHead) { s.records.unshift({ id: uid(), type: recType, date, content }); nRecord++; }
+        if (isHead && !isClassroom) {
+          const recId = uid();
+          s.records.unshift({ id: recId, type: recType, date: recDate, content });
+          logBehaviorToClassLog(recId, s.name, recType, content, recDate);
+          nRecord++;
+        }
       }
-      // 基础积分（表扬+1 / 批评-1）（仅班主任班）
+      // 基础积分（表扬+1 / 批评-1 / 严重翻倍）（仅班主任班）
       if (isHead && pointDelta !== 0) {
         ptWriteLog(s.id, dim, pointDelta, `一句话记录·${recordTypeLabel(recType)}：${content.slice(0, 20)}`);
         nPoint++;
@@ -6244,21 +6379,24 @@ function qrSave() {
       });
       // 课堂记录（所有班都记，按学生所属班级归档）
       subjects.forEach(sub => {
-        state.classRecords.unshift({ id: uid(), date, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
+        state.classRecords.unshift({ id: uid(), date: recDate, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
         nClass++;
       });
       // 作业管理（仅当内容像布置/发布作业，而非未完成/未交；按学生所属班级归档）
       if (homework && !/未完成|没交|未做|不交/.test(content)) {
         const hwSubject = subjects[0]?.name || '未指定';
-        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: stuClass, due: date });
+        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: stuClass, due: recDate });
         nHomework++;
       }
     });
   });
-  // 班级日志汇总
-  let logContent = `一句话记录：${qrDraft.raw}`;
-  if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
-  state.classLogs.unshift({ id: uid(), date, content: logContent });
+  // 班级日志：仅在「没有行为记录同步、但存在课堂/作业/积分动作」时保留一句汇总，避免与逐条行为日志重复
+  const wroteBehavior = nRecord > 0 || nLeave > 0;
+  if (!wroteBehavior && (nClass > 0 || nHomework > 0 || nPoint > 0)) {
+    let logContent = `一句话记录：${qrDraft.raw}`;
+    if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
+    state.classLogs.unshift({ id: uid(), date, content: logContent });
+  }
   lastRecordContent = qrDraft.raw;
   save(); closeModal();
   let msg = '已记录';
@@ -7418,16 +7556,27 @@ function pmConfirmDeduct(nodeId,pts,textOverride){
   const chain=pmGetDeductionChain(nodeId,day);
   if(!chain.length) return alert('未识别到可扣分人员');
   const reason=(day?day+' ':'')+(node?node.label:'')+' 关联扣分';
+  const behDate=qrResolveDate(text)||todayLabel;
   const batchId=uid();
-  let cnt=0;
+  let cnt=0, behCnt=0;
   chain.forEach(p=>{
     const sid=pmStudentIdByName(p.name);
     if(!sid) return;
     ptWriteLog(sid,'post',-Math.abs(pts),reason,batchId,'deduct');
     cnt++;
+    const stu=state.students.find(x=>x.id===sid);
+    if(stu && stu.class===state.headTeacherClass){
+      const recId=uid();
+      const c=(node?node.label:'')+'卫生/值日不合格'+(p.pos?('（'+p.pos+'）'):'')+(day?('，'+day):'');
+      stu.records.unshift({ id:recId, type:'critic', date:behDate, content:c });
+      logBehaviorToClassLog(recId, stu.name, 'critic', c, behDate);
+      behCnt++;
+    }
   });
   save(); render();
-  alert('已对 '+cnt+' 人各扣 '+pts+' 分（任职赋分维度，可在积分管理-日志查看/撤销）。');
+  let msg='已对 '+cnt+' 人各扣 '+pts+' 分（任职赋分维度，可在积分管理-日志查看/撤销）。';
+  if(behCnt) msg+=' 并为 '+behCnt+' 名本班学生补记了「卫生/值日不合格」行为记录（已同步班级日志）。';
+  alert(msg);
 }
 // 首页「一句话记录」中的关联扣分确认
 function pmConfirmQrDeduct(){
