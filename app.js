@@ -6321,7 +6321,6 @@ function openLockSettings() {
         <input type="checkbox" id="defaultLockedCheck" data-lock-allow ${state.defaultLocked ? 'checked' : ''} onchange="state.defaultLocked=this.checked; save();" class="w-4 h-4 text-primary rounded" />
         <span>每次打开工作台自动进入只读锁定</span>
       </label>
-      <p class="text-[11px] text-gray-400 leading-relaxed">忘记口令时，可用账号固定重置码 <b>teacher2024</b> 解锁。</p>
     </div>`, 'sm');
 }
 function doLock() {
