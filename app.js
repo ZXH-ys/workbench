@@ -1828,13 +1828,18 @@ function saveRecord(id) {
   const recId = uid();
   s.records.unshift({ id: recId, type: recordType, date, content });
   logBehaviorToClassLog(recId, s.name, recordType, content, date);
-  save(); closeModal(); openStudentProfile(id);
+  save(); closeModal();
+  // 若在行为记录页添加，直接刷新该页（避免弹到学生档案导致列表不更新）
+  if (currentRoute === 'behavior') { render(); toast('已添加行为记录'); }
+  else openStudentProfile(id);
 }
 function deleteRecord(sid, rid) {
   const s = state.students.find(x=>x.id===sid);
   if(!s) return;
   if (state.classLogs) state.classLogs = state.classLogs.filter(l => l.behaviorId !== rid);
-  doDelete(()=>s.records, rid, '记录', () => openStudentProfile(sid));
+  // 若在行为记录页删除，删除后刷新该页；否则回到学生档案
+  if (currentRoute === 'behavior') doDelete(()=>s.records, rid, '记录', null);
+  else doDelete(()=>s.records, rid, '记录', () => openStudentProfile(sid));
 }
 
 // ===================== Templates =====================
