@@ -3153,8 +3153,12 @@ function openColumnManager() {
   const scrollTop = old ? old.scrollTop : 0;
   const scrollLeft = old ? old.scrollLeft : 0;
   const cols = examColumns();
-  const rows = cols.map(c => `
+  const rows = cols.map((c, i) => `
     <div class="flex items-center gap-2 py-2 border-b last:border-0" data-key="${esc(c.key)}">
+      <div class="flex flex-col gap-0.5">
+        <button class="text-gray-400 hover:text-primary leading-none ${i === 0 ? 'opacity-30 cursor-not-allowed' : ''}" ${i === 0 ? '' : `onclick="cmMoveUp('${esc(c.key)}')"`} title="上移">▲</button>
+        <button class="text-gray-400 hover:text-primary leading-none ${i === cols.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}" ${i === cols.length - 1 ? '' : `onclick="cmMoveDown('${esc(c.key)}')"`} title="下移">▼</button>
+      </div>
       <input class="flex-1 border rounded-lg p-2 text-sm" value="${esc(c.key)}" onchange="cmRename('${esc(c.key)}', this.value)">
       <select class="border rounded-lg p-2 text-sm" onchange="cmSetType('${esc(c.key)}', this.value)">
         <option value="score" ${c.type === 'score' ? 'selected' : ''}>分数科目</option>
@@ -3165,7 +3169,7 @@ function openColumnManager() {
     </div>`).join('');
   openModal('⚙️ 预设列管理（科目 / 排名列）', `
     <div class="space-y-3">
-      <p class="text-xs text-gray-500">可手动增删科目与排名列；新建后，导入 / 单条录入 / 分析筛选中即可选用。删除会一并清除该列已有的成绩记录。</p>
+      <p class="text-xs text-gray-500">可手动增删科目与排名列；新建后，导入 / 单条录入 / 分析筛选中即可选用。删除会一并清除该列已有的成绩记录。列的上下顺序会同步到「成绩查询」的列顺序。</p>
       <div id="cmRows" class="max-h-72 overflow-y-auto">${rows || '<p class="text-xs text-gray-400">暂无列，请在下方添加。</p>'}</div>
       <div class="flex gap-2 pt-1">
         <input id="cmNewKey" class="flex-1 border rounded-lg p-2 text-sm" placeholder="新列名称，如：道法">
@@ -3204,6 +3208,20 @@ function cmSetType(key, type) {
 }
 function cmToggleEnabled(key) {
   toggleExamColumnEnabled(key); save();
+}
+function cmMoveUp(key) {
+  const cols = state.examData.columns || defaultExamColumns();
+  const idx = cols.findIndex(c => c.key === key);
+  if (idx <= 0) return;
+  [cols[idx - 1], cols[idx]] = [cols[idx], cols[idx - 1]];
+  save(); openColumnManager();
+}
+function cmMoveDown(key) {
+  const cols = state.examData.columns || defaultExamColumns();
+  const idx = cols.findIndex(c => c.key === key);
+  if (idx < 0 || idx >= cols.length - 1) return;
+  [cols[idx], cols[idx + 1]] = [cols[idx + 1], cols[idx]];
+  save(); openColumnManager();
 }
 function scoreToGrade(score, pass, good) {
   if (score >= good) return 'A';
