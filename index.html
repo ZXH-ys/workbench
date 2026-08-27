@@ -2,8 +2,15 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>班主任工作台</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#f06292">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="班主任台">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/icon-192.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -174,6 +181,24 @@
     html.dark .free-node{background:#222233;border-color:#33334a;color:#ececf4}
     html.dark .free-node:hover{border-color:#6366f1}
     html.dark .org-chart li::before,html.dark .org-chart li::after,html.dark .org-chart ul ul::before{border-color:#3a3a5c}
+
+    /* ===== 大屏 / 智慧屏幕适配（投影给学生看） ===== */
+    @media (min-width: 1600px) {
+      body { font-size: 17px; }
+      #main-content { padding: 2rem 2.5rem !important; }
+    }
+    @media (min-width: 2200px) {
+      body { font-size: 20px; }
+      #main-content { padding: 3rem 4rem !important; }
+      .text-2xl { font-size: 1.75rem; }
+    }
+    /* ===== 手机端微调 ===== */
+    @media (max-width: 768px) {
+      #main-content { padding: 1rem !important; }
+      header { padding-left: 1rem !important; padding-right: 1rem !important; }
+      .fab { bottom: 1rem; right: 1rem; width: 3.5rem; height: 3.5rem; font-size: 1.5rem; }
+      .modal-bg > div { margin: 0; max-height: 100vh; height: 100%; border-radius: 0; }
+    }
   </style>
 </head>
 <body class="bg-surface text-gray-700 h-screen overflow-hidden">

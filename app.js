@@ -60,6 +60,8 @@ function defaultState() {
     classes: [{ id: '10班', name: '10班', role: 'head' }, { id: '9班', name: '9班', role: 'teacher' }],
     headTeacherClass: '10班',
     activeClass: '10班',
+    locked: false,
+    lockPass: '',
     nav: [
       { id: 'home', label: '工作台首页', icon: '🏠' },
       { section: '日常记录', items: [
@@ -321,7 +323,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
@@ -935,7 +937,7 @@ function render() {
 function renderSidebar() {
   const buildItem = (item) => {
     const active = currentRoute === item.id ? 'active' : '';
-    return `<div class="sidebar-item ${active} flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer text-sm" data-route="${item.id}">
+    return `<div class="sidebar-item ${active} flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer text-sm" data-route="${item.id}" data-lock-allow>
       <span class="text-base">${item.icon}</span>
       <span class="font-medium">${item.label}</span>
     </div>`;
@@ -970,7 +972,7 @@ function renderSidebar() {
       </nav>
       <div class="p-4 border-t space-y-2">
         <div class="text-xs text-gray-400">${formatDate(now)}</div>
-        <button class="w-full text-xs border rounded py-1.5 hover:bg-gray-50" onclick="openSettings()">⚙️ 设置</button>
+        <button class="w-full text-xs border rounded py-1.5 hover:bg-gray-50" data-lock-allow onclick="openSettings()">⚙️ 设置</button>
       </div>
     </aside>`;
 }
@@ -1001,8 +1003,12 @@ function setActiveClass(cls) {
 }
 
 function renderTopBar() {
-  const classSwitch = `<div class="flex items-center gap-1 bg-gray-100 rounded-full p-0.5 mr-2">
-    ${(state.classes || []).map(c => `<button onclick="setActiveClass('${c.id}')" class="text-xs px-3 py-1 rounded-full transition ${state.activeClass===c.id?'bg-white text-primary shadow-sm font-medium':'text-gray-500 hover:text-gray-700'}">${c.name}</button>`).join('')}
+  const lockBanner = isLocked() ? `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
+    <span>🔒 只读模式：当前仅可查看，所有修改已禁用</span>
+    <button data-lock-allow onclick="doUnlockPrompt()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">🔓 解锁</button>
+  </div>` : '';
+  const classSwitch = `<div class="flex items-center gap-1 bg-gray-100 rounded-full p-0.5 mr-2 overflow-x-auto max-w-[60vw]">
+    ${(state.classes || []).map(c => `<button data-lock-allow onclick="setActiveClass('${c.id}')" class="text-xs px-3 py-1 rounded-full transition whitespace-nowrap ${state.activeClass===c.id?'bg-white text-primary shadow-sm font-medium':'text-gray-500 hover:text-gray-700'}">${c.name}</button>`).join('')}
   </div>`;
   const titles = {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
@@ -1010,15 +1016,15 @@ function renderTopBar() {
     homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
     examscore: '考试赋分', positions: '职务与值日管理',
   };
-  const menuBtn = `<button id="menuBtn" onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
-  const themeBtn = `<button id="themeToggle" onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
-  const searchBox = `<div class="flex items-center gap-2 border border-gray-200 rounded-full px-3 py-1.5 bg-gray-50" style="min-width:220px;">
+  const menuBtn = `<button id="menuBtn" data-lock-allow onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
+  const themeBtn = `<button id="themeToggle" data-lock-allow onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
+  const searchBox = `<div data-lock-allow class="hidden md:flex items-center gap-2 border border-gray-200 rounded-full px-3 py-1.5 bg-gray-50" style="min-width:220px;">
     <span class="text-gray-400 text-sm">🔍</span>
-    <input id="gsInput" value="${esc(gsQuery)}" oninput="gsSetQuery(this.value)" onkeydown="if(event.key==='Enter')gsOpen()" placeholder="搜索姓名/科目，如：张三 数学" class="bg-transparent outline-none text-sm w-40">
-    <button onclick="gsOpen()" class="text-primary text-xs font-medium hover:underline">搜索</button>
+    <input id="gsInput" data-lock-allow value="${esc(gsQuery)}" oninput="gsSetQuery(this.value)" onkeydown="if(event.key==='Enter')gsOpen()" placeholder="搜索姓名/科目，如：张三 数学" class="bg-transparent outline-none text-sm w-40">
+    <button data-lock-allow onclick="gsOpen()" class="text-primary text-xs font-medium hover:underline">搜索</button>
   </div>`;
   const syncBadge = `<span id="sync-badge" class="text-[11px] text-gray-400 mr-1"></span>`;
-  const logoutBtn = `<button onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>`;
+  const logoutBtn = `<button data-lock-allow onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>`;
   let extra = '';
   if (currentRoute === 'points') {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
@@ -1030,7 +1036,7 @@ function renderTopBar() {
         <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openPtAdjust(null,'daily',1)">+ 加减分</button>
         ${syncBadge}${themeBtn}${logoutBtn}
       </div>
-    </header>`;
+    </header>${lockBanner}`;
   }
   if (currentRoute === 'home') extra = `<button onclick="openQuickRecord()" class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">+ 一句话记录</button>`;
   else if (currentRoute === 'schedule') extra = `<button data-periods class="text-sm text-gray-500 hover:text-primary mr-2">⚙️ 设置节次</button><button data-addcourse class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark">+ 添加课程</button>`;
@@ -1044,11 +1050,12 @@ function renderTopBar() {
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
     ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>${searchBox}
-    <div class="flex items-center gap-3">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
-  </header>`;
+    <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
+  </header>${lockBanner}`;
 }
 
 function renderFab() {
+  if (isLocked()) return '';
   return `<button class="fab absolute bottom-6 right-6 w-12 h-12 rounded-full text-white flex items-center justify-center text-xl hover:scale-105 transition" onclick="openFabDefault()" title="快速记录">✏️</button>`;
 }
 
@@ -6189,8 +6196,98 @@ function openSettings() {
       <button class="p-4 rounded-xl border border-violet-200 text-violet-600 hover:bg-violet-50 flex flex-col items-center gap-2" onclick="closeModal(); openChangePassword()">
         <span class="text-2xl">🔑</span><span>修改密码</span>
       </button>
+      <button class="p-4 rounded-xl border border-amber-200 text-amber-600 hover:bg-amber-50 flex flex-col items-center gap-2" onclick="closeModal(); openLockSettings()">
+        <span class="text-2xl">🔒</span><span>只读锁定</span>
+      </button>
     </div>
     <p class="text-[11px] text-gray-400 mt-4 text-center">修改密码需先验证固定口令，忘记口令请导出数据后重置应用</p>`, 'md');
+}
+
+// ===================== 只读锁定（大屏展示防误改） =====================
+function isLocked() { return !!state.locked; }
+
+function openLockSettings() {
+  const hasPass = !!(state.lockPass && state.lockPass.length);
+  openModal('只读锁定', `
+    <div class="space-y-4">
+      <div class="text-sm text-gray-600 rounded-xl p-3 bg-gray-50">🔓 当前：<b>可编辑</b>。点击「进入只读锁定」后，学生只能查看、不能修改；解锁需输入口令。</div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">${hasPass ? '输入口令（或留空沿用已设口令；输入新口令可重置）' : '设置锁定口令（至少4位）'}</label>
+        <input id="lockPassInput" type="password" data-lock-allow class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="${hasPass ? '输入口令' : '设置新口令'}" />
+      </div>
+      <button class="w-full bg-primary text-white py-2.5 rounded-full hover:bg-primaryDark" onclick="doLock()">🔒 进入只读锁定</button>
+      <p class="text-[11px] text-gray-400">忘记口令时，可用账号固定重置码（teacher2024）解锁。</p>
+    </div>`, 'sm');
+}
+function doLock() {
+  const v = (document.getElementById('lockPassInput').value || '').trim();
+  if (!state.lockPass) {
+    if (v.length < 4) { toast('请先设置至少4位口令'); return; }
+    state.lockPass = v;
+  } else if (v.length >= 4) {
+    state.lockPass = v; // 重置口令
+  }
+  state.locked = true;
+  save(); closeModal(); render();
+  toast('已锁定为只读模式');
+}
+function _lockPassVal() {
+  const a = document.getElementById('lockPassInput'); if (a && a.value !== '') return a.value.trim();
+  const b = document.getElementById('unlockPass'); if (b) return b.value.trim();
+  return '';
+}
+function doUnlockPrompt() {
+  openModal('解锁工作台', `
+    <div class="space-y-3">
+      <p class="text-sm text-gray-600">请输入锁定口令以解锁编辑。</p>
+      <input id="unlockPass" type="password" data-lock-allow class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="锁定口令 / 账号重置码" onkeydown="if(event.key==='Enter')doUnlock()" />
+      <p id="unlockMsg" class="text-xs h-4"></p>
+      <div class="flex gap-2">
+        <button class="flex-1 border py-2 rounded-full" data-lock-allow onclick="closeModal()">取消</button>
+        <button class="flex-1 bg-primary text-white py-2 rounded-full" data-lock-allow onclick="doUnlock()">解锁</button>
+      </div>
+    </div>`, 'sm');
+}
+function doUnlock() {
+  const v = _lockPassVal();
+  if (v === state.lockPass || v === RESET_PASSWORD_CODE) {
+    state.locked = false; save(); closeModal(); render();
+    toast('已解锁，可正常编辑');
+  } else {
+    const m = document.getElementById('unlockMsg');
+    if (m) { m.textContent = '口令错误'; m.className = 'text-xs text-red-500 h-4'; }
+    toast('口令错误');
+  }
+}
+
+// 全局只读拦截：锁定时阻止一切「修改类」交互，仅放行标记为 data-lock-allow 的查看/导航控件
+let _lockGuardReady = false;
+function initLockGuard() {
+  if (_lockGuardReady) return; _lockGuardReady = true;
+  const blockTypes = ['click', 'dblclick', 'input', 'change', 'dragstart', 'drop', 'submit'];
+  blockTypes.forEach(type => {
+    document.addEventListener(type, function (e) {
+      if (!state || !state.locked) return;
+      if (isAllowedView(e.target)) return;
+      if (type === 'input' || type === 'change') {
+        const t = e.target;
+        if (!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'))) return;
+      }
+      e.preventDefault();
+      if (type === 'click' || type === 'dblclick') { e.stopPropagation(); toast('🔒 只读模式：请先解锁后再操作'); }
+    }, true);
+  });
+}
+function isAllowedView(el) {
+  if (!el || !el.closest) return false;
+  if (el.closest('[data-lock-allow]')) return true;
+  let n = el;
+  while (n && n !== document.documentElement) {
+    const oc = n.getAttribute && n.getAttribute('onclick');
+    if (oc && /openProfile|navigate\(|doUnlockPrompt|openLockSettings|closeModal/.test(oc)) return true;
+    n = n.parentElement;
+  }
+  return false;
 }
 
 // 班级设置：只改显示名称与角色，内部 id 保持不变（零数据迁移）
@@ -6506,9 +6603,9 @@ function confirmClearData() {
 function openModal(title, body, size='md') {
   const width = size === 'xl' ? 'max-w-4xl' : size === 'lg' ? 'max-w-2xl' : size === 'sm' ? 'max-w-sm' : 'max-w-lg';
   document.getElementById('modal-root').innerHTML = `
-    <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="if(event.target===this) closeModal()">
+    <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" data-lock-allow onclick="if(event.target===this) closeModal()">
       <div class="bg-white rounded-2xl shadow-2xl w-full ${width} max-h-[90vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
-        <div class="px-6 py-4 border-b flex items-center justify-between"><h3 class="font-bold text-gray-800">${esc(title)}</h3><button class="text-gray-400 hover:text-gray-600 text-xl" onclick="closeModal()">&times;</button></div>
+        <div class="px-6 py-4 border-b flex items-center justify-between"><h3 class="font-bold text-gray-800">${esc(title)}</h3><button data-lock-allow class="text-gray-400 hover:text-gray-600 text-xl" onclick="closeModal()">&times;</button></div>
         <div class="p-6 overflow-y-auto">${body}</div>
       </div>
     </div>`;
@@ -7233,5 +7330,15 @@ if (AUTH_TOKEN) {
   maybeOnboard();
 } else {
   showLogin();
+}
+
+// 只读锁定拦截（仅注册一次）
+initLockGuard();
+
+// PWA：注册 Service Worker（网络优先，保证部署更新立即可见；离线时回退缓存）
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  });
 }
 

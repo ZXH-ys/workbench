@@ -1,0 +1,16 @@
+{
+  "name": "班主任工作台",
+  "short_name": "班主任台",
+  "description": "班主任日常工作台：积分、职务、成绩、课堂记录、作业与家校沟通一体化管理",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f5f5",
+  "theme_color": "#f06292",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
