@@ -3113,20 +3113,14 @@ function openPtImport() {
         <label class="block text-xs text-gray-500 mb-1">粘贴 / 上传数据</label>
         <p class="text-[11px] text-gray-400 mb-1">每行一个：<code>姓名,分值</code> 或 <code>姓名,分值,日期</code>（制表符或逗号分隔）。按姓名匹配学生，累加分值。首行若是标题自动跳过。</p>
         <textarea id="ptImpText" rows="8" class="w-full border rounded-lg p-3 text-sm" placeholder="张明轩,5&#10;王浩然,3&#10;李思雨,-2,2026-08-01"></textarea>
-        <div class="mt-2"><input id="ptImpFile" type="file" accept=".csv,.txt,.xlsx" class="w-full text-sm"></div>
+        <div class="mt-2"><input id="ptImpFile" type="file" accept=".csv,.txt,.xlsx,.xls" class="w-full text-sm"></div>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <button class="border py-2 rounded-full hover:bg-gray-50" onclick="document.getElementById('ptImpText').value='姓名,分值,日期（可选）\\n张明轩,5\\n王浩然,3\\n李思雨,-2,2026-08-01'">填入示例</button>
         <button class="bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="doPtImport()">导入并累加</button>
       </div>
     </div>`, 'lg');
-  const f = document.getElementById('ptImpFile');
-  if (f) f.addEventListener('change', () => {
-    const file = f.files[0]; if (!file) return;
-    const r = new FileReader();
-    r.onload = e => { const t = document.getElementById('ptImpText'); if (t) t.value = e.target.result; };
-    r.readAsText(file);
-  });
+  bindFileToText('ptImpFile', 'ptImpText');
 }
 function doPtImport() {
   const dim = document.getElementById('ptImpDim').value;
