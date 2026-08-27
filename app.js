@@ -2634,14 +2634,30 @@ function nowStamp() {
 }
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
 function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId === sid); }
-// ========== 积分计算缓存：进入页面/数据变化时一次性构建，之后点击 tab、切换折算只读取缓存，不再 O(n²) 重算 ==========
-let _ptCache = { sig: '', raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
-function ptCacheKey() {
-  examScoreData(); // 确保考试数据缓存与签名最新，复用 _escSig 作为考试部分签名
-  const logsSig = (state.points.logs || []).map(l => (l.id || '') + ':' + (l.delta || 0) + ':' + (l.dim || '') + ':' + (l.studentId || '') + ':' + (l.date || '')).join('|');
-  const stSig = (state.students || []).map(s => (s.id || '') + ':' + (s.class || '')).join('|');
-  return [state.activeClass, state.headTeacherClass, state.points.calcStartDate, logsSig, stSig, JSON.stringify(state.convertRatios), _escSig].join('#');
+// ========== 积分计算缓存：按维度独立缓存，支持显式刷新，不主动全局重算 ==========
+let _ptCache = { sig: {}, raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
+
+function ptBaseSig() { return [state.activeClass, state.headTeacherClass, state.points.calcStartDate].join('#'); }
+function ptLogsSig(dim) {
+  return state.points.logs.filter(l => l.dim === dim).map(l => `${l.id || ''}:${l.studentId || ''}:${l.delta || 0}:${l.date || ''}`).join('|');
 }
+function ptPositionsSig() {
+  const P = state.positions || {};
+  const structure = (P.structure || []).map(p => `${p.id}:${p.pts == null ? '' : p.pts}:${p.category || ''}`).join('|');
+  const assign = Object.keys(P.assign || {}).map(k => `${k}=${(P.assign[k] || []).join(',')}`).join('|');
+  const reps = (P.representatives || []).map(r => `${r.id}:${r.pts == null ? '' : r.pts}:${r.names.join(',')}`).join('|');
+  return [structure, assign, reps].join('#');
+}
+function ptDimSig(dim) {
+  examScoreData(); // 确保 _escSig 最新
+  const base = ptBaseSig();
+  const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
+  if (dim === 'exam') return [base, cap, _escSig].join('#');
+  if (dim === 'post') return [base, cap, ptLogsSig('post'), ptPositionsSig()].join('#');
+  return [base, cap, ptLogsSig(dim)].join('#');
+}
+function ptAllSig() { return POINT_DIMS.map(d => _ptCache.sig[d.id] || '').join('##'); }
+
 // 底层：单人单维度原始分（含考试赋分并入，仅班主任班）
 function ptDimScoreRaw(sid, dim) {
   let v = ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim)));
@@ -2651,42 +2667,66 @@ function ptDimScoreRaw(sid, dim) {
   }
   return v;
 }
-function ptEnsureCache() {
-  const sig = ptCacheKey();
-  if (_ptCache.sig === sig) return;
-  _ptCache.sig = sig;
-  _ptCache.raw = {}; _ptCache.conv = {}; _ptCache.totalConv = {}; _ptCache.totalRaw = {};
+
+// 重算单个维度（原始分 + 折算分）并写缓存
+function ptComputeDim(dim) {
+  _ptCache.raw[dim] = {}; _ptCache.conv[dim] = {};
   const clsStudents = state.students.filter(s => s.class === state.activeClass);
-  const ids = clsStudents.map(s => s.id);
-  POINT_DIMS.forEach(d => {
-    _ptCache.raw[d.id] = {}; _ptCache.conv[d.id] = {};
-    let mx = 0;
-    ids.forEach(sid => { const v = ptDimScoreRaw(sid, d.id) || 0; _ptCache.raw[d.id][sid] = v; if (v > mx) mx = v; });
-    const cap = state.convertRatios[d.id] != null ? state.convertRatios[d.id] : 0;
-    ids.forEach(sid => {
-      const raw = _ptCache.raw[d.id][sid] || 0;
-      _ptCache.conv[d.id][sid] = (cap <= 0 || raw < 0) ? raw : (mx > 0 ? (raw / mx) * cap : 0);
-    });
+  const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
+  let mx = 0;
+  clsStudents.forEach(stu => {
+    const v = ptDimScoreRaw(stu.id, dim) || 0;
+    _ptCache.raw[dim][stu.id] = v;
+    if (v > mx) mx = v;
   });
-  ids.forEach(sid => {
-    let c = 0; POINT_DIMS.forEach(d => { c += _ptCache.conv[d.id][sid] || 0; });
-    _ptCache.totalConv[sid] = c;
-    _ptCache.totalRaw[sid] = ptTotal(sid); // 纯日志和（不含考试赋分并入），与原 ptRawTotal 语义一致
+  clsStudents.forEach(stu => {
+    const raw = _ptCache.raw[dim][stu.id] || 0;
+    _ptCache.conv[dim][stu.id] = (cap <= 0 || raw < 0) ? raw : (mx > 0 ? (raw / mx) * cap : 0);
   });
+  _ptCache.sig[dim] = ptDimSig(dim);
 }
+
+// 懒加载：只在没有缓存时计算一次；不主动刷新脏数据
+function ptEnsureCacheDim(dim) { if (!_ptCache.sig[dim]) ptComputeDim(dim); }
+// 该维度当前数据是否与缓存不一致
+function ptIsDimDirty(dim) { return !!_ptCache.sig[dim] && _ptCache.sig[dim] !== ptDimSig(dim); }
+// 显式刷新单个维度（卡片按钮用）
+function ptRefreshDim(dim) {
+  delete _ptCache.sig[dim];
+  ptComputeDim(dim);
+  // 总分依赖各维度缓存，清除总分缓存，下次访问时按当前各维度缓存重算
+  delete _ptCache.sig.all;
+  render();
+  toast(`${dimLabel(dim)} 已刷新`);
+}
+
+function ptComputeAll() {
+  const clsStudents = state.students.filter(s => s.class === state.activeClass);
+  clsStudents.forEach(stu => {
+    let c = 0; POINT_DIMS.forEach(d => { c += (_ptCache.conv[d.id] && _ptCache.conv[d.id][stu.id]) || 0; });
+    _ptCache.totalConv[stu.id] = c;
+    _ptCache.totalRaw[stu.id] = ptTotal(stu.id);
+  });
+  _ptCache.sig.all = ptAllSig();
+}
+function ptEnsureCacheAll() {
+  POINT_DIMS.forEach(d => { if (!_ptCache.sig[d.id]) ptComputeDim(d.id); });
+  if (!_ptCache.sig.all) ptComputeAll();
+}
+
 function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
-function ptDimScore(sid, dim) { ptEnsureCache(); return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
+function ptDimScore(sid, dim) { ptEnsureCacheDim(dim); return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
 function ptClassSum(dim) {
-  ptEnsureCache();
-  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + (ptDimScore(s.id, dim) || 0), 0);
+  ptEnsureCacheDim(dim);
+  return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ((_ptCache.raw[dim] && _ptCache.raw[dim][s.id]) || 0), 0);
 }
 // 全班某维度折算分之和（用于积分管理页顶部卡片，随折算/原始模式切换）
 function ptClassConvSum(dim) {
-  ptEnsureCache();
+  ptEnsureCacheDim(dim);
   return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0), 0);
 }
 function ptRanked(dim) {
-  ptEnsureCache();
+  if (dim === 'all') ptEnsureCacheAll(); else ptEnsureCacheDim(dim);
   const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({
     s,
     score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0) : ptDimScore(s.id, dim))
@@ -2715,9 +2755,9 @@ function fmtScore(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
 function ptSigned(d) { return (d >= 0 ? '+' : '') + fmtScore(d); }
 function ptStudentName(sid) { const s = state.students.find(x => x.id === sid); return s ? s.name : '（已删除学生）'; }
 // ===== 折算：各维度原始分最高分映射到设置的折算满分 =====
-function ptConvDim(sid, dim) { ptEnsureCache(); return (_ptCache.conv[dim] && _ptCache.conv[dim][sid]) || 0; }
-function ptConvTotal(sid) { ptEnsureCache(); return _ptCache.totalConv[sid] || 0; }
-function ptRawTotal(sid) { ptEnsureCache(); return _ptCache.totalRaw[sid] || 0; }
+function ptConvDim(sid, dim) { ptEnsureCacheDim(dim); return (_ptCache.conv[dim] && _ptCache.conv[dim][sid]) || 0; }
+function ptConvTotal(sid) { ptEnsureCacheAll(); return _ptCache.totalConv[sid] || 0; }
+function ptRawTotal(sid) { ptEnsureCacheAll(); return _ptCache.totalRaw[sid] || 0; }
 
 function ptRefreshTabs() {
   document.querySelectorAll('[data-pt-tab]').forEach(b => {
@@ -2756,12 +2796,19 @@ function renderPoints() {
   const weekAdd = ptRecent(7);
   const statCards = POINT_DIMS.map(d => {
     const st = dimStyle(d.id);
+    ptEnsureCacheDim(d.id); // 首次进入自动计算一次，之后保持缓存直到手动刷新
+    const dirty = ptIsDimDirty(d.id);
     const sum = pointsMode === 'conv' ? ptClassConvSum(d.id) : ptClassSum(d.id);
     const active = pointsTab === d.id;
+    const dirtyBadge = dirty ? `<span class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-medium">有更新</span>` : '';
+    const refreshBtn = `<button class="text-[10px] px-1.5 py-0.5 rounded transition ${dirty ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-white/60 text-gray-400 hover:text-gray-600'}" onclick="event.stopPropagation(); ptRefreshDim('${d.id}')" title="刷新${d.label}">${dirty ? '↻ 刷新' : '↻'}</button>`;
     return `<div class="cursor-pointer rounded-2xl p-4 border ${active ? 'border-primary shadow-sm' : 'border-transparent'} ${st.bg} card-hover" onclick="setPtTab('${d.id}')">
-      <div class="text-xs ${st.text} font-medium">${d.icon} ${d.label}</div>
+      <div class="flex items-center justify-between">
+        <div class="text-xs ${st.text} font-medium">${d.icon} ${d.label}${dirtyBadge}</div>
+        ${refreshBtn}
+      </div>
       <div class="text-2xl font-bold ${st.text} mt-1" data-pt-card="${d.id}">${fmtScore(sum)}</div>
-      <div class="text-[10px] text-gray-400 mt-0.5">全班累计</div>
+      <div class="text-[10px] text-gray-400 mt-0.5">全班累计${dirty ? ' · 上次刷新后数据有变化' : ''}</div>
     </div>`;
   }).join('');
 
