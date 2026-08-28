@@ -194,7 +194,8 @@ function defaultState() {
       subjects: [],       // 兼容旧字段，保留
     },
     // ===== 积分折算满分（0 或空表示不折算；>0 表示该维度原始分最高分映射到此分值）=====
-    convertRatios: { sport: 0, daily: 0, exam: 0, post: 0 },
+    // 默认等额 100：四维度封顶各 25%，任一模块都无法独大；放弃任一模块最多丢 25% 总分
+    convertRatios: { sport: 100, daily: 100, exam: 100, post: 100 },
     // ===== 考勤管理 =====
     attendance: {
       members: [],   // [{name, weeklyHome:['一','三','五']}] 固定回家周期（长期保留，跨日不清空）
@@ -236,9 +237,9 @@ function defaultPoints() {
       { id: uid(), dim: 'daily', label: '作业未交', delta: -3, keywords: ['作业未交','未交作业','没交作业'] },
       { id: uid(), dim: 'daily', label: '迟到', delta: -2, keywords: ['迟到'] },
       { id: uid(), dim: 'daily', label: '违反课堂纪律', delta: -5, keywords: ['违反纪律','课堂纪律'] },
-      { id: uid(), dim: 'exam', label: '班级前10名', delta: 10, keywords: ['班级前10','前十名'] },
+      { id: uid(), dim: 'exam', label: '班级前10名', delta: 5, keywords: ['班级前10','前十名'] },
       { id: uid(), dim: 'exam', label: '成绩显著进步', delta: 8, keywords: ['成绩显著进步','显著进步'] },
-      { id: uid(), dim: 'exam', label: '单科第一/满分', delta: 5, keywords: ['单科第一','满分'] },
+      { id: uid(), dim: 'exam', label: '单科第一/满分', delta: 3, keywords: ['单科第一','满分'] },
       { id: uid(), dim: 'exam', label: '考试退步明显', delta: -3, keywords: ['退步明显'] },
       { id: uid(), dim: 'post', label: '履职尽责（月度）', delta: 5, keywords: ['履职尽责'] },
       { id: uid(), dim: 'post', label: '组织活动出色', delta: 5, keywords: ['组织活动出色'] },
@@ -576,15 +577,22 @@ function defaultExamScore() {
       enabled: true,
       column: '校次',                                               // 读取的校次列（来自成绩上传的 rank 列）
       tiers: [                                                      // 校次名次区间 → 赋分（闭区间 [from, to]）
-        { from: 1, to: 10, points: 8 },
-        { from: 11, to: 50, points: 4 },
+        { from: 1, to: 10, points: 5 },
+        { from: 11, to: 50, points: 3 },
         { from: 51, to: 99999, points: 1 }
       ]
     },
     subjectTop: {
       enabled: true,
-      points: 5,                                                    // 班内每科第1名赋分
+      points: 3,                                                    // 班内每科第1名赋分
       scope: 'class'                                                // 'class' | 'school'
+    },
+    progressRank: {
+      enabled: true,
+      standard: 'schoolRank',                                       // 按校次变化判定（对比上次考试）
+      improvePoints: 8,                                             // 校次进步 → 奖励分
+      regressPoints: -3,                                            // 校次退步 → 扣分
+      minTierChange: 1                                              // 最少跨越几个档位才触发（0=任何变化都触发）
     }
   };
 }
@@ -610,6 +618,13 @@ function normalizeExamScore(obj) {
       enabled: !!(o.subjectTop && o.subjectTop.enabled),
       points: (o.subjectTop && typeof o.subjectTop.points === 'number') ? o.subjectTop.points : def.subjectTop.points,
       scope: (o.subjectTop && o.subjectTop.scope) || def.subjectTop.scope
+    },
+    progressRank: {
+      enabled: !!(o.progressRank && o.progressRank.enabled),
+      standard: (o.progressRank && o.progressRank.standard) || def.progressRank.standard,
+      improvePoints: (o.progressRank && typeof o.progressRank.improvePoints === 'number') ? o.progressRank.improvePoints : def.progressRank.improvePoints,
+      regressPoints: (o.progressRank && typeof o.progressRank.regressPoints === 'number') ? o.progressRank.regressPoints : def.progressRank.regressPoints,
+      minTierChange: (o.progressRank && typeof o.progressRank.minTierChange === 'number') ? o.progressRank.minTierChange : def.progressRank.minTierChange
     }
   };
 }
@@ -2680,6 +2695,7 @@ function crRemoveKeyword(i,ki){
 // ===================== Report =====================
 function setReportRange(r) { reportRange = r; render(); }
 function renderReport() {
+  if (reportParentMode) return renderParentReport();
   const clsStudents = state.students.filter(s => s.class === state.activeClass);
   const isMonth = reportRange === 'month';
   const dayWin = isMonth ? 30 : 7;
@@ -2782,6 +2798,7 @@ function renderReport() {
     <div class="font-bold text-gray-800 text-lg">${esc(className(state.activeClass))} · 班级${isMonth ? '月报' : '周报'}</div>
     <div class="flex items-center gap-2 flex-wrap justify-end">
       ${rangeBtn('week','📅 周报')} ${rangeBtn('month','🗓️ 月报')}
+      <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openAttendanceBonusModal()">🏅 全勤结算</button>
       <button class="text-sm ${reportParentMode ? 'bg-primary text-white' : 'text-primary border border-primary'} px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="toggleReportParentMode()">${reportParentMode ? '退出截图模式' : '📸 家长群截图'}</button>
       <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制纯文本</button>
     </div>
@@ -2800,6 +2817,207 @@ function toggleReportParentMode() {
 }
 
 // （「班会 PPT」生成功能曾提供，已在菜单精简时移除入口，相关函数已清理为死代码并删除）
+
+// ===================== 全勤与履职结算（客观判定，不依赖主观打分）=====================
+const ATT_BONUS  = { sport: 15, attend: 5, post: 5 };
+const ATT_AUTO   = { sport: 'attend-sport-month', attend: 'attend-attend-week', post: 'attend-post-week' };
+const ATT_REASON = { sport: '体育打卡全勤(月)+15', attend: '考勤全勤(周)+5', post: '履职到位(周)+5' };
+const ATT_DIM    = { sport: 'sport', attend: 'daily', post: 'post' };
+
+function attWeekRange(ref){ const d=new Date(ref.getFullYear(),ref.getMonth(),ref.getDate()); const dow=(d.getDay()+6)%7; const s=new Date(d); s.setDate(d.getDate()-dow); const e=new Date(s); e.setDate(s.getDate()+6); return {start:s,end:e}; }
+function attMonthRange(ref){ return {start:new Date(ref.getFullYear(),ref.getMonth(),1), end:new Date(ref.getFullYear(),ref.getMonth()+1,0)}; }
+function attInRange(dateStr,start,end){ const d=ptParseDate(dateStr); if(!d) return false; const day=new Date(d.getFullYear(),d.getMonth(),d.getDate()); const s=new Date(start.getFullYear(),start.getMonth(),start.getDate()); const e=new Date(end.getFullYear(),end.getMonth(),end.getDate()); return day.getTime()>=s.getTime() && day.getTime()<=e.getTime(); }
+// 取某生某维度在某区间的积分记录；排除系统自动写入的"全勤奖励"记录，避免自我循环放大
+function attStudentLogsInRange(sid,dim,start,end){ return (state.points.logs||[]).filter(l=>l.studentId===sid && (!dim||l.dim===dim) && attInRange(l.date,start,end) && String(l.auto||'').indexOf('attend-')!==0); }
+function attLateCount(sid,start,end){ let n=0; attStudentLogsInRange(sid,'daily',start,end).forEach(l=>{ if((l.reason||'').indexOf('迟到')>=0) n++; }); return n; }
+function attLeaveCountRange(name,start,end){ let n=0; (state.attendance.logs||[]).forEach(l=>{ if(!attInRange(l.date,start,end)) return; (l.leave||[]).forEach(x=>{ if(x.name===name) n++; }); }); const cur=state.attendance.current; if(cur&&cur.date&&attInRange(cur.date,start,end)&&cur.leave&&Object.prototype.hasOwnProperty.call(cur.leave,name)) n++; return n; }
+function attSportScoreInRange(sid,start,end){ return ptSum(attStudentLogsInRange(sid,'sport',start,end)); }
+function attClassSportMax(start,end){ let mx=0; state.students.filter(s=>s.class===state.activeClass).forEach(s=>{ const v=attSportScoreInRange(s.id,start,end); if(v>mx) mx=v; }); return mx; }
+function attPostBad(sid,start,end){ let bad=false; (state.points.logs||[]).forEach(l=>{ if(l.studentId!==sid||!attInRange(l.date,start,end)) return; if(l.dim==='post'&&l.auto==='job'&&(l.reason||'').indexOf('履职不到位')>=0) bad=true; if(l.auto==='deduct') bad=true; }); return bad; }
+// 判断学生是否有任职（班干部/课代表/值日生等）
+function hasPostRole(sid){
+  const s = (state.students||[]).find(x=>x.id===sid); if(!s) return false;
+  const pos = state.positions || {}; const struct = pos.structure || [];
+  const assign = pos.assign || {};
+  const reps = pos.representatives || [];
+  // 检查 structure 中的职务分配
+  for (const roleId in assign) { if (Array.isArray(assign[roleId]) && assign[roleId].includes(s.id)) return true; }
+  // 检查课代表
+  if (reps.includes(s.id)) return true;
+  // 检查值日轮值
+  const rota = pos.dutyRota || {}; const sched = rota.schedule || [];
+  if (sched.some(day => (day.on || []).includes(s.id) || (day.off || []).includes(s.id))) return true;
+  return false;
+}
+// 计算三类全勤的达标情况（返回每个学生 id -> 是否达标）
+function attComputeBonus(){
+  const today=new Date(); const wk=attWeekRange(today), mo=attMonthRange(today);
+  const cls=state.students.filter(s=>s.class===state.activeClass);
+  const sportMax=attClassSportMax(mo.start,mo.end);
+  const sport={},attend={},post={};
+  cls.forEach(s=>{
+    sport[s.id]= sportMax>0 && Math.abs(attSportScoreInRange(s.id,mo.start,mo.end)-sportMax)<0.001;
+    attend[s.id]= attLateCount(s.id,wk.start,wk.end)===0 && attLeaveCountRange(s.name,wk.start,wk.end)===0;
+    post[s.id]= !attPostBad(s.id,wk.start,wk.end);
+  });
+  return {wk,mo,sportMax,sport,attend,post,cls};
+}
+function openAttendanceBonusModal(){
+  const b=attComputeBonus();
+  const sec=(cat,title,sub,map,reasonFn)=>{
+    const achieved=b.cls.filter(s=>map[s.id]);
+    const missed=b.cls.filter(s=>!map[s.id]);
+    const rows=b.cls.map(s=>{
+      const ok=map[s.id];
+      const reason = !ok && reasonFn ? reasonFn(s) : '';
+      return `<label class="flex items-center gap-2 text-sm py-1 px-2 rounded ${ok?'bg-emerald-50':'bg-red-50/60'}">
+        <input type="checkbox" class="att-chk" data-cat="${cat}" value="${s.id}" ${ok?'checked':''}>
+        <span class="${ok?'text-emerald-700':'text-gray-600 font-medium'}">${esc(s.name)}</span>
+        ${ok ? '<span class="text-[10px] text-emerald-500">✅ 达标</span>' : `<span class="text-[11px] text-red-400">❌ ${esc(reason || '未达标')}</span>`}
+      </label>`;
+    }).join('');
+    const summary = missed.length > 0
+      ? `<div class="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-1.5 mt-2 flex items-center gap-1">
+          💪 还差 <b>${missed.length}</b> 人：${missed.map(s=>esc(s.name)).join('、')}
+         </div>`
+      : `<div class="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-1.5 mt-2">🎉 全班已全部达成！</div>`;
+    return `<div class="rounded-xl border border-gray-100 p-3">
+      <div class="flex items-center justify-between mb-2 gap-2">
+        <div class="font-medium text-gray-700 text-sm">${title} <span class="text-xs text-gray-400">${sub}</span></div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-xs ${missed.length===0 ? 'text-emerald-600' : 'text-amber-600'}">达标 ${achieved.length}/${b.cls.length}</span>
+          <button class="text-xs bg-primary text-white px-2.5 py-1 rounded-full hover:bg-primaryDark" onclick="attSettleBonus('${cat}')">写入 +${ATT_BONUS[cat]}</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-52 overflow-y-auto">${rows}</div>
+      ${summary}
+    </div>`;
+  };
+  // 未达标原因函数
+  const sportReason = (s) => { const diff = attClassSportMax(b.mo.start,b.mo.end) - attSportScoreInRange(s.id,b.mo.start,b.mo.end); return `体育分差 ${diff.toFixed(0)}`; };
+  const attendReason = (s) => {
+    const late = attLateCount(s.id, b.wk.start, b.wk.end);
+    const leave = attLeaveCountRange(s.name, b.wk.start, b.wk.end);
+    if (late > 0 && leave > 0) return `迟到${late}次 + 请假${leave}次`;
+    if (late > 0) return `迟到${late}次`;
+    if (leave > 0) return `请假${leave}次`;
+    return '有缺勤';
+  };
+  const postReason = (s) => {
+    if (!hasPostRole(s.id)) return '无任职';
+    if (attPostBad(s.id, b.wk.start, b.wk.end)) return '有不到位/扣分记录';
+    return '';
+  };
+
+  openModal('🏅 全勤与履职结算', `
+    <div class="space-y-3">
+      <p class="text-xs text-gray-500 leading-relaxed">系统按客观标准自动判定达标名单（✅ 默认勾选）。确认后点「写入」即计入对应维度积分（体育全勤→体育打卡 / 考勤全勤→日常 / 履职到位→任职），可整批撤销。标准：体育全勤=本月体育打卡分达全班最高；考勤全勤=本周迟到0且请假0；履职到位=本周无"履职不到位"记录且无关联扣分。</p>
+      ${sec('sport','🏃 体育打卡全勤(月)','+'+ATT_BONUS.sport+'分/月',b.sport,sportReason)}
+      ${sec('attend','📋 考勤全勤(周)','+'+ATT_BONUS.attend+'分/周',b.attend,attendReason)}
+      ${sec('post','🤝 履职到位(周)','+'+ATT_BONUS.post+'分/周',b.post,postReason)}
+      <button class="w-full text-sm text-gray-400 hover:text-primary" onclick="closeModal()">关闭</button>
+    </div>`, 'md');
+}
+// 把勾选的达标学生写入对应维度积分；先清除本类别上次写入，保证重复结算不叠加
+function attSettleBonus(cat){
+  const auto=ATT_AUTO[cat];
+  state.points.logs=state.points.logs.filter(l=>l.auto!==auto);
+  const ids=Array.from(document.querySelectorAll('.att-chk[data-cat="'+cat+'"]:checked')).map(c=>c.value);
+  const batchId=uid();
+  ids.forEach(sid=>ptWriteLog(sid,ATT_DIM[cat],ATT_BONUS[cat],ATT_REASON[cat],batchId,auto));
+  save(); render();
+  toast(`已写入 ${ids.length} 人 · ${ATT_REASON[cat]}（可在积分明细整批撤销）`);
+}
+// 班级违纪按类型拆分（用于家长周报，不出现积分）
+function classViolationBreakdown(start,end){
+  const cls=state.students.filter(s=>s.class===state.activeClass);
+  const cnt={late:0,leave:0,homework:0,klass:0,hygiene:0};
+  cls.forEach(s=>{
+    (s.records||[]).forEach(r=>{
+      const c=(r.content||'');
+      if(r.type==='critic'){
+        if(c.indexOf('卫生')>=0) cnt.hygiene++;
+        else if(c.indexOf('不交')>=0||c.indexOf('没交')>=0||c.indexOf('未交')>=0||c.indexOf('未完成')>=0) cnt.homework++;
+        else cnt.klass++;
+      }
+    });
+    attStudentLogsInRange(s.id,'daily',start,end).forEach(l=>{ if((l.reason||'').indexOf('迟到')>=0) cnt.late++; });
+    cnt.leave+=attLeaveCountRange(s.name,start,end);
+    (state.points.logs||[]).forEach(l=>{ if(l.studentId===s.id&&l.auto==='deduct'&&attInRange(l.date,start,end)&&(l.reason||'').indexOf('卫生')>=0) cnt.hygiene++; });
+  });
+  return cnt;
+}
+// 家长模式周报/月报：完全不出现"分/积分"，只给实用信息
+function renderParentReport(){
+  const b=attComputeBonus();
+  const isMonth=reportRange==='month';
+  const periodLabel=isMonth?'本月':'本周';
+  const start=isMonth?b.mo.start:b.wk.start, end=isMonth?b.mo.end:b.wk.end;
+  const cls=b.cls, totalStudents=cls.length;
+  const vb=classViolationBreakdown(start,end);
+  const praiseMap={},criticMap={};
+  cls.forEach(s=>{(s.records||[]).forEach(r=>{ if(r.type==='praise')praiseMap[s.id]=(praiseMap[s.id]||0)+1; if(r.type==='critic')criticMap[s.id]=(criticMap[s.id]||0)+1; });});
+  const praiseTotal=Object.values(praiseMap).reduce((a,x)=>a+x,0);
+  const criticTotal=Object.values(criticMap).reduce((a,x)=>a+x,0);
+  const praiseList=cls.filter(s=>praiseMap[s.id]).sort((a,b)=>praiseMap[b.id]-praiseMap[a.id]).slice(0,5);
+  const criticList=cls.filter(s=>criticMap[s.id]).sort((a,b)=>criticMap[b.id]-criticMap[a.id]).slice(0,5);
+  const ctrue=m=>cls.filter(s=>m[s.id]).length;
+  const sportN=ctrue(b.sport),attendN=ctrue(b.attend),postN=ctrue(b.post);
+  const card=(icon,label,val,color)=>`<div class="flex-1 min-w-[120px] rounded-xl p-3 ${color} text-center"><div class="text-xs opacity-80 mb-1">${icon} ${label}</div><div class="font-bold text-lg">${val}</div></div>`;
+  const listHtml=(arr,map,word)=>arr.length?arr.map(s=>`<div class="flex items-center justify-between py-1.5 border-b border-gray-100 last:border-0"><span class="text-sm text-gray-700">${esc(s.name)}</span><span class="text-xs text-gray-400">${word} ${map[s.id]} 次</span></div>`).join(''):'<div class="text-sm text-gray-400 py-2">暂无</div>';
+  const reportText=`【${className(state.activeClass)} · 家长${isMonth?'月报':'周报'}】
+时间：${formatDate(now)}
+班级概况：本班共 ${totalStudents} 名学生。
+${periodLabel}概况：表扬 ${praiseTotal} 次，需关注 ${criticTotal} 次。
+违纪情况：迟到 ${vb.late} 人次、请假 ${vb.leave} 人次、作业未交 ${vb.homework} 人次、课堂违纪 ${vb.klass} 人次、卫生不合格 ${vb.hygiene} 人次。
+全勤情况：体育打卡全勤 ${sportN} 人、考勤全勤 ${attendN} 人、履职到位 ${postN} 人。
+值得肯定：${praiseList.length?praiseList.map(s=>s.name+'('+praiseMap[s.id]+'次)').join('、'):'暂无'}
+需家长协同：${criticList.length?criticList.map(s=>s.name+'('+criticMap[s.id]+'次)').join('、'):'暂无'}
+班级日志：${state.classLogs.slice(0,3).map(l=>l.date+' '+l.content).join('；')||'暂无'}`;
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-bold text-gray-800 text-lg">${esc(className(state.activeClass))} · 家长${isMonth?'月报':'周报'}</div>
+      <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="copyText(document.getElementById('reportText').textContent)">复制纯文本</button>
+    </div>
+    <div class="rounded-2xl p-4 bg-emerald-50 border border-emerald-100 mb-4">
+      <div class="text-sm text-gray-600 font-medium mb-2">${periodLabel}概况</div>
+      <div class="flex flex-wrap gap-2">
+        ${card('👍','表扬',praiseTotal,'bg-emerald-100 text-emerald-700')}
+        ${card('⚠️','需关注',criticTotal,'bg-amber-100 text-amber-700')}
+        ${card('👥','学生人数',totalStudents,'bg-blue-100 text-blue-700')}
+      </div>
+    </div>
+    <div class="rounded-2xl p-4 bg-gray-50 border border-gray-100 mb-4">
+      <div class="text-sm font-bold text-gray-700 mb-2">📊 违纪情况（按类型）</div>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        ${card('⏰','迟到',vb.late,'bg-rose-100 text-rose-700')}
+        ${card('🏠','请假',vb.leave,'bg-indigo-100 text-indigo-700')}
+        ${card('📕','作业未交',vb.homework,'bg-orange-100 text-orange-700')}
+        ${card('💬','课堂违纪',vb.klass,'bg-violet-100 text-violet-700')}
+        ${card('🧹','卫生不合格',vb.hygiene,'bg-teal-100 text-teal-700')}
+      </div>
+    </div>
+    <div class="rounded-2xl p-4 bg-gray-50 border border-gray-100 mb-4">
+      <div class="text-sm font-bold text-gray-700 mb-2">✅ 全勤情况（客观达标人数）</div>
+      <div class="grid grid-cols-3 gap-2">
+        ${card('🏃','体育打卡全勤',sportN,'bg-orange-100 text-orange-700')}
+        ${card('📋','考勤全勤',attendN,'bg-sky-100 text-sky-700')}
+        ${card('🤝','履职到位',postN,'bg-pink-100 text-pink-700')}
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-2">🌟 值得肯定</div>
+        ${listHtml(praiseList,praiseMap,'表扬')}
+      </div>
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-2">🤝 需家长协同</div>
+        ${listHtml(criticList,criticMap,'关注')}
+      </div>
+    </div>
+    <pre id="reportText" class="hidden">${esc(reportText)}</pre>
+  </div>`;
+}
 
 // ===================== Points: 积分管理 =====================
 let pointsTab = 'all';
@@ -3067,6 +3285,7 @@ function renderPoints() {
           ${modeToggle}
           <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openConvertSettings()">⚙️ 折算</button>
           <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtHistory()">📅 历史</button>
+          <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openAttendanceBonusModal()">🏅 全勤结算</button>
           <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtImport()">⬆️ 导入Excel</button>
           <input value="${esc(pointsQuery)}" oninput="ptFilter(this.value)" placeholder="🔍 搜索学生姓名" class="border rounded-full px-4 py-1.5 text-sm w-40 focus:outline-none focus:border-primary">
         </div>
@@ -3309,8 +3528,16 @@ function openConvertSettings() {
     <div class="space-y-3">
       <p class="text-xs text-gray-500 leading-relaxed">每个维度取当前学生的原始分最高分，映射到下面设置的「折算满分」，其余学生按比例折算；设置 0 表示不折算，负分保留原始值。例如：体育原始分最高 213、折算满分 80 → 该生得 80 分，其他人按 213→80 的比例折算。总分 = 各维度折算分之和。</p>
       ${rows}
-      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveConvertSettings()">保存折算设置</button>
+      <div class="flex gap-2">
+        <button class="flex-1 bg-gray-100 text-gray-600 py-2 rounded-full hover:bg-gray-200 text-sm" onclick="setConvertPreset(100)" title="四维度均设为 100，单模块封顶 25%">⚖️ 一键均衡</button>
+        <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveConvertSettings()">保存折算设置</button>
+      </div>
     </div>`, 'md');
+}
+// 一键预设：把四个维度折算满分统一设为 v（默认 100=均衡），立即保存
+function setConvertPreset(v) {
+  POINT_DIMS.forEach(d => { const el = document.getElementById('conv_' + d.id); if (el) el.value = v; });
+  saveConvertSettings();
 }
 function saveConvertSettings() {
   POINT_DIMS.forEach(d => {
@@ -3795,19 +4022,36 @@ function examScoreInRange() {
       }
     });
     names.forEach(nm => {
-      let cr = 0, sr = 0, st = 0;
+      let cr = 0, sr = 0, st = 0, pr = 0, rr = 0;
       const classRank = classRankMap[nm] || null;
       if (cfg.classRank.enabled && classRank) cr = classSize + 1 - classRank;
+      let curSchoolRk = null;
       if (cfg.schoolRank.enabled && schoolCol) {
         const rec = recs.find(r => r.studentName === nm && r.subject === schoolCol);
         const rk = rec ? parseInt(rec.score, 10) : NaN;
+        curSchoolRk = isNaN(rk) ? null : rk;
         if (!isNaN(rk)) sr = schoolTierPoints(rk, cfg.schoolRank.tiers);
       }
       const topSubs = [];
       if (cfg.subjectTop.enabled) {
         Object.keys(topOf).forEach(sub => { if (topOf[sub].has(nm)) { st += cfg.subjectTop.points; topSubs.push(sub); } });
       }
-      const examTotal = cr + sr + st;
+      // 校次进步/退步：对比上次考试的校次名次
+      if (cfg.progressRank.enabled && cfg.progressRank.standard === 'schoolRank' && schoolCol && curSchoolRk != null) {
+        const eIdx = exams.findIndex(x => x.id === e.id);
+        if (eIdx > 0) {
+          const prevExam = exams[eIdx - 1];
+          const prevRecs = (state.examData.records || []).filter(r => r.examId === prevExam.id && r.classId === classId);
+          const prevRec = prevRecs.find(r => r.studentName === nm && r.subject === schoolCol);
+          const prevRk = prevRec ? parseInt(prevRec.score, 10) : NaN;
+          if (!isNaN(prevRk) && prevRk > 0) {
+            const diff = prevRk - curSchoolRk; // 正数=进步（名次变小），负数=退步
+            if (diff >= (cfg.progressRank.minTierChange || 1)) pr = cfg.progressRank.improvePoints || 0;
+            else if (diff <= -(cfg.progressRank.minTierChange || 1)) rr = cfg.progressRank.regressPoints || 0;
+          }
+        }
+      }
+      const examTotal = cr + sr + st + pr + rr;
       if (!out.students[nm]) out.students[nm] = { total: 0, exams: 0, byExam: [] };
       out.students[nm].total += examTotal;
       out.students[nm].exams += 1;
@@ -3815,9 +4059,10 @@ function examScoreInRange() {
         examId: e.id, examName: e.name, date: e.date,
         totalScore: totalByStu[nm] || 0,
         classRank, classRankPoints: cr,
-        schoolRankVal: (() => { const rec = recs.find(r => r.studentName === nm && r.subject === schoolCol); return rec ? parseInt(rec.score, 10) : null; })(),
+        schoolRankVal: curSchoolRk,
         schoolRankPoints: sr,
         topSubjects: topSubs, subjectTopPoints: st,
+        progressPoints: pr, regressPoints: rr,
         examTotal
       });
     });
@@ -4093,6 +4338,31 @@ function renderExamScore() {
       </div>
     </div>
 
+    <div class="border rounded-xl p-4 space-y-2">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="esProgressEnabled" ${(cfg.progressRank && cfg.progressRank.enabled) ? 'checked' : ''} class="w-4 h-4 accent-primary">
+        <span class="font-medium text-gray-800">校次进步 / 退步（对比上次考试）</span>
+      </label>
+      <div class="ml-6 flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">进步奖励</span>
+          <input type="number" step="0.1" id="esImprovePoints" class="w-20 border rounded-lg p-1.5 text-sm" value="${(cfg.progressRank && cfg.progressRank.improvePoints) || 8}">
+          <span class="text-xs text-gray-500">分</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">退步扣分</span>
+          <input type="number" step="0.1" id="esRegressPoints" class="w-20 border rounded-lg p-1.5 text-sm" value="${(cfg.progressRank && cfg.progressRank.regressPoints) || -3}">
+          <span class="text-xs text-gray-500">分</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">最少变化</span>
+          <input type="number" step="1" min="0" id="esMinTierChange" class="w-16 border rounded-lg p-1.5 text-sm" value="${(cfg.progressRank && cfg.progressRank.minTierChange) || 1}">
+          <span class="text-xs text-gray-500">名才触发</span>
+        </div>
+      </div>
+      <p class="text-xs text-gray-400 ml-6">以「校次」列为标准，对比该生与上次考试的校次名次变化。名次变小（进步）→ 奖励分；名次变大（退步）→ 扣分。</p>
+    </div>
+
     <button class="bg-primary text-white px-5 py-2 rounded-full text-sm hover:bg-primaryDark" onclick="saveExamScoreRules()">保存规则</button>
   </div>`;
 
@@ -4104,7 +4374,8 @@ function renderExamScore() {
           <thead><tr class="text-gray-400">
             <th class="text-left p-1">考试</th><th class="text-right p-1">总分</th><th class="text-right p-1">班次名</th>
             <th class="text-right p-1">班次赋分</th><th class="text-right p-1">校次</th><th class="text-right p-1">校次赋分</th>
-            <th class="text-left p-1">单科最高分</th><th class="text-right p-1">单科赋分</th><th class="text-right p-1">本次合计</th>
+            <th class="text-left p-1">单科最高分</th><th class="text-right p-1">单科赋分</th>
+            <th class="text-right p-1 text-emerald-600">进步</th><th class="text-right p-1 text-red-500">退步</th><th class="text-right p-1">本次合计</th>
           </tr></thead>
           <tbody>
             ${r.byExam.map(b => `<tr class="border-t border-gray-100">
@@ -4116,6 +4387,8 @@ function renderExamScore() {
               <td class="text-right p-1 text-sky-600">${fmtScore(b.schoolRankPoints)}</td>
               <td class="p-1">${b.topSubjects.length ? esc(b.topSubjects.join('、')) : '—'}</td>
               <td class="text-right p-1 text-sky-600">${fmtScore(b.subjectTopPoints)}</td>
+              <td class="text-right p-1 ${b.progressPoints > 0 ? 'text-emerald-600 font-medium' : 'text-gray-300'}">${b.progressPoints > 0 ? '+' + fmtScore(b.progressPoints) : '—'}</td>
+              <td class="text-right p-1 ${b.regressPoints < 0 ? 'text-red-500 font-medium' : 'text-gray-300'}">${b.regressPoints < 0 ? fmtScore(b.regressPoints) : '—'}</td>
               <td class="text-right p-1 font-medium">${fmtScore(b.examTotal)}</td>
             </tr>`).join('')}
           </tbody>
@@ -4180,6 +4453,12 @@ function saveExamScoreRules() {
   state.examScore.subjectTop.enabled = !!g('esSubjectEnabled').checked;
   state.examScore.subjectTop.points = +g('esSubjectPoints').value || 0;
   state.examScore.subjectTop.scope = g('esSubjectScope').value;
+  // 校次进步/退步
+  if (!state.examScore.progressRank) state.examScore.progressRank = {};
+  state.examScore.progressRank.enabled = !!g('esProgressEnabled').checked;
+  state.examScore.progressRank.improvePoints = +g('esImprovePoints').value || 0;
+  state.examScore.progressRank.regressPoints = +g('esRegressPoints').value || 0;
+  state.examScore.progressRank.minTierChange = Math.max(0, +g('esMinTierChange').value || 1);
   save(); render();
   toast('考试赋分规则已保存');
 }
