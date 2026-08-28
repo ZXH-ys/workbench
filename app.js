@@ -1332,9 +1332,11 @@ function renderHomeHead() {
       ${dmToday
         ? `<div class="text-2xl font-bold text-primary leading-tight">${esc(dmToday.name)}</div>
            <div class="text-xs text-gray-400 mt-1">${dmNext ? ('下次：'+esc(dmNext.name)+'（'+esc(dmNext.date.slice(5).replace('-','月')+'日')+'）') : '本轮轮值已结束'}</div>`
-        : (dmHasRota
-          ? `<div class="text-sm text-gray-500 leading-relaxed">本轮轮值已结束。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」重新生成</button></div>`
-          : `<div class="text-sm text-gray-500 leading-relaxed">尚未生成轮值表。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」生成</button></div>`)}
+        : (isSchoolOff(new Date())
+          ? `<div class="text-sm text-gray-500 leading-relaxed">今日放假（周末/法定节假日）<br>无值日班长</div>`
+          : (dmHasRota
+            ? `<div class="text-sm text-gray-500 leading-relaxed">本轮轮值已结束。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」重新生成</button></div>`
+            : `<div class="text-sm text-gray-500 leading-relaxed">尚未生成轮值表。<br><button class="text-xs text-primary hover:underline mt-1" onclick="navigate('positions')">去「职务与值日」生成</button></div>`))}
     </div>
 
     <div class="col-span-12 md:col-span-4 bg-white rounded-2xl p-4 card-hover">
@@ -7312,6 +7314,33 @@ function pmExportDutyXlsx(){
 }
 
 /* ===== 值日班长轮值自动生成 ===== */
+// 国家标准法定节假日（含调休）。off=放假日(跳过)；work=调休补课/上班的周末(学生到校，不跳过)。
+// 2026 采用国务院办公厅正式通知（国办发明电〔2025〕7号，2025-11-04 发布）。
+// 2027 为国办尚未公布前的估算，正式通知发布后请按官方更新。格式：'MM-DD'。
+const NATIONAL_HOLIDAYS = {
+  '2026': {
+    off: ['01-01','01-02','01-03','02-15','02-16','02-17','02-18','02-19','02-20','02-21','02-22','02-23','04-04','04-05','04-06','05-01','05-02','05-03','05-04','05-05','06-19','06-20','06-21','09-25','09-26','09-27','10-01','10-02','10-03','10-04','10-05','10-06','10-07'],
+    work: ['01-04','02-14','02-28','05-09','09-20','10-10']
+  },
+  '2027': {
+    off: ['01-01','01-02','01-03','02-04','02-05','02-06','02-07','02-08','02-09','02-10','02-11','02-12','04-03','04-04','04-05','05-01','05-02','05-03','05-04','05-05','06-09','09-15','10-01','10-02','10-03','10-04','10-05','10-06','10-07'],
+    work: []  // 2027 调休补课日尚未公布，待国办通知后补充（暂无则全部周末默认跳过）
+  }
+};
+// 该日期是否「学生不到校」：法定节假日 / 周末(非调休补课)。到校的调休补课日返回 false。
+function isSchoolOff(dt){
+  const y = String(dt.getFullYear());
+  const md = ('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2);
+  const tbl = NATIONAL_HOLIDAYS[y];
+  if(tbl){
+    if(tbl.work.indexOf(md) >= 0) return false; // 调休补课，到校
+    if(tbl.off.indexOf(md) >= 0) return true;    // 法定节假日
+  }
+  const wd = dt.getDay();
+  if((wd === 0 || wd === 6) && (!tbl || tbl.work.indexOf(md) < 0)) return true; // 周末默认放假
+  return false;
+}
+
 function pmRenderDutyMonitor(){
   const P=state.positions;
   const rota=P.dutyRota||{};
@@ -7322,7 +7351,7 @@ function pmRenderDutyMonitor(){
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
       <div><label class="block text-xs text-gray-500 mb-1">起始日期</label><input id="dmStart" type="date" value="${rota.startDate||todayKey}" class="w-full border rounded-lg p-2 text-sm"></div>
       <div><label class="block text-xs text-gray-500 mb-1">每位任期(天)</label><input id="dmStep" type="number" min="1" value="${rota.stepDays||1}" class="w-full border rounded-lg p-2 text-sm"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">生成天数</label><input id="dmSpan" type="number" min="1" value="${rota.spanDays||30}" class="w-full border rounded-lg p-2 text-sm"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">轮值天数（到校日）</label><input id="dmSpan" type="number" min="1" value="${rota.spanDays||30}" class="w-full border rounded-lg p-2 text-sm"></div>
       <div><label class="block text-xs text-gray-500 mb-1">轮值人员</label>
         <select id="dmScope" class="w-full border rounded-lg p-2 text-sm">
           <option value="all" ${(rota.scope||'all')!=='banwei'?'selected':''}>全班学生</option>
@@ -7330,6 +7359,9 @@ function pmRenderDutyMonitor(){
         </select>
       </div>
     </div>
+    <label class="flex items-center gap-2 text-xs text-gray-500">
+      <input id="dmSkipOff" type="checkbox" ${rota.skipOff!==false?'checked':''} class="accent-indigo-600"> 跳过周末与法定节假日（按国家标准休假，不排到校日之外）
+    </label>
     <div class="flex gap-2">
       <button class="bg-indigo-600 text-white px-4 py-2 rounded-full text-sm hover:bg-indigo-700" onclick="pmGenDutyMonitor()">⚡ 生成预览</button>
       ${rota.schedule&&rota.schedule.length?`<button class="border px-4 py-2 rounded-full text-sm hover:bg-gray-50" onclick="pmSaveDutyMonitor()">💾 保存轮值表</button>`:''}
@@ -7359,18 +7391,25 @@ function pmGenDutyMonitor(){
   const step=Math.max(1, parseInt(document.getElementById('dmStep').value)||1);
   const span=Math.max(1, parseInt(document.getElementById('dmSpan').value)||30);
   const scope=document.getElementById('dmScope').value;
+  const skipOff=document.getElementById('dmSkipOff')?document.getElementById('dmSkipOff').checked:true;
   const members=pmDutyMonitorMembers();
   if(!members.length){ alert('当前班级没有可选学生，请先在「学生管理」录入'); return; }
   const schedule=[]; let mi=0;
-  for(let d=0; d<span; d+=step){
-    const dt=new Date(start); dt.setDate(dt.getDate()+d);
+  const dt=new Date(start+'T00:00:00');
+  let offSkipped=0;
+  while(schedule.length<span){
     const dateKey=attDateKey(dt);
-    schedule.push({date:dateKey, name:members[mi%members.length]});
-    mi++;
+    if(!skipOff || !isSchoolOff(dt)){
+      schedule.push({date:dateKey, name:members[mi%members.length]});
+      mi++;
+    } else {
+      offSkipped++;
+    }
+    dt.setDate(dt.getDate()+step);
   }
-  state.positions.dutyRota={startDate:start, stepDays:step, spanDays:span, scope, schedule};
+  state.positions.dutyRota={startDate:start, stepDays:step, spanDays:span, scope, skipOff, schedule};
   pmRefreshAll();
-  toast('已生成 '+schedule.length+' 天轮值预览');
+  toast('已生成 '+schedule.length+' 天轮值预览'+(skipOff&&offSkipped?('（已跳过 '+offSkipped+' 个放假/周末日）'):''));
 }
 function pmSaveDutyMonitor(){
   if(!state.positions.dutyRota||!state.positions.dutyRota.schedule||!state.positions.dutyRota.schedule.length){ return toast('请先生成预览'); }
