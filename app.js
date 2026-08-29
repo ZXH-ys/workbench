@@ -593,6 +593,7 @@ function save(internal) {
   if (state && typeof state === 'object') state._savedAt = Date.now();
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
+  _hwNameIdx = null; // 名册可能已变，让姓名索引缓存失效
   pushSync();
   _bumpExhibitDataVer(); // 数据变更后失效展览缓存
 }
@@ -601,26 +602,102 @@ function save(internal) {
 // 背景：启动时云端数据会无条件覆盖本地。若上次保存时 pushSync 失败
 // （网络抖动 / token 过期 / 服务器重启），新增的记录只存在于 localStorage，
 // 一刷新就被云端旧数据盖掉 —— 表现为「记录没了 / 新增的不显示」。
-const MERGE_ARRAY_KEYS = ['students', 'scores', 'attendance', 'classRecords', 'classLogs', 'communications', 'homework', 'todosReminders', 'templates', 'snapshots'];
+// 顶层数组字段（元素带 id，按 id 取并集）
+// 注意：'todosReminders' 是历史遗留的错误键名，实际字段是 todos / reminders 两个数组
+const MERGE_ARRAY_KEYS = ['students', 'scores', 'classRecords', 'classLogs', 'communications', 'homework', 'todos', 'reminders', 'templates', 'snapshots', 'classRecordSubjects'];
+// 嵌套数组：父字段是对象（不是数组），需单独下钻合并（attendance 就是被 Array.isArray 漏掉的那个）
+const MERGE_NESTED_ARRAYS = [['attendance', 'logs'], ['examData', 'records'], ['examData', 'exams'], ['points', 'logs']];
+// 纯对象字段：按顶层键补齐（座次表 seatingByClass 是「班级id -> 座次」映射）
+const MERGE_OBJECT_KEYS = ['seatingByClass'];
+
+// 按 id 取并集：把 la 里 cloud 没有的补进 ca，返回补入条数
+function mergeById(la, ca) {
+  if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
+  let n = 0;
+  const have = new Set(ca.map(x => x && x.id));
+  la.forEach(x => { if (x && x.id && !have.has(x.id)) { ca.unshift(x); have.add(x.id); n++; } });
+  return n;
+}
+// 按值取并集（字符串数组，如识别关键词）
+function mergeByValue(la, ca) {
+  if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
+  let n = 0;
+  const have = new Set(ca);
+  la.forEach(x => { if (x != null && !have.has(x)) { ca.push(x); have.add(x); n++; } });
+  return n;
+}
 // 把 local 里有、cloud 里没有的记录补进 cloud（按 id 取并集，不做覆盖式替换）
 function mergeMissing(local, cloud) {
   let added = 0;
   MERGE_ARRAY_KEYS.forEach(k => {
-    const la = Array.isArray(local[k]) ? local[k] : [];
-    if (!la.length) return;
+    if (!Array.isArray(local[k]) || !local[k].length) return;
     if (!Array.isArray(cloud[k])) cloud[k] = [];
-    const have = new Set(cloud[k].map(x => x && x.id));
-    la.forEach(x => {
-      if (x && x.id && !have.has(x.id)) { cloud[k].unshift(x); have.add(x.id); added++; }
-    });
+    added += mergeById(local[k], cloud[k]);
   });
-  // 积分流水（points.logs）
-  const ll = local.points && Array.isArray(local.points.logs) ? local.points.logs : [];
-  if (ll.length) {
-    cloud.points = cloud.points || {};
-    if (!Array.isArray(cloud.points.logs)) cloud.points.logs = [];
-    const have = new Set(cloud.points.logs.map(x => x && x.id));
-    ll.forEach(x => { if (x && x.id && !have.has(x.id)) { cloud.points.logs.unshift(x); have.add(x.id); added++; } });
+  MERGE_NESTED_ARRAYS.forEach(pair => {
+    const [p, c] = pair;
+    const lp = local[p];
+    if (!lp || typeof lp !== 'object') return;
+    if (!Array.isArray(lp[c]) || !lp[c].length) return;
+    if (!cloud[p] || typeof cloud[p] !== 'object') cloud[p] = {};
+    if (!Array.isArray(cloud[p][c])) cloud[p][c] = [];
+    added += mergeById(lp[c], cloud[p][c]);
+  });
+  MERGE_OBJECT_KEYS.forEach(k => {
+    const lo = local[k];
+    if (!lo || typeof lo !== 'object') return;
+    const keys = Object.keys(lo);
+    if (!keys.length) return;
+    if (!cloud[k] || typeof cloud[k] !== 'object') cloud[k] = {};
+    keys.forEach(kk => { if (!(kk in cloud[k])) { cloud[k][kk] = lo[kk]; added++; } });
+  });
+  // 职务与值日：structure 按 id 并集，assign / representatives 按姓名并集（不能整对象替换，否则丢人）
+  const lp = local.positions;
+  if (lp && typeof lp === 'object') {
+    cloud.positions = cloud.positions || {};
+    const cp = cloud.positions;
+    if (Array.isArray(lp.structure) && lp.structure.length) {
+      if (!Array.isArray(cp.structure)) cp.structure = [];
+      added += mergeById(lp.structure, cp.structure);
+    }
+    if (lp.assign && typeof lp.assign === 'object') {
+      cp.assign = cp.assign || {};
+      Object.keys(lp.assign).forEach(rid => {
+        const ln = Array.isArray(lp.assign[rid]) ? lp.assign[rid] : [];
+        if (!Array.isArray(cp.assign[rid])) cp.assign[rid] = [];
+        added += mergeByValue(ln, cp.assign[rid]);
+      });
+    }
+    if (Array.isArray(lp.representatives) && lp.representatives.length) {
+      if (!Array.isArray(cp.representatives)) cp.representatives = [];
+      const byId = {};
+      cp.representatives.forEach(r => { if (r && r.id) byId[r.id] = r; });
+      lp.representatives.forEach(r => {
+        if (!r || !r.id) return;
+        if (!byId[r.id]) { cp.representatives.push(r); byId[r.id] = r; added++; return; }
+        if (!Array.isArray(byId[r.id].names)) byId[r.id].names = [];
+        added += mergeByValue(r.names || [], byId[r.id].names);
+      });
+    }
+  }
+  // 识别关键词（recKeywords.labels / .desc 是「类型 -> 关键词数组」的映射，按值并集）
+  const lkw = local.recKeywords;
+  if (lkw && typeof lkw === 'object') {
+    cloud.recKeywords = cloud.recKeywords || {};
+    ['labels', 'desc'].forEach(sk => {
+      const src = lkw[sk];
+      if (!src || typeof src !== 'object') return;
+      cloud.recKeywords[sk] = cloud.recKeywords[sk] || {};
+      Object.keys(src).forEach(t => {
+        if (!Array.isArray(cloud.recKeywords[sk][t])) cloud.recKeywords[sk][t] = [];
+        added += mergeByValue(src[t] || [], cloud.recKeywords[sk][t]);
+      });
+    });
+  }
+  // 作业识别关键词（字符串数组）
+  if (Array.isArray(local.homeworkKeywords) && local.homeworkKeywords.length) {
+    if (!Array.isArray(cloud.homeworkKeywords)) cloud.homeworkKeywords = [];
+    added += mergeByValue(local.homeworkKeywords, cloud.homeworkKeywords);
   }
   // 学生身上的行为记录（students[].records）
   if (Array.isArray(cloud.students) && Array.isArray(local.students)) {
@@ -765,7 +842,7 @@ function attDeriveHome(){
   return home;
 }
 function attStats(){
-  const cur=(state.attendance.current)||{home:{},leave:{}};
+  const cur=((state.attendance||{}).current)||{home:{},leave:{}};
   const total=attMembers().length;
   const homeKeys=Object.keys(cur.home||{}), leaveKeys=Object.keys(cur.leave||{});
   const absent=new Set([...homeKeys,...leaveKeys]);
@@ -1198,7 +1275,9 @@ function renderTopBar() {
   }
   // 首页特有：在标题旁显示积分起算日期（紧凑内联）
   const homeDateBar = (currentRoute === 'home') ? (() => {
-    const tw = ['周日','周一','周二','周三','周四','周五','周六'][todayIndex];
+    // todayIndex = (getDay()+6)%7 → 周一=0，必须用「周一首」的数组。
+    // 旧实现用了「周日首」的数组，导致首页日期条的星期整体错一天。
+    const tw = ['周一','周二','周三','周四','周五','周六','周日'][todayIndex];
     const dl = (new Date().getMonth()+1) + '月' + new Date().getDate() + '日';
     const sd = state.points.calcStartDate || '2026-01-01';
     return `<div class="flex items-center gap-2 text-xs text-gray-500 ml-3">📅 <span class="font-medium text-gray-700">${tw} ${dl}</span>·<span class="text-gray-400">起算</span><input id="homeCalcStart" type="date" value="${esc(sd)}" class="border border-gray-200 rounded px-1 py-0.5 text-xs w-[105px]"><button class="bg-primary/90 text-white px-2 py-0.5 rounded-full text-xs hover:bg-primaryDark whitespace-nowrap" onclick="saveHomeCalcStart()">保存</button></div>`;
@@ -1242,14 +1321,15 @@ function openProfile(sid) { profileSid = sid; currentRoute = 'profile'; render()
 
 function studentLeaveCount(name) {
   let n = 0;
-  (state.attendance.logs || []).forEach(l => (l.leave || []).forEach(x => { if (x.name === name) n++; }));
-  if (state.attendance.current && Object.prototype.hasOwnProperty.call(state.attendance.current.leave || {}, name)) n++;
+  const A = state.attendance || {};
+  (A.logs || []).forEach(l => ((l && l.leave) || []).forEach(x => { if (x && x.name === name) n++; }));
+  if (A.current && Object.prototype.hasOwnProperty.call(A.current.leave || {}, name)) n++;
   return n;
 }
 
 function gsParse() {
   const tokens = (gsQuery || '').trim().split(/\s+/).filter(Boolean);
-  const nameHits = state.students.filter(s => tokens.some(t => t.length >= 2 && s.name.includes(t)));
+  const nameHits = (state.students || []).filter(s => s && s.name && tokens.some(t => t.length >= 2 && s.name.includes(t)));
   const nameSet = new Set(nameHits.map(s => s.name));
   const kw = tokens.filter(t => !nameSet.has(t));
   const kwMatch = (txt) => !kw.length || kw.every(t => (txt || '').includes(t));
@@ -1259,20 +1339,22 @@ function gsParse() {
 function renderGlobalSearch() {
   const { nameHits, nameSet, kw, kwMatch } = gsParse();
   const rows = [];
-  state.classRecords.filter(r => (!nameSet.size || (r.studentName && nameSet.has(r.studentName))) && kwMatch((r.subject || '') + ' ' + (r.content || ''))).forEach(r => {
+  // 各数据源统一走空值兜底：任何一处结构损坏都不该让整个搜索页白屏
+  (state.classRecords || []).filter(r => r && (!nameSet.size || (r.studentName && nameSet.has(r.studentName))) && kwMatch((r.subject || '') + ' ' + (r.content || ''))).forEach(r => {
     rows.push({ mod: '课堂', tag: '#EEEDFE', tagc: '#534AB7', name: r.studentName || '', subj: r.subject || '', content: r.content || '', date: r.date || '', go: "navigate('classRecord')" });
   });
   // 作业按姓名匹配（旧代码拿 class 去比对姓名，导致按姓名搜不到）
-  state.homework.filter(h => (!nameSet.size || (hwStudentName(h) && nameSet.has(hwStudentName(h)))) && kwMatch((h.subject || '') + ' ' + (h.title || '') + ' ' + (hwStudentName(h) || ''))).forEach(h => {
+  (state.homework || []).filter(h => h && (!nameSet.size || (hwStudentName(h) && nameSet.has(hwStudentName(h)))) && kwMatch((h.subject || '') + ' ' + (h.title || '') + ' ' + (hwStudentName(h) || ''))).forEach(h => {
     rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: hwStudentName(h) || '', subj: h.subject || '', content: (h.title || '') + (h.status ? ('（' + h.status + '）') : ''), date: hwNormDate(h.date || h.due) || '', go: "navigate('homework')" });
   });
-  state.students.filter(s => !nameSet.size || nameSet.has(s.name)).forEach(s => {
-    (s.records || []).filter(r => kwMatch(r.content || '')).forEach(r => {
+  (state.students || []).filter(s => s && (!nameSet.size || nameSet.has(s.name))).forEach(s => {
+    (s.records || []).filter(r => r && kwMatch(r.content || '')).forEach(r => {
       rows.push({ mod: '行为', tag: '#FAECE7', tagc: '#993C1D', name: s.name, subj: recordTypeLabel(r.type), content: r.content || '', date: r.date || '', go: "openProfile('" + s.id + "')" });
     });
   });
-  state.examData.records.filter(r => (!nameSet.size || nameSet.has(r.studentName)) && kwMatch(r.subject || '')).forEach(r => {
-    const ex = state.examData.exams.find(e => e.id === r.examId) || {};
+  const _ed = state.examData || {};
+  (_ed.records || []).filter(r => r && (!nameSet.size || nameSet.has(r.studentName)) && kwMatch(r.subject || '')).forEach(r => {
+    const ex = (_ed.exams || []).find(e => e && e.id === r.examId) || {};
     rows.push({ mod: '成绩', tag: '#E6F1FB', tagc: '#185FA5', name: r.studentName || '', subj: r.subject || '', content: '得分 ' + (r.score != null ? r.score : '—'), date: ex.name || '', go: "navigate('exam')" });
   });
 
@@ -1306,11 +1388,11 @@ function studentLatestExamRanks(s) {
   const last = exams[exams.length - 1]; if (!last) return null;
   const subj = profileSubject || (examScoreColumns()[0] && examScoreColumns()[0].key);
   if (!subj) return null;
-  return { exam: last.name, classRank: examClassRank(last.id, cid, s.name, subj), schoolRank: examGradeRank(last.id, s.name, subj, state.examData.classes.map(c => c.id)) };
+  return { exam: last.name, classRank: examClassRank(last.id, cid, s.name, subj), schoolRank: examGradeRank(last.id, s.name, subj, examClassesSafe().map(c => c.id)) };
 }
 function profileTrend(s) {
   const cid = findClassIdByName(s.name);
-  const classIds = state.examData.classes.map(c => c.id);
+  const classIds = examClassesSafe().map(c => c.id);
   const exams = (state.examData.exams || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return exams.map(e => {
     const r = state.examData.records.find(x => x.examId === e.id && x.studentName === s.name && x.subject === profileSubject);
@@ -1371,9 +1453,9 @@ function renderStudentProfile() {
   return `
   <div class="space-y-5">
     <div class="bg-white rounded-2xl p-5 shadow-sm flex items-center gap-4 flex-wrap">
-      <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-medium text-lg">${esc(s.name.slice(0, 1))}</div>
+      <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-medium text-lg">${esc(String(s.name || '?').slice(0, 1))}</div>
       <div class="flex-1">
-        <div class="font-bold text-gray-800">${esc(s.name)}</div>
+        <div class="font-bold text-gray-800">${esc(s.name || '（未命名）')}</div>
         <div class="text-sm text-gray-500">${esc(s.class || '')}${s.gender ? (' · ' + s.gender) : ''}</div>
       </div>
       <div class="flex gap-2 flex-wrap">
@@ -1446,7 +1528,7 @@ function homeDutyMonitorNext() {
 
 // 班主任班（10班）首页：保留全部班主任专属功能
 function renderHomeHead() {
-  const todayCourses = state.schedule.courses.filter(c => c.day === todayIndex).sort((a,b)=>a.period-b.period);
+  const todayCourses = ((state.schedule && state.schedule.courses) || []).filter(c => c && c.day === todayIndex).sort((a,b)=>(a.period||0)-(b.period||0));
   const todayWeekday = ['周一','周二','周三','周四','周五','周六','周日'][todayIndex];
   const nowD = new Date();
   const dateLabel = (nowD.getMonth()+1) + '月' + nowD.getDate() + '日';
@@ -1495,7 +1577,7 @@ function renderHomeHead() {
         <button class="text-xs text-primary hover:underline" onclick="navigate('attendance')">考勤管理</button>
       </div>
       ${(() => {
-        const st = attStats(); const a = state.attendance; const cur = a.current || {home:{},leave:{}};
+        const st = attStats(); const cur = ((state.attendance||{}).current) || {home:{},leave:{}};
         const leave = Object.entries(cur.leave||{});
         return `<div class="text-sm text-gray-600 mb-2">应到 ${st.total} · 实到 ${st.present} · 回家 ${st.home} · 请假 ${st.leave}</div>
           <div class="flex flex-wrap items-center gap-1.5">
@@ -1515,7 +1597,9 @@ function renderHomeTeacher() {
   const clsName = className(cls);
   const students = (state.students || []).filter(s => s && s.class === cls);
   const todayKey = attDateKey(new Date());
-  const records = (state.classRecords || []).filter(r => (!r.class || r.class === cls) && r.date === todayKey).slice(0, 5);
+  // 课堂记录的 date 可能是「8月29日」这类中文格式，必须先归一化再和 ISO 的 todayKey 比较，
+  // 否则「今日课堂记录」永远为空。
+  const records = (state.classRecords || []).filter(r => (!r.class || r.class === cls) && hwNormDate(r.date) === todayKey).slice(0, 5);
   // 作业按「完成情况台账」取当天记录；日期统一归一化后再比较，避免「M月D日」与 ISO 并列导致永远匹配不上
   const homeworks = (state.homework || []).filter(h => hwBelongsTo(h, cls) && hwNormDate(h.date || h.due) === todayKey).slice(0, 5);
   const clsExams = (state.examData.exams || [])
@@ -1606,6 +1690,11 @@ function renderHomeTeacher() {
 
 // ===================== Schedule =====================
 function renderSchedule() {
+  // 课表结构兜底：periods/days/courses 任一缺失都按默认值补齐，避免整页白屏
+  const sch = (state.schedule && typeof state.schedule === 'object') ? state.schedule : (state.schedule = {});
+  if (!Array.isArray(sch.days)) sch.days = ['周一','周二','周三','周四','周五'];
+  if (!Array.isArray(sch.periods)) sch.periods = [1,2,3,4,5,6,7];
+  if (!Array.isArray(sch.courses)) sch.courses = [];
   return `
   <div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="overflow-x-auto">
@@ -1883,11 +1972,106 @@ function saveStudent(id) {
   }
   save(); closeModal(); render();
 }
+// 删除学生时一并清理散落在各模块的关联记录。
+// 旧实现只从 state.students 里摘掉，导致积分流水 / 考勤名单 / 课堂与作业记录 /
+// 座次表里残留孤儿引用 —— 这些「查无此人」的数据会一直堆积，还可能被姓名匹配到别人身上。
+// 统计散落在各模块的关联数据，删人前先让用户心里有数
+function studentRefSummary(id, name) {
+  const A = state.attendance || {};
+  let live = 0;
+  if (A.current) {
+    if (A.current.leave && Object.prototype.hasOwnProperty.call(A.current.leave, name)) live++;
+    if (A.current.home && Object.prototype.hasOwnProperty.call(A.current.home, name)) live++;
+  }
+  const seatN = Object.keys(state.seatingByClass || {}).reduce((a, cid) => {
+    const st = state.seatingByClass[cid];
+    return a + (st && Array.isArray(st.cells) ? st.cells.reduce((r, row) => r + row.filter(x => x === id).length, 0) : 0);
+  }, 0);
+  const P = state.positions || {};
+  const posN = Object.keys(P.assign || {}).reduce((a, rid) => a + (P.assign[rid] || []).filter(n => n === name).length, 0)
+    + (P.representatives || []).reduce((a, r) => a + (r.names || []).filter(n => n === name).length, 0);
+  return {
+    live: live + seatN + posN, seatN, posN, attN: live,
+    points: ((state.points && state.points.logs) || []).filter(l => l.studentId === id).length,
+    classRecords: (state.classRecords || []).filter(r => r.studentId === id || r.studentName === name).length,
+    homework: (state.homework || []).filter(h => h.studentId === id || h.studentName === name).length,
+    exam: ((state.examData && state.examData.records) || []).filter(r => r.studentName === name).length,
+  };
+}
+// 清理「当前状态」里的引用：不清理的话，考勤会显示已删学生、座次表留下空位、职务挂着查无此人
+function purgeStudentLiveRefs(id, name) {
+  const A = state.attendance || {};
+  if (A.current) {
+    if (A.current.leave) delete A.current.leave[name];
+    if (A.current.home) delete A.current.home[name];
+  }
+  Object.keys(state.seatingByClass || {}).forEach(cid => {
+    const st = state.seatingByClass[cid];
+    if (st && Array.isArray(st.cells)) st.cells = st.cells.map(row => row.map(x => (x === id ? null : x)));
+  });
+  const P = state.positions || {};
+  Object.keys(P.assign || {}).forEach(rid => { P.assign[rid] = (P.assign[rid] || []).filter(n => n !== name); });
+  (P.representatives || []).forEach(r => { r.names = (r.names || []).filter(n => n !== name); });
+}
+// 清理历史记录（可选）：积分流水 / 课堂 / 作业 / 成绩
+function purgeStudentHistory(id, name) {
+  state.points.logs = (state.points.logs || []).filter(l => l.studentId !== id);
+  state.classRecords = (state.classRecords || []).filter(r => r.studentId !== id && r.studentName !== name);
+  state.homework = (state.homework || []).filter(h => h.studentId !== id && h.studentName !== name);
+  if (state.examData && Array.isArray(state.examData.records)) {
+    state.examData.records = state.examData.records.filter(r => r.studentName !== name);
+  }
+}
 function deleteStudent(id) {
-  const s = state.students.find(x=>x.id===id);
-  if(!s) return;
-  confirmModal('确定删除学生「' + s.name + '」吗？相关行为记录也会一并删除。', function(){
-    doDelete(()=>state.students, id, s.name, () => { closeModal(); render(); });
+  const s = state.students.find(x => x.id === id);
+  if (!s) return;
+  const ref = studentRefSummary(id, s.name);
+  const histTotal = ref.points + ref.classRecords + ref.homework + ref.exam;
+  const msg = `确定删除学生「${esc(s.name)}」吗？`
+    + `<br><br>一定清理：考勤在册 ${ref.attN} 处、座次占位 ${ref.seatN} 处、任职 ${ref.posN} 处。`
+    + (histTotal ? `<br>可选清理：历史记录 ${histTotal} 条（积分 ${ref.points} / 课堂 ${ref.classRecords} / 作业 ${ref.homework} / 成绩 ${ref.exam}）。` : '');
+  confirmModal(msg, function () {
+    const finish = (alsoHistory) => {
+      // 快照：撤销时能整体还原（含关联数据），避免「撤销后学生回来了但记录没了」
+      const snap = {
+        idx: state.students.indexOf(s), stu: s,
+        attendance: JSON.parse(JSON.stringify(state.attendance || {})),
+        seatingByClass: JSON.parse(JSON.stringify(state.seatingByClass || {})),
+        positions: JSON.parse(JSON.stringify(state.positions || {})),
+        hist: alsoHistory ? {
+          pointsLogs: (state.points.logs || []).slice(),
+          classRecords: (state.classRecords || []).slice(),
+          homework: (state.homework || []).slice(),
+          examRecords: ((state.examData && state.examData.records) || []).slice(),
+        } : null,
+      };
+      if (snap.idx < 0) return;
+      state.students.splice(snap.idx, 1);
+      purgeStudentLiveRefs(id, s.name);
+      if (alsoHistory) purgeStudentHistory(id, s.name);
+      save();
+      recordUndo(`学生「${s.name}」`, () => {
+        state.students.splice(Math.min(snap.idx, state.students.length), 0, snap.stu);
+        state.attendance = snap.attendance;
+        state.seatingByClass = snap.seatingByClass;
+        state.positions = snap.positions;
+        if (snap.hist) {
+          state.points.logs = snap.hist.pointsLogs;
+          state.classRecords = snap.hist.classRecords;
+          state.homework = snap.hist.homework;
+          if (state.examData) state.examData.records = snap.hist.examRecords;
+        }
+        save(); closeModal(); render();
+      });
+      closeModal(); render();
+      toast(`已删除「${s.name}」，清理 ${ref.live + (alsoHistory ? histTotal : 0)} 条关联数据（可撤销）`);
+    };
+    if (histTotal) {
+      confirmModal(`是否同时删除「${esc(s.name)}」的 ${histTotal} 条历史记录？<br><br>选「取消」会保留历史（之后仍可按姓名查到）。`,
+        () => finish(true), '一起删除', '保留历史');
+    } else {
+      finish(false);
+    }
   });
 }
 function openStudentProfile(id) {
@@ -2194,13 +2378,22 @@ function hwDateLabel(iso){
 }
 // 展示用姓名：优先 studentName；为空时尝试从 title 全文中提取已知学生姓名
 // （迁移/写入时若丢失姓名，旧 title 如「张三英语作业没交」「政治作业不合格 张三」仍可反解）
+// 按「长姓名优先」排好序的名单缓存。
+// 旧实现每条作业记录都重新 filter + sort 一遍全班，是 O(作业数 × 学生数) 的热点；
+// 名册只在 save() 之后才可能变，所以在 save() 里统一置空即可。
+var _hwNameIdx = null;   // 用 var：save() 在脚本更早的位置就会引用它，避免 let 的暂时性死区
+function hwStudentNames(){
+  if (_hwNameIdx) return _hwNameIdx;
+  _hwNameIdx = (state.students || []).filter(x => x.name && x.name.length > 1)
+    .map(x => x.name).sort((a, b) => b.length - a.length);
+  return _hwNameIdx;
+}
 function hwStudentName(h){
   if (h.studentName) return h.studentName;
   if (!h.title) return '';
   const t = String(h.title);
-  const students = (state.students || []).filter(x => x.name && x.name.length > 1).sort((a, b) => b.name.length - a.name.length);
-  const stu = students.find(x => t.includes(x.name));
-  return stu ? stu.name : '';
+  const stu = hwStudentNames().find(n => t.includes(n));
+  return stu || '';
 }
 // 作业管理 = 作业完成情况台账：姓名 + 科目 + 是否完成 + 日期。
 // 支持：两个班分开查看、单科筛选、按姓名搜索、整体通览统计。
@@ -2838,26 +3031,33 @@ function exportSeatToXlsx(data, filename) {
 // ===================== Class Record =====================
 let crFilterSubject = ''; // '' = 全部
 let crSearchName = '';
-function crSetSubjectFilter(id){ crFilterSubject = id || ''; render(); }
-function crSetSearch(v){ crSearchName = (v || '').trim(); render(); }
-function renderClassRecord() {
+function crSetSubjectFilter(id){ crFilterSubject = id || ''; crRefreshPartial(); }
+// 只重画「科目标签 + 列表」，不动搜索框 —— 否则每敲一个字整页重建，输入框立刻失焦
+function crSetSearch(v){ crSearchName = (v || '').trim(); crRefreshPartial(); }
+function crScopeRecords() {
   if(!state.classRecords) state.classRecords = [];
+  return state.classRecords.filter(r => !r.class || r.class === state.activeClass);
+}
+function crTabsHtml() {
   const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
-  const nameQ = crSearchName.toLowerCase();
-  const baseRecords = state.classRecords.filter(r => !r.class || r.class === state.activeClass);
-  const filtered = baseRecords.filter(r => {
-    const subjOk = !crFilterSubject || (r.subject && subjects.some(s=>s.id===crFilterSubject && s.name===r.subject));
-    const nameOk = !nameQ || (r.studentName && r.studentName.toLowerCase().includes(nameQ)) || (r.content && r.content.toLowerCase().includes(nameQ));
-    return subjOk && nameOk;
-  });
+  const baseRecords = crScopeRecords();
   const subjectCounts = {};
   baseRecords.forEach(r => { subjectCounts[r.subject] = (subjectCounts[r.subject] || 0) + 1; });
-  const subjTabs = [{id:'', name:'全部'}].concat(subjects).map(s => {
+  return [{ id: '', name: '全部' }].concat(subjects).map(s => {
     const active = crFilterSubject === s.id;
     const count = s.id ? (subjectCounts[s.name] || 0) : baseRecords.length;
     return `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${active?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="crSetSubjectFilter('${s.id}')">${esc(s.name)} ${count}</button>`;
   }).join('');
-  const recordsHtml = filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
+}
+function crListHtml() {
+  const subjects = Array.isArray(state.classRecordSubjects) ? state.classRecordSubjects : [];
+  const nameQ = String(crSearchName || '').toLowerCase();
+  const filtered = crScopeRecords().filter(r => {
+    const subjOk = !crFilterSubject || (r.subject && subjects.some(s=>s.id===crFilterSubject && s.name===r.subject));
+    const nameOk = !nameQ || (r.studentName && String(r.studentName).toLowerCase().includes(nameQ)) || (r.content && String(r.content).toLowerCase().includes(nameQ));
+    return subjOk && nameOk;
+  });
+  return filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
     <div class="flex-1">
       <div class="flex items-center gap-2 mb-1 flex-wrap">
         <span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span>
@@ -2868,7 +3068,13 @@ function renderClassRecord() {
       <div class="text-sm text-gray-700">${esc(r.content)}</div>
     </div>
     <button class="text-gray-300 hover:text-red-500 ml-3" onclick="deleteClassRecord('${r.id}')">🗑️</button>
-  </div>`).join('');
+  </div>`).join('') || '<div class="text-gray-400 text-sm">暂无匹配记录</div>';
+}
+function crRefreshPartial() {
+  const t = document.getElementById('crTabs'); if (t) t.innerHTML = crTabsHtml();
+  const l = document.getElementById('crList'); if (l) l.innerHTML = crListHtml();
+}
+function renderClassRecord() {
   return `<div class="bg-white rounded-2xl p-6 shadow-sm space-y-4">
     <div class="flex items-center justify-between">
       <div class="font-bold text-gray-800">课堂记录</div>
@@ -2877,12 +3083,12 @@ function renderClassRecord() {
         <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openClassRecordForm()">+ 添加记录</button>
       </div>
     </div>
-    <div class="flex flex-wrap gap-2">${subjTabs}</div>
+    <div id="crTabs" class="flex flex-wrap gap-2">${crTabsHtml()}</div>
     <div class="relative">
       <input id="crSearch" data-lock-allow value="${esc(crSearchName)}" placeholder="按学生姓名搜索…" oninput="crSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
     </div>
-    <div class="space-y-3">${recordsHtml || '<div class="text-gray-400 text-sm">暂无匹配记录</div>'}</div>
+    <div id="crList" class="space-y-3">${crListHtml()}</div>
   </div>`;
 }
 function openClassRecordForm() {
@@ -2931,10 +3137,11 @@ function deleteClassRecord(id) {
 // ===================== 行为记录（独立页，与课堂记录/班级日志平级） =====================
 let behFilterType = '';
 let behSearchName = '';
-function behSetType(t) { behFilterType = t; render(); }
-function behSetSearch(v) { behSearchName = v; render(); }
-// 聚合当前班级全部学生的非课堂行为（来自各学生 s.records），按类型/姓名筛选
-function renderBehavior() {
+function behSetType(t) { behFilterType = t; behRefreshPartial(); }
+// 只重画「类型标签 + 列表」，不动搜索框 —— 否则每敲一个字整页重建，输入框立刻失焦
+function behSetSearch(v) { behSearchName = v; behRefreshPartial(); }
+// 聚合当前班级全部学生的非课堂行为（来自各学生 s.records）
+function behAllList() {
   if (!state.students) state.students = [];
   const cls = state.activeClass;
   const list = [];
@@ -2942,17 +3149,23 @@ function renderBehavior() {
     if (s.class !== cls) return;
     (s.records || []).forEach(r => list.push({ sid: s.id, name: s.name, type: r.type, date: r.date, content: r.content, rid: r.id }));
   });
-  const q = behSearchName.trim().toLowerCase();
-  const filtered = list.filter(r => {
-    const tOk = !behFilterType || r.type === behFilterType;
-    const nOk = !q || r.name.toLowerCase().includes(q) || (r.content || '').toLowerCase().includes(q);
-    return tOk && nOk;
-  });
-  const tabs = [
+  list.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  return list;
+}
+function behTabsHtml() {
+  return [
     { id: '', label: '全部' }, { id: 'critic', label: '批评' }, { id: 'praise', label: '表扬' },
     { id: 'chat', label: '谈心' }, { id: 'leave', label: '请假' },
   ].map(t => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${behFilterType === t.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="behSetType('${t.id}')">${t.label}</button>`).join('');
-  const rows = filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
+}
+function behListHtml() {
+  const q = String(behSearchName || '').trim().toLowerCase();
+  const filtered = behAllList().filter(r => {
+    const tOk = !behFilterType || r.type === behFilterType;
+    const nOk = !q || String(r.name || '').toLowerCase().includes(q) || String(r.content || '').toLowerCase().includes(q);
+    return tOk && nOk;
+  });
+  return filtered.map(r => `<div class="p-4 rounded-xl bg-gray-50 flex justify-between items-start">
     <div class="flex-1">
       <div class="flex items-center gap-2 mb-1 flex-wrap">
         <span class="text-xs font-medium text-gray-700">${esc(r.name)}</span>
@@ -2962,18 +3175,28 @@ function renderBehavior() {
       <div class="text-sm text-gray-700">${esc(r.content || '')}</div>
     </div>
     <button class="text-gray-300 hover:text-red-500 ml-3" onclick="deleteRecord('${r.sid}','${r.rid}')">🗑️</button>
-  </div>`).join('');
+  </div>`).join('') || '<div class="text-gray-400 text-sm">暂无符合条件的行为记录</div>';
+}
+function behCountHtml() {
+  return `共 ${behAllList().length} 条 · 仅显示「${esc(state.activeClass)}」非课堂行为，已同步班级日志`;
+}
+function behRefreshPartial() {
+  const t = document.getElementById('behTabs'); if (t) t.innerHTML = behTabsHtml();
+  const l = document.getElementById('behList'); if (l) l.innerHTML = behListHtml();
+  const c = document.getElementById('behCount'); if (c) c.textContent = behCountHtml();
+}
+function renderBehavior() {
   return `<div class="bg-white rounded-2xl p-6 shadow-sm space-y-4">
     <div class="flex items-center justify-between">
-      <div class="font-bold text-gray-800">行为记录 <span class="text-xs text-gray-400 font-normal">（共 ${list.length} 条 · 仅显示「${esc(cls)}」非课堂行为，已同步班级日志）</span></div>
+      <div class="font-bold text-gray-800">行为记录 <span id="behCount" class="text-xs text-gray-400 font-normal">（${behCountHtml()}）</span></div>
       <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openBehaviorAdd()">+ 添加记录</button>
     </div>
-    <div class="flex flex-wrap gap-2">${tabs}</div>
+    <div id="behTabs" class="flex flex-wrap gap-2">${behTabsHtml()}</div>
     <div class="relative">
       <input id="behSearch" data-lock-allow value="${esc(behSearchName)}" placeholder="按学生姓名 / 内容搜索…" oninput="behSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
     </div>
-    <div class="space-y-3">${rows || '<div class="text-gray-400 text-sm">暂无符合条件的行为记录</div>'}</div>
+    <div id="behList" class="space-y-3">${behListHtml()}</div>
   </div>`;
 }
 // 选择学生后打开「添加行为记录」表单
@@ -3037,10 +3260,16 @@ function renderReport() {
   const dayWin = isMonth ? 30 : 7;
   const inClass = new Set(clsStudents.map(s => s.id));
   const totalStudents = clsStudents.length;
-  const criticCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'critic').length, 0);
-  const praiseCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'praise').length, 0);
+  // 时间窗：周报取近 7 天、月报取近 30 天（含今天）。
+  // 旧实现算出 recent 却没用，表扬/批评一直是「建班至今累计值」，切周报月报数字纹丝不动。
+  const winStartTs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - (dayWin - 1)); return d.getTime(); })();
+  const inWin = (dateStr) => { const d = ptParseDate(dateStr); return !!d && d.getTime() >= winStartTs; };
+  const criticCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'critic' && inWin(r.date)).length, 0);
+  const praiseCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'praise' && inWin(r.date)).length, 0);
+  const winLogs = (state.classLogs || []).filter(l => inWin(l.date || l.dateLabel));
   const pendingComm = state.communications.filter(c => c.status === '待跟进').length;
   const recent = ptRecent(dayWin).filter(l => inClass.has(l.studentId));
+  const recentSum = ptSum(recent);   // 本周期新增积分
   const top10 = clsStudents.map(s => ({ s, score: ptScoreOf(s.id) })).sort((a, b) => b.score - a.score).slice(0, 10).filter(x => x.score !== 0);
   const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
   const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
@@ -3048,11 +3277,11 @@ function renderReport() {
   const reportText = `【${className(state.activeClass)} · ${isMonth ? '月报' : '周报'}】
 时间：${formatDate(now)}
 班级概况：本班共 ${totalStudents} 名学生。
-行为记录统计：${isMonth ? '本月' : '本周'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
-积分概况：全班累计 ${fmtScore(totalSum)} 分（体育打卡 ${fmtScore(sportSum)}、日常积分 ${fmtScore(dailySum)}、考试赋分 ${fmtScore(examSum)}、任职赋分 ${fmtScore(postSum)}）。
+行为记录统计：${isMonth ? '近30天' : '近7天'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
+积分概况：全班累计 ${fmtScore(totalSum)} 分（体育打卡 ${fmtScore(sportSum)}、日常积分 ${fmtScore(dailySum)}、考试赋分 ${fmtScore(examSum)}、任职赋分 ${fmtScore(postSum)}）；${isMonth ? '近30天' : '近7天'}新增 ${fmtScore(recentSum)} 分。
 积分排行前10：${top10.length ? top10.map((x, i) => `${i + 1}. ${x.s.name} ${fmtScore(x.score)}分`).join('，') : '暂无'}
 家校沟通：待跟进 ${pendingComm} 项。
-班级日志摘要：${state.classLogs.slice(0,5).map(l=>l.date+' '+l.content).join('；') || '暂无'}
+班级日志摘要（${isMonth ? '近30天' : '近7天'}）：${winLogs.slice(0,5).map(l=>l.date+' '+l.content).join('；') || '暂无'}
 待办重点：${state.todos.filter(t=>!t.done).slice(0,3).map(t=>t.title).join('；') || '无'}`;
 
   const rangeBtn = (r, label) => `<button class="px-3 py-1.5 rounded-full text-sm transition ${reportRange===r?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setReportRange('${r}')">${label}</button>`;
@@ -3115,8 +3344,9 @@ function renderReport() {
       ${(() => {
         // ===== 只取当前班级的日志（两班分离） =====
         const targetCls = state.activeClass;
-        let logs = (state.classLogs || []).filter(l => classLogBelongsTo(l, targetCls));
-        if (!logs.length) return '<div class="text-sm text-gray-400 py-2">暂无日志</div>';
+        // 与周报/月报口径一致：只取时间窗内的日志
+        let logs = (state.classLogs || []).filter(l => classLogBelongsTo(l, targetCls) && inWin(l.date || l.dateLabel));
+        if (!logs.length) return `<div class="text-sm text-gray-400 py-2">${isMonth ? '近30天' : '近7天'}暂无日志</div>`;
 
         const weekdays = ['周日','周一','周二','周三','周四','周五','周六'];
         const fmtDate = (dstr) => {
@@ -3457,7 +3687,8 @@ function renderParentReport(){
   const cls=b.cls, totalStudents=cls.length;
   const vb=classViolationBreakdown(start,end);
   const praiseMap={},criticMap={};
-  cls.forEach(s=>{(s.records||[]).forEach(r=>{ if(r.type==='praise')praiseMap[s.id]=(praiseMap[s.id]||0)+1; if(r.type==='critic')criticMap[s.id]=(criticMap[s.id]||0)+1; });});
+  // 与标题口径一致：只统计所选周期内的记录（旧实现统计的是建班至今累计值）
+  cls.forEach(s=>{(s.records||[]).forEach(r=>{ if(!attInRange(r.date,start,end)) return; if(r.type==='praise')praiseMap[s.id]=(praiseMap[s.id]||0)+1; if(r.type==='critic')criticMap[s.id]=(criticMap[s.id]||0)+1; });});
   const praiseTotal=Object.values(praiseMap).reduce((a,x)=>a+x,0);
   const criticTotal=Object.values(criticMap).reduce((a,x)=>a+x,0);
   const praiseList=cls.filter(s=>praiseMap[s.id]).sort((a,b)=>praiseMap[b.id]-praiseMap[a.id]).slice(0,5);
@@ -3474,7 +3705,7 @@ ${periodLabel}概况：表扬 ${praiseTotal} 次，需关注 ${criticTotal} 次�
 全勤情况：体育打卡全勤 ${sportN} 人、考勤全勤 ${attendN} 人、履职到位 ${postN} 人。
 值得肯定：${praiseList.length?praiseList.map(s=>s.name+'('+praiseMap[s.id]+'次)').join('、'):'暂无'}
 需家长协同：${criticList.length?criticList.map(s=>s.name+'('+criticMap[s.id]+'次)').join('、'):'暂无'}
-班级日志：${state.classLogs.slice(0,3).map(l=>l.date+' '+l.content).join('；')||'暂无'}`;
+班级日志：${(state.classLogs||[]).filter(l=>attInRange(l.date,start,end)).slice(0,3).map(l=>l.date+' '+l.content).join('；')||'暂无'}`;
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
       <div class="font-bold text-gray-800 text-lg">${esc(className(state.activeClass))} · 家长${isMonth?'月报':'周报'}</div>
@@ -3586,7 +3817,14 @@ function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId =
 // ========== 积分计算缓存：按维度独立缓存，支持显式刷新，不主动全局重算 ==========
 let _ptCache = { sig: {}, raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
 
-function ptBaseSig() { return [state.activeClass, state.headTeacherClass, state.points.calcStartDate].join('#'); }
+// 本班学生名册签名：转班 / 新增 / 删除 / 改名都会改变积分归属，必须让缓存失效。
+// 旧实现签名里没有名册，导致「学生从 A 班转到 B 班后，B 班仍显示 0 分」。
+function ptRosterSig() {
+  const list = (state.students || []).filter(s => s && s.class === state.activeClass);
+  if (!list.length) return '@';
+  return list.map(s => `${s.id}:${s.name}`).join('|');
+}
+function ptBaseSig() { return [state.activeClass, state.headTeacherClass, state.points.calcStartDate, ptRosterSig()].join('#'); }
 function ptLogsSig(dim) {
   return state.points.logs.filter(l => l.dim === dim).map(l => `${l.id || ''}:${l.studentId || ''}:${l.delta || 0}:${l.date || ''}`).join('|');
 }
@@ -3663,7 +3901,17 @@ function ptEnsureCacheAll() {
   if (!_ptCache.sig.all || _ptCache.sig.all !== ptAllSig()) ptComputeAll();
 }
 
-function ptTotal(sid) { return ptSum(ptEffectiveLogs(ptStudentLogs(sid))); }
+// 原始总分 = 四个维度原始分之和。
+// 不能只累加日志：考试赋分的成绩折算分不在日志里（由 ptDimScoreRaw 实时计入），
+// 旧实现直接用 ptSum(全部日志) 会把考试赋分整块漏掉（四维度之和 70 而总分只显示 20）。
+function ptTotal(sid) {
+  const dimIds = POINT_DIMS.map(d => d.id);
+  let v = 0;
+  for (const d of dimIds) v += ptDimScoreRaw(sid, d) || 0;
+  // 兜底：维度不属于四个标准维度的历史脏数据也要计入，避免记录凭空消失
+  v += ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => dimIds.indexOf(l.dim) === -1)));
+  return v;
+}
 function ptDimScore(sid, dim) { ptEnsureCacheDim(dim); return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
 function ptClassSum(dim) {
   ptEnsureCacheDim(dim);
@@ -3681,6 +3929,11 @@ function ptRanked(dim) {
     score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0) : ptDimScore(s.id, dim))
   }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
+  // 同分并列：积分相同的学生名次并列（100/90/90/80 → 1/2/2/4），否则并列者会一个拿银牌一个拿铜牌
+  const scoreOf = {};
+  arr.forEach(x => { scoreOf[x.s.id] = x.score; });
+  const rankMap = denseRankMap(arr.map(x => x.s.id), id => scoreOf[id]);
+  arr.forEach(x => { x.rank = rankMap[x.s.id]; });
   return arr;
 }
 function ptRecent(days) {
@@ -3809,7 +4062,8 @@ function renderPtList() {
   const maxAbs = Math.max(1, ...list.map(x => Math.abs(x.score)));
   const medals = ['🥇', '🥈', '🥉'];
   return list.map((x, i) => {
-    const rankShow = pointsQuery.trim() ? `<span class="text-xs text-gray-400">#${i + 1}</span>` : (medals[i] || `<span class="text-xs text-gray-400 font-medium">${i + 1}</span>`);
+    const rk = x.rank || (i + 1);   // 优先用并列后的名次；搜索过滤时退回行号
+    const rankShow = pointsQuery.trim() ? `<span class="text-xs text-gray-400">#${i + 1}</span>` : (medals[rk - 1] || `<span class="text-xs text-gray-400 font-medium">${rk}</span>`);
     const pills = dim === 'all'
       ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = pointsMode === 'conv' ? ptConvDim(x.s.id, d.id) : ptDimScore(x.s.id, d.id);
           return `<span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}" title="${d.label}">${d.icon}${fmtScore(v)}</span>`; }).join('')
@@ -4198,8 +4452,23 @@ function toggleExamCol(key) {
 }
 // ---------- 列配置（科目 / 预设列）相关 ----------
 function examColumns() { return state.examData.columns || defaultExamColumns(); }
+// 安全读取考试班级列表：examData 结构被破坏时（异常导入 / 旧备份）返回空数组而不是崩掉整页
+function examClassesSafe() { return (state.examData && Array.isArray(state.examData.classes)) ? state.examData.classes.filter(Boolean) : []; }
+// examData 结构兜底：旧备份 / 手工导入可能让整块为 null 或某个字段不是数组，
+// 这里按"缺什么补什么"原地修复后再返回，避免一个坏字段让好几页一起白屏。
+function examDataSafe() {
+  const ed = (state.examData && typeof state.examData === 'object') ? state.examData : (state.examData = {});
+  if (!Array.isArray(ed.classes)) ed.classes = [];
+  if (!Array.isArray(ed.exams)) ed.exams = [];
+  if (!Array.isArray(ed.records)) ed.records = [];
+  if (!Array.isArray(ed.subjects)) ed.subjects = [];
+  if (!Array.isArray(ed.columns)) ed.columns = [];
+  return ed;
+}
 function examScoreColumns() { return examColumns().filter(c => c.type === 'score' && c.enabled); }
 function examRankColumns() { return examColumns().filter(c => c.type === 'rank' && c.enabled); }
+// 合计类科目名：这些列本身就是各科之和，任何「求总分」的场合都要排除，否则总分翻倍
+const TOTAL_SCORE_SUBJECTS = new Set(['总分', '总得分', '总成绩', '合计', '总分合计', 'total']);
 function examColumnByKey(key) { return examColumns().find(c => c.key === key); }
 function addExamColumn(key, type) {
   key = (key || '').trim(); if (!key) return false;
@@ -4445,8 +4714,11 @@ function studentRankSeries(studentName, subject) {
     const mine = state.examData.records.find(r => r.examId === e.id && r.studentName === studentName && r.subject === subject);
     if (!mine) return null;
     const same = state.examData.records.filter(r => r.examId === e.id && r.classId === mine.classId && r.subject === subject);
-    const sorted = [...same].sort((a, b) => b.score - a.score);
-    const rank = sorted.findIndex(r => r.studentName === studentName) + 1;
+    const sorted = [...same].sort((a, b) => (+b.score || 0) - (+a.score || 0));
+    // 同分并列：单科排名同样要处理并列（90/90 → 都是第 1）
+    const scoreByName = {};
+    sorted.forEach(r => { if (!(r.studentName in scoreByName)) scoreByName[r.studentName] = +r.score || 0; });
+    const rank = denseRankMap(sorted.map(r => r.studentName), n => scoreByName[n] || 0)[studentName] || 0;
     return { exam: e.name, date: e.date, score: +mine.score, rank };
   }).filter(Boolean);
 }
@@ -4457,7 +4729,7 @@ function examStudentsOfClass(className) {
 function findClassIdByName(name) {
   const st = (state.students || []).find(x => x.name === name);
   if (st && st.class) {
-    const c = state.examData.classes.find(c => c.name === st.class || c.id === st.class);
+    const c = ((state.examData && state.examData.classes) || []).find(c => c && (c.name === st.class || c.id === st.class));
     if (c) return c.id;
   }
   return null;
@@ -4469,6 +4741,16 @@ function examSchoolRankColumnKey() {
   if (cfg.column && rankCols.includes(cfg.column)) return cfg.column;
   const hint = rankCols.find(k => /校次|校名|年级名|年级次|校排|年排/.test(k));
   return hint || rankCols[0] || null;
+}
+// 密集排名：同分并列。100/90/90/80 → 1/2/2/4（而不是 1/2/3/4）。
+// sortedKeys 必须已按 scoreOf 降序排好。
+function denseRankMap(sortedKeys, scoreOf) {
+  const m = {};
+  sortedKeys.forEach((k, i) => {
+    if (i > 0 && scoreOf(k) === scoreOf(sortedKeys[i - 1])) m[k] = m[sortedKeys[i - 1]];
+    else m[k] = i + 1;
+  });
+  return m;
 }
 function schoolTierPoints(rk, tiers) {
   if (!rk || rk <= 0) return 0;
@@ -4499,15 +4781,20 @@ function examScoreInRange() {
     const names = [...new Set(recs.map(r => r.studentName))].filter(Boolean);
     if (!names.length) return;
     // 每位学生总分（score 类列求和）
+    // 注意：成绩表常自带「总分」列，它本身就是各科之和，再累加一次会让总分翻倍
+    // （语80 + 数90 + 总分170 → 被算成 340）。总分/合计类列一律排除。
     const totalByStu = {};
-    recs.filter(r => r.colType !== 'rank').forEach(r => { totalByStu[r.studentName] = (totalByStu[r.studentName] || 0) + (+r.score || 0); });
-    // 班次排名（按总分）
+    recs.filter(r => r.colType !== 'rank' && !TOTAL_SCORE_SUBJECTS.has(r.subject))
+        .forEach(r => { totalByStu[r.studentName] = (totalByStu[r.studentName] || 0) + (+r.score || 0); });
+    // 班次排名（按总分，同分并列：100/90/90/80 → 1/2/2/4，而不是 1/2/3/4）
     const ranked = [...names].sort((a, b) => (totalByStu[b] || 0) - (totalByStu[a] || 0));
-    const classRankMap = {}; ranked.forEach((nm, i) => { classRankMap[nm] = i + 1; });
+    const classRankMap = denseRankMap(ranked, nm => totalByStu[nm] || 0);
     const classSize = names.length;
     // 单科记录分组（用于单科最高分）
     const bySubj = {};
-    recs.filter(r => r.colType !== 'rank').forEach(r => { (bySubj[r.subject] = bySubj[r.subject] || []).push(r); });
+    // 单科最高分只针对真正的学科；「总分」是合计列，不算单科
+    recs.filter(r => r.colType !== 'rank' && !TOTAL_SCORE_SUBJECTS.has(r.subject))
+        .forEach(r => { (bySubj[r.subject] = bySubj[r.subject] || []).push(r); });
     // 各 scope 下的单科最高分集合：subject -> 最高分学生集合
     const topOf = {};
     Object.keys(bySubj).forEach(sub => {
@@ -4575,13 +4862,14 @@ function examScoreInRange() {
 // 带缓存的派生数据（输入变化时才重算）
 let _escCache = null, _escSig = '';
 function examScoreData() {
+  const ed = examDataSafe();
   const sig = JSON.stringify({
     a: state.activeClass,
-    s: state.points.calcStartDate,
-    ex: state.examData.exams,
-    rc: state.examData.records,
-    st: (state.students || []).map(x => x.name + '|' + x.class),
-    cols: (state.examData.columns || []).map(c => c.key + c.type + (c.enabled ? '1' : '0')),
+    s: (state.points && state.points.calcStartDate) || '',
+    ex: ed.exams,
+    rc: ed.records,
+    st: (state.students || []).map(x => (x ? x.name + '|' + x.class : '')),
+    cols: ed.columns.map(c => c.key + c.type + (c.enabled ? '1' : '0')),
     cfg: state.examScore
   });
   if (_escSig === sig && _escCache) return _escCache;
@@ -4605,7 +4893,7 @@ function getStudentProgress(studentName, examId, subject) {
 // ===================== 考勤管理：页面与交互 =====================
 let attMode = null;   // 'home' | 'leave' | null
 function attChipClass(name){
-  const cur=(state.attendance.current)||{home:{},leave:{}};
+  const cur=((state.attendance||{}).current)||{home:{},leave:{}};
   const h=Object.prototype.hasOwnProperty.call(cur.home,name), l=Object.prototype.hasOwnProperty.call(cur.leave,name);
   if(h&&l) return 'both'; if(h) return 'home'; if(l) return 'leave'; return '';
 }
@@ -4679,26 +4967,37 @@ function openAttMemberModal(){
   </div>`);
 }
 function renderAttendance() {
-  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  // 考勤结构可能被旧备份 / 手工导入破坏（current 缺失、home/leave 为 null、logs 不是数组），
+  // 这里统一按"缺什么补什么"修复后再渲染，避免整页白屏。
+  const a = (state.attendance && typeof state.attendance === 'object') ? state.attendance : (state.attendance = {});
+  if (!a.current || typeof a.current !== 'object') a.current = {};
+  const cur = a.current;
+  if (!cur.date) cur.date = attDateKey(new Date());
+  if (!cur.home || typeof cur.home !== 'object') cur.home = attDeriveHome() || {};
+  if (!cur.leave || typeof cur.leave !== 'object') cur.leave = {};
+  if (!Array.isArray(a.logs)) a.logs = [];
   const st=attStats();
-  const homeNames=Object.keys(a.current.home), leaveNames=Object.keys(a.current.leave);
-  const leaveList=Object.entries(a.current.leave).map(([n,r])=>({name:n,reason:r===true?'':r}));
-  const conclusion = `应到 ${st.total} 人，实到 ${st.present} 人。固定回家 ${st.home} 人（${homeNames.join('、')||'无'}），请假 ${st.leave} 人（${leaveNames.join('、')||'无'}）。`;
+  const homeNames=Object.keys(cur.home), leaveNames=Object.keys(cur.leave);
+  const leaveList=Object.entries(cur.leave).map(([n,r])=>({name:n,reason:r===true?'':r}));
+  // 姓名可能来自导入/手动录入，必须转义后再拼接进 HTML（否则 <img onerror=...> 会被执行）
+  const conclusion = `应到 ${st.total} 人，实到 ${st.present} 人。固定回家 ${st.home} 人（${esc(homeNames.join('、'))||'无'}），请假 ${st.leave} 人（${esc(leaveNames.join('、'))||'无'}）。`;
 
+  // 姓名作为 JS 参数内联到 onclick 时，用 JSON.stringify + esc 双重保护：
+  // 旧实现只去掉单引号，遇到双引号/反斜杠/右括号仍会截断 HTML 属性。
   const memberChips = attMembers().map(m=>{
     const cls=attChipClass(m.name);
-    return `<div class="member-chip ${cls}" onclick="markAttMember('${m.name.replace(/'/g,"")}')">${esc(m.name)}</div>`;
+    return `<div class="member-chip ${cls}" onclick="markAttMember(${esc(JSON.stringify(m.name))})">${esc(m.name)}</div>`;
   }).join('') || '<div class="text-sm text-gray-400">还没有班级成员，点「班级成员管理」导入名单。</div>';
 
   const todayDay = attDayName(new Date());
   const homeRows = attMembers().filter(m => (m.weeklyHome||[]).includes(todayDay)).map(m=>`<tr>
     <td class="py-2">${esc(m.name)}</td>
-    <td class="py-2"><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay('${m.name.replace(/'/g,"")}','${d}')">${d}</span>`).join('')}</div></td>
+    <td class="py-2"><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay(${esc(JSON.stringify(m.name))},'${d}')">${d}</span>`).join('')}</div></td>
     <td class="py-2">${(m.weeklyHome||[]).includes(todayDay)?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400 py-3">今日无固定回家成员</td></tr>';
 
-  const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave('${l.name.replace(/'/g,"")}')">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
+  const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave(${esc(JSON.stringify(l.name))})">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
 
-  const historyRows = a.logs.slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${l.home.length}</td><td>${l.leave.length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
+  const historyRows = a.logs.filter(l=>l&&l.dateLabel).slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${(l.home||[]).length}</td><td>${(l.leave||[]).length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
 
   return `<div class="space-y-4">
     <div class="bg-white rounded-2xl p-5 shadow-sm">
@@ -4989,7 +5288,7 @@ function setExamTab(t) { examTab = t; render(); }
 function selectExamStudent(name) { examSelectedStudent = name; renderExamAnalysisInto(); }
 function examQuickCompareClasses() {
   ensureAnalysisSel();
-  anSelClasses = state.examData.classes.map(c => c.id);
+  anSelClasses = examClassesSafe().map(c => c.id);
   anSelExams = state.examData.exams.map(e => e.id);
   anSelStudents = [];
   renderExamAnalysisInto();
@@ -5001,7 +5300,7 @@ function examQuickPersonalTrend() {
     if (!first) { alert('暂无成绩数据，请先上传成绩'); return; }
     examSelectedStudent = first;
   }
-  anSelClasses = state.examData.classes.map(c => c.id);
+  anSelClasses = examClassesSafe().map(c => c.id);
   anSelExams = state.examData.exams.map(e => e.id);
   renderExamAnalysisInto();
 }
@@ -5011,7 +5310,7 @@ function examQuickPersonalTrend() {
 // 班级增删、成员增删、性别调整均在「学生管理」完成，成绩分析自动同步（见 syncExamClassesToStudents）。
 
 function renderExamSettings() {
-  const clsHtml = state.examData.classes.map(c => {
+  const clsHtml = examClassesSafe().map(c => {
     const members = examStudentsOfClass(c.name);
     const chips = members.length ? members.map(n => {
       const g = examStudentGender(n);
@@ -5043,7 +5342,7 @@ function renderExamSettings() {
 }
 function renderExamUpload() {
   const examOpts = state.examData.exams.map(e => `<option value="${e.id}">${esc(e.name)}（${esc(e.date || '')}）</option>`).join('') || '<option value="">（先添加考试）</option>';
-  const clsOpts = state.examData.classes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  const clsOpts = examClassesSafe().map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   const subjOpts = examColumns().filter(c => c.enabled).map(c => `<option value="${esc(c.key)}">${esc(c.key)}${c.type === 'rank' ? '（排名）' : ''}</option>`).join('') || '<option value="">（请先在「班级设置」或下方管理列）</option>';
   return `
   <div class="space-y-5">
@@ -5659,7 +5958,7 @@ function doProductImport() {
   if (currentRoute === 'exam') {
     examTab = 'query';
     eqExamId = targetExamId;
-    eqClassIds = state.examData.classes.map(c => c.id);
+    eqClassIds = examClassesSafe().map(c => c.id);
     eqSearch = '';
   }
   render();
@@ -6008,8 +6307,8 @@ function renderExamQuery() {
   if (!exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📋</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
   if (!eqExamId || !exams.find(e => e.id === eqExamId)) eqExamId = exams[exams.length - 1].id;
   const examOpts = exams.map(e => `<option value="${e.id}" ${e.id === eqExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
-  if (!eqClassIds.length) eqClassIds = state.examData.classes.map(c => c.id);
-  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" data-lock-allow value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
+  if (!eqClassIds.length) eqClassIds = examClassesSafe().map(c => c.id);
+  const clsChk = examClassesSafe().map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" data-lock-allow value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
   const allCols = examColumns().filter(c => c.enabled);
   const colChk = allCols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="eq-col" data-lock-allow value="${esc(c.key)}" ${eqHiddenCols.has(c.key) ? '' : 'checked'} onchange="eqCollect();"> ${esc(c.key)}</label>`).join('');
   const sortOpts = [{k:'',l:'默认（班级/姓名）'},{k:'classId',l:'班级'},{k:'name',l:'姓名'},...allCols.map(c=>({k:c.key,l:c.key+(c.type==='rank'?'·排名':'')}))].map(o=>`<option value="${esc(o.k)}" ${eqSortCol===o.k?'selected':''}>${esc(o.l)}</option>`).join('');
@@ -6211,7 +6510,9 @@ function examGradeAvg(examId, subject, classIds) {
   return rs.reduce((a, b) => a + (+b.score || 0), 0) / rs.length;
 }
 function renderExamAnalysis() {
-  if (!state.examData.exams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
+  // 旧实现直接读 state.examData.exams.length，一旦 examData 结构被破坏（异常导入/旧备份）整页白屏
+  const _edExams = (state.examData && state.examData.exams) || [];
+  if (!_edExams.length) return `<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">📊</div><div class="font-bold text-gray-800">还没有考试数据</div><p class="text-sm text-gray-500 mt-2">先到「成绩上传」添加考试并导入成绩。</p></div>`;
   const cols = examColumns().filter(c => c.enabled);
   const colOpts = cols.map(c => `<option value="${esc(c.key)}">${esc(c.key)}${c.type === 'rank' ? '（排名）' : ''}</option>`).join('');
   return `
@@ -6293,7 +6594,11 @@ function anRunPersonal() {
   }, 0);
 }
 function anToggleMetricInputs() {
-  const col = document.getElementById('anCmpCol').value;
+  // 还没有考试数据时，成绩分析面板只渲染占位提示，页面上根本没有 #anCmpCol，
+  // 旧实现直接取 .value 会抛 "Cannot read properties of null"，每次进成绩页都报一次错。
+  const colEl = document.getElementById('anCmpCol');
+  if (!colEl) return;
+  const col = colEl.value;
   const colDef = examColumnByKey(col);
   const isRank = colDef && colDef.type === 'rank';
   const paramsWrap = document.getElementById('anMetricParams');
@@ -6518,7 +6823,8 @@ function clearPtLogs() {
 function openPtStudent(sid) {
   const s = state.students.find(x => x.id === sid); if (!s) return;
   const logs = ptStudentLogs(sid);
-  const rank = ptRanked('all').findIndex(x => x.s.id === sid) + 1;
+  const _rk = ptRanked('all').find(x => x.s.id === sid);
+  const rank = (_rk && _rk.rank) || 0;
   openModal(`${esc(s.name)} · 积分详情`, `
     <div class="space-y-4">
       <div class="flex items-center gap-4">
@@ -6654,7 +6960,7 @@ function homeExhibitStudents() {
   }
   const arr = ptRanked(homeExhibit.dim).map(x => {
     const s = x.s;
-    return { s, total: ptConvTotal(s.id), dims: POINT_DIMS.map(d => ({ id: d.id, v: ptConvDim(s.id, d.id) })) };
+    return { s, rank: x.rank, total: ptConvTotal(s.id), dims: POINT_DIMS.map(d => ({ id: d.id, v: ptConvDim(s.id, d.id) })) };
   });
   const result = homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
   homeExhibit._cachedStudents = result;
@@ -6669,6 +6975,8 @@ function homeExhibitCardHTML(x, i, fs) {
   const total = x.total;   // 缓存预计算值
   const dims = x.dims;     // 缓存预计算值 [{id, v}, ...]
   const maxV = Math.max(1, ...dims.map(o => o.v));
+  const rk = x.rank || (i + 1);   // 并列后的名次（同分同名次）
+  const ri = rk - 1;              // 基于名次的 0 基下标，用于奖牌样式
   // 暗色背景专用亮色（原 bg-*-400 在深底上太暗）
   const FS_BAR = { sport:'bg-emerald-400', daily:'bg-amber-400', exam:'bg-sky-400', post:'bg-violet-400' };
   if (fs) {
@@ -6676,13 +6984,13 @@ function homeExhibitCardHTML(x, i, fs) {
     const _d = id => POINT_DIMS.find(d => d.id === id) || {};
     const bar = o => `<div class="flex justify-between text-sm text-white/70"><span>${_d(o.id).icon} ${_d(o.id).label}</span><span class="font-bold text-white/90">${fmtScore(o.v)}</span></div>
       <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1.5"><div class="${FS_BAR[o.id] || 'bg-white/40'} h-full rounded-full transition-all" style="width:${Math.round(o.v / maxV * 100)}%;min-width:4px;box-shadow:0 0 6px ${FS_BAR[o.id]?.replace('bg-','') || 'fff'}40"></div></div>`;
-    const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500 shadow-lg shadow-amber-400/50 ring-2 ring-amber-300' : i === 1 ? 'bg-gradient-to-br from-gray-200 to-gray-400 shadow-md shadow-gray-400/40 ring-2 ring-gray-300' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-800 shadow-lg shadow-amber-700/50 ring-2 ring-amber-500' : 'bg-gray-400 shadow-sm ring-1.5 ring-gray-300';
+    const badgeCls = ri === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500 shadow-lg shadow-amber-400/50 ring-2 ring-amber-300' : ri === 1 ? 'bg-gradient-to-br from-gray-200 to-gray-400 shadow-md shadow-gray-400/40 ring-2 ring-gray-300' : ri === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-800 shadow-lg shadow-amber-700/50 ring-2 ring-amber-500' : 'bg-gray-400 shadow-sm ring-1.5 ring-gray-300';
     return `<div class="bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-5 flex flex-col">
       <div class="flex items-center gap-3 mb-3">
-        <span class="w-10 h-10 rounded-full ${badgeCls} text-white text-lg font-black flex items-center justify-center flex-shrink-0">${i + 1}</span>
+        <span class="w-10 h-10 rounded-full ${badgeCls} text-white text-lg font-black flex items-center justify-center flex-shrink-0">${rk}</span>
         <img src="${esc(s.avatar)}" class="w-14 h-14 rounded-full bg-white/10 ring-2 ring-white/20" alt="">
         <div class="flex-1 min-w-0"><div class="text-xl font-bold text-white truncate">${esc(s.name)}</div></div>
-        <div class="text-right"><div class="text-3xl font-black tabular-nums ${i < 3 ? 'text-pink-400' : 'text-white'}">${fmtScore(total)}</div></div>
+        <div class="text-right"><div class="text-3xl font-black tabular-nums ${ri < 3 ? 'text-pink-400' : 'text-white'}">${fmtScore(total)}</div></div>
       </div>
       <div class="space-y-2 mt-auto">${dims.map(bar).join('')}</div>
     </div>`;
@@ -6691,11 +6999,11 @@ function homeExhibitCardHTML(x, i, fs) {
   const _de = id => POINT_DIMS.find(d => d.id === id) || {};
   const bar = o => `<div class="flex justify-between text-[10px] text-gray-500"><span>${_de(o.id).icon}${_de(o.id).label}</span><span class="font-semibold text-gray-700">${fmtScore(o.v)}</span></div>
     <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.id).bar} h-full rounded-full" style="width:${Math.round(o.v / maxV * 100)}%;min-width:2px"></div></div>`;
-  const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500 shadow-md shadow-amber-400/40 ring-1.5 ring-amber-300' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-500 shadow-sm ring-1.5 ring-gray-300' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700 shadow-md shadow-amber-500/30 ring-1.5 ring-amber-400' : 'bg-gray-400/80 shadow-sm ring-1 ring-gray-300';
-  const topCls = i < 3 ? `ring-1.5 ${i===0?'ring-amber-300 shadow-sm shadow-amber-100/50':i===1?'ring-gray-300 shadow-sm shadow-gray-100/50':'ring-amber-400/40 shadow-sm shadow-amber-100/30'}` : '';
+  const badgeCls = ri === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500 shadow-md shadow-amber-400/40 ring-1.5 ring-amber-300' : ri === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-500 shadow-sm ring-1.5 ring-gray-300' : ri === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700 shadow-md shadow-amber-500/30 ring-1.5 ring-amber-400' : 'bg-gray-400/80 shadow-sm ring-1 ring-gray-300';
+  const topCls = ri < 3 ? `ring-1.5 ${ri===0?'ring-amber-300 shadow-sm shadow-amber-100/50':ri===1?'ring-gray-300 shadow-sm shadow-gray-100/50':'ring-amber-400/40 shadow-sm shadow-amber-100/30'}` : '';
   return `<div class="bg-white border border-gray-100 rounded-xl p-2.5 shadow-sm ${topCls}">
     <div class="flex items-center gap-2 mb-1">
-      <span class="w-6 h-6 rounded-full ${badgeCls} text-white text-xs font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
+      <span class="w-6 h-6 rounded-full ${badgeCls} text-white text-xs font-bold flex items-center justify-center flex-shrink-0">${rk}</span>
       <img src="${esc(s.avatar)}" class="w-8 h-8 rounded-full bg-gray-100 ring-1 ring-gray-200" alt="">
       <div class="flex-1 min-w-0"><span class="text-sm font-semibold text-gray-800">${esc(s.name)}</span></div>
       <span class="text-base font-extrabold text-primary tabular-nums">${fmtScore(total)}</span>
@@ -8069,7 +8377,42 @@ const LOCK_WRITE_FNS = new Set([
   'autoArchiveAttendance',      // 考勤：自动归档
   'diagUploadMissing',          // 数据自检：把本机记录补传到云端（会覆盖云端）
   'hwFixName',                  // 作业管理：补录旧记录学生姓名
+  'hwToggleStatus',             // 作业管理：切换「已完成/未完成」（实测曾漏网，锁定态下仍能改）
 ]);
+
+// 自动补全名单：扫描全局函数，凡函数体内直接调用 save() 的都视为写操作。
+// 目的：新增功能时无需手工维护名单，避免再次出现「锁定了却仍能改数据」的漏网之鱼。
+// 只读/系统类函数列在白名单里排除；宁可多拦（界面提示）也不放过真正的写入。
+const LOCK_ALLOW_FNS = new Set([
+  'save','pushSync','render','navigate','toast','closeModal','openModal','confirmModal','runConfirmCb',
+  'doLogout','showLogin','applyDefaultLock','initLockGuard','isWriteAction','lockAutoWriteFns',
+  'doUnlockPrompt','unlockApp','lockApp','setLockPass','toggleDefaultLock','applyLockFromPanel',
+  'exportData','doExport','copyReport','printReport','exportSeatTeacher','exportSeatStudent',
+  'maybeOnboard','finishOnboard','applyCloudState','load','defaultState','migrateState',
+  'gsSetQuery','gsOpen','crSetSearch','behSetSearch','hwSetSearch','ptFilter',
+]);
+let _lockAutoFns = null;
+function lockAutoWriteFns() {
+  if (_lockAutoFns) return _lockAutoFns;
+  const s = new Set();
+  try {
+    const keys = Object.getOwnPropertyNames(window);
+    for (const k of keys) {
+      if (LOCK_ALLOW_FNS.has(k)) continue;
+      // 纯查看/导出/打开类：即便内部有 save 也不该拦（如导出前落盘）
+      if (/^(open|view|export|copy|print|preview|show)/i.test(k)) continue;
+      let f; try { f = window[k]; } catch (e) { continue; }
+      if (typeof f !== 'function') continue;
+      let src = ''; try { src = String(f); } catch (e) { continue; }
+      if (!src || src.length > 40000) continue;
+      // 去掉行注释，避免「// 此处不要 save()」这类注释造成误判
+      const body = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      if (/\bsave\s*\(/.test(body)) s.add(k);
+    }
+  } catch (e) { /* 扫描失败时退回手工名单 */ }
+  _lockAutoFns = s;
+  return s;
+}
 
 // 判断元素（或其祖先）绑定的内联处理函数是否属于写操作
 function isWriteAction(el) {
@@ -8091,6 +8434,8 @@ function isWriteAction(el) {
           // 显式名单：名称不含写动词但实际会改数据
           if (LOCK_WRITE_FNS.has(fn)) return true;
           if (LOCK_WRITE_RE.test(fn)) return true;
+          // 自动补全：函数体内直接调用 save() 的（新增功能自动纳入，无需手工维护）
+          if (lockAutoWriteFns().has(fn)) return true;
         }
       }
     }
@@ -8203,12 +8548,40 @@ function importData() {
 function doImport() {
   const f = document.getElementById('importFile').files[0];
   if(!f) return alert('请选择文件');
+  if (state && state.locked) return alert('当前处于只读锁定模式，请先解锁后再导入数据。');
   const reader = new FileReader();
   reader.onload = e => {
-    try {
-      const data = JSON.parse(e.target.result);
-      state = data; save(); closeModal(); render();
-    } catch(err) { alert('文件格式不正确'); }
+    let data;
+    try { data = JSON.parse(e.target.result); }
+    catch(err) { return alert('文件格式不正确：不是合法的 JSON 文件。'); }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return alert('文件格式不正确：备份文件的最外层应该是一个对象。');
+    }
+    // 结构校验：至少要含有工作台的核心字段，避免误导入其它 JSON 把数据冲掉
+    const CORE_KEYS = ['students','points','classes','classRecords','homework','scores'];
+    if (!CORE_KEYS.some(k => k in data)) {
+      return alert('这个文件不像是班主任工作台的备份（未找到 students / points / classes 等核心字段），已取消导入。');
+    }
+    const curStu = (state.students || []).length;
+    const curLogs = ((state.points && state.points.logs) || []).length;
+    confirmModal(`导入将<b>覆盖当前全部数据</b>。<br>当前：${curStu} 名学生、${curLogs} 条积分记录；<br>导入后：${(data.students || []).length} 名学生、${((data.points && data.points.logs) || []).length} 条积分记录。<br><br>导入前会自动在本地留一份备份，确定继续吗？`, function(){
+      const prev = state;
+      const backup = (function(){ try { return JSON.stringify(state); } catch(e){ return ''; } })();
+      try {
+        state = migrateState(data);   // 归一化：补齐旧备份缺失的模块字段
+        save(true);                   // internal：导入属系统级写入，不受只读锁定影响
+      } catch (err) {
+        state = prev;
+        try { save(true); } catch(e2) {}
+        return alert('导入失败，已恢复原有数据。原因：' + err.message);
+      }
+      if (backup) {
+        try { localStorage.setItem(STORAGE_KEY + '_bak_import_' + Date.now(), backup); }
+        catch(e) { console.warn('备份写入失败（不影响导入结果）', e); }
+      }
+      closeModal(); render();
+      alert('导入成功。原数据已备份在浏览器本地，如发现问题可在「设置 → 数据自检」回滚。');
+    }, '确定导入');
   };
   reader.readAsText(f);
 }
@@ -8283,7 +8656,9 @@ function doImportFromClassScore() {
       });
 
       save(); closeModal(); render();
-      alert(`导入完成：新增学生 ${newStu} 人、职务分配 ${newAssign} 条、积分明细 ${newLogs} 条；跳过任职赋分自动记录 ${skipJob} 条（由职务系统实时计算）。`);
+      // 注意：这里曾引用未定义变量 newAssign，导致导入明明成功却抛出
+      // "newAssign is not defined"、被下面的 catch 兜成「文件解析失败」。
+      alert(`导入完成：新增学生 ${newStu} 人、积分明细 ${newLogs} 条；跳过任职赋分自动记录 ${skipJob} 条（由职务系统实时计算）。`);
     } catch (err) { alert('文件解析失败：' + err.message); }
   };
   reader.readAsText(f);
@@ -8469,7 +8844,10 @@ function pmSwitch(tab){
 /* ===== 职务架构 ===== */
 function pmChip(n,i,onRemove){ return `<span class="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full border border-indigo-200" onclick="${onRemove}">${esc(n)}<span class="text-indigo-400">×</span></span>`; }
 function pmRenderRoles(){
-  const P=state.positions;
+  // 职务结构兜底：旧备份 / 导入可能让 positions 整块为 null 或 structure 不是数组
+  let P = (state.positions && typeof state.positions === 'object') ? state.positions : null;
+  if (!P) { try { P = state.positions = defaultPositions(); } catch (e) { return '<div class="text-sm text-gray-400">职务数据异常，请到「设置 → 重置职务数据」恢复。</div>'; } }
+  if (!Array.isArray(P.structure)) P.structure = [];
   const list=P.structure.slice().sort(pmSortPriority);
   let html=`<div class="flex items-center justify-between mb-3">
     <div class="text-sm font-semibold text-slate-600">共 ${list.length} 个职务</div>
@@ -8498,7 +8876,7 @@ function pmRenderRoles(){
       </div>
       <ul class="text-[11px] text-slate-500 list-disc pl-4 mt-2 space-y-0.5 min-h-[38px]">${p.duties.map(d=>`<li>${esc(d)}</li>`).join('')}</ul>
       <div class="flex flex-wrap gap-1.5 mt-3 items-center">
-        ${names.map((n,i)=>pmChip(n,i,`pmRemoveRole('${p.id}',${i})`)).join('')}
+        ${names.map((n,i)=>pmChip(n,i,`pmRemoveRole('${p.id}',${esc(JSON.stringify(n))})`)).join('')}
         <span class="inline-flex items-center bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full border border-dashed border-slate-300 cursor-pointer" onclick="pmOpenAdd('${p.id}')">＋</span>
       </div>
     </div>`;
@@ -8546,7 +8924,15 @@ function pmDeletePosition(id){
   delete state.positions.assign[id];
   save(); pmRefreshAll();
 }
-function pmRemoveRole(id,i){ state.positions.assign[id].splice(i,1); save(); pmRefreshAll(); }
+// 按「姓名」移除任职（旧实现按下标删除：页面上的 names 是「只保留本班学生」的过滤结果，
+// 下标与源数组 assign[id] 不一致 —— 只要有人已不在本班，就会删掉另一个无辜同学）
+function pmRemoveRole(id, name){
+  const arr = state.positions.assign[id];
+  if (!Array.isArray(arr)) return pmRefreshAll();
+  const idx = arr.indexOf(name);
+  if (idx < 0) return pmRefreshAll();      // 已被别人改过，直接重画即可
+  arr.splice(idx, 1); save(); pmRefreshAll();
+}
 function pmOpenDescEdit(id){
   const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
   pmDescId=id;
@@ -9242,6 +9628,13 @@ function doLogin() {
 }
 
 function doLogout() {
+  // 先停掉首页排行榜轮播 / 全屏时钟等定时器：它们会在登录页继续跑，
+  // 每秒去读已经不存在的 DOM 节点，既耗电又会在控制台刷报错。
+  try {
+    stopHomeExhibitAuto();
+    stopHomeExhibitFsAuto();
+    stopHomeFsClock();
+  } catch (e) { /* 首页未渲染过时会抛错，忽略即可 */ }
   AUTH_TOKEN = '';
   localStorage.removeItem(AUTH_KEY);
   showLogin();
@@ -9251,11 +9644,9 @@ function applyDefaultLock() {
   if (state && state.defaultLocked && state.lockPass) state.locked = true;
 }
 
-function maybeOnboard() {
-  if (!onboarded && (!state.students || state.students.length === 0)) {
-    openOnboard();
-  }
-}
+// 注意：maybeOnboard 已在「首次使用引导」小节定义（含欢迎弹窗），此处不要重复定义。
+// 这里曾有一份同名定义覆盖掉它，且内部调用了一个根本不存在的引导函数，
+// 每次加载完就抛 ReferenceError，导致首次登录的欢迎引导彻底失效。
 
 // 优先：已登录 -> 拉云端数据；未登录 -> 登录页
 if (AUTH_TOKEN) {

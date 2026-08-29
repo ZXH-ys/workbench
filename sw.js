@@ -1,7 +1,7 @@
 // 班主任工作台 Service Worker
 // 策略：网络优先（保证每次部署更新立即可见），离线时回退到缓存壳
 // 缓存版本：每次发布递增，activate 阶段会自动清掉旧缓存
-const CACHE = 'wb-shell-v4';
+const CACHE = 'wb-shell-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -29,6 +29,13 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  // 接口响应一律不缓存、不回退缓存：
+  // 1) /api/data 是账号数据，缓存后换账号登录会短暂看到上一个账号的内容；
+  // 2) 离线时拿旧数据糊弄用户，比直接报错更容易造成「改了没保存」的误会。
+  if (url.pathname.indexOf('/api/') === 0) return;
+  // 只缓存同源静态资源，避免把 CDN 上的第三方响应塞进自己的缓存
+  if (url.origin !== self.location.origin) return;
   e.respondWith((async () => {
     try {
       const net = await fetch(e.request);
