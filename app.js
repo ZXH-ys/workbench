@@ -6229,8 +6229,8 @@ function renderHomePointsCard() {
       </div>
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs text-gray-400">近7天 ${ptSum(week) >= 0 ? '+' : ''}${ptSum(week)} 分 / ${week.length} 条</span>
-        <select id="homeDimSel" class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${dimOpts}</select>
-        <select id="homePoolSel" class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${poolOpts}</select>
+        <select id="homeDimSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${dimOpts}</select>
+        <select id="homePoolSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${poolOpts}</select>
         <button class="text-xs border border-primary text-primary px-3 py-1 rounded-full hover:bg-primary/5" data-lock-allow onclick="toggleHomeExhibitFs()">📺 全屏展览</button>
         <a class="text-xs text-primary hover:underline cursor-pointer" data-lock-allow onclick="navigate('points')">积分管理 →</a>
         <button id="homeAutoBtn" class="text-xs border border-gray-300 px-3 py-1 rounded-full hover:bg-gray-50" data-lock-allow onclick="toggleHomeExhibitAuto()">⏸️ 暂停</button>
@@ -7538,6 +7538,8 @@ function initLockGuard() {
       if (!el || !el.closest) return;
       // 1) 显式放行标记（最高优先级）
       if (el.closest('[data-lock-allow]')) return;
+      // 1b) 模态背景点击关闭（仅当点击目标恰好是 modal-bg 本身时放行，不放行其子元素）
+      if (type === 'click' && el.classList && el.classList.contains('modal-bg')) return;
       // 2) 显式拦截标记
       if (el.closest('[data-lock-block]')) { blockLockEvent(e, type); return; }
       // 3) 可编辑内容
@@ -7912,7 +7914,7 @@ function confirmClearData() {
 function openModal(title, body, size='md') {
   const width = size === 'xl' ? 'max-w-4xl' : size === 'lg' ? 'max-w-2xl' : size === 'sm' ? 'max-w-sm' : 'max-w-lg';
   document.getElementById('modal-root').innerHTML = `
-    <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" data-lock-allow onclick="if(event.target===this) closeModal()">
+    <div class="modal-bg fixed inset-0 z-50 flex items-center justify-center p-4" onclick="if(event.target===this) closeModal()">
       <div class="bg-white rounded-2xl shadow-2xl w-full ${width} max-h-[90vh] overflow-hidden flex flex-col" onclick="event.stopPropagation()">
         <div class="px-6 py-4 border-b flex items-center justify-between"><h3 class="font-bold text-gray-800">${esc(title)}</h3><button data-lock-allow class="text-gray-400 hover:text-gray-600 text-xl" onclick="closeModal()">&times;</button></div>
         <div class="p-6 overflow-y-auto">${body}</div>
