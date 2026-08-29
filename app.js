@@ -6229,8 +6229,8 @@ function renderHomePointsCard() {
       </div>
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs text-gray-400">近7天 ${ptSum(week) >= 0 ? '+' : ''}${ptSum(week)} 分 / ${week.length} 条</span>
-        <select id="homeDimSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${dimOpts}</select>
-        <select id="homePoolSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${poolOpts}</select>
+        <select id="homeDimSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select>
+        <select id="homePoolSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(this.value)">${poolOpts}</select>
         <button class="text-xs border border-primary text-primary px-3 py-1 rounded-full hover:bg-primary/5" data-lock-allow onclick="toggleHomeExhibitFs()">📺 全屏展览</button>
         <a class="text-xs text-primary hover:underline cursor-pointer" data-lock-allow onclick="navigate('points')">积分管理 →</a>
         <button id="homeAutoBtn" class="text-xs border border-gray-300 px-3 py-1 rounded-full hover:bg-gray-50" data-lock-allow onclick="toggleHomeExhibitAuto()">⏸️ 暂停</button>
