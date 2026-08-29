@@ -542,7 +542,20 @@ function loadState() {
   return s;
 }
 
-function save() {
+// internal=true 表示「系统内部调用」，锁定状态下依然允许（见下方说明）
+function save(internal) {
+  // ===== 只读锁定：落盘兜底 =====
+  // save() 是数据持久化的唯一出口（localStorage + 云同步 + 展览缓存失效）。
+  // UI 层的 initLockGuard 只能拦截内联 onclick/addEventListener 触发的写入，
+  // 无法覆盖自动任务、延迟回调等路径。此处做最后一道闸：锁定状态下任何
+  // 非内部调用一律拒绝落盘，避免出现「锁定了却仍能改数据」。
+  // 必须传 internal=true 的系统调用：上锁 / 解锁 / 登录 / 切换班级。
+  if (state && state.locked && !internal) {
+    // 静默拒绝：用户点击类写入已由 initLockGuard 提示过，此处若再 toast
+    // 会让自动任务（如考勤归档）在每次打开锁定页面时无端弹提示。
+    console.warn('[只读模式] 已阻止一次数据写入');
+    return false;
+  }
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   pushSync();
@@ -1045,7 +1058,7 @@ function setActiveClass(cls) {
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
   const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
-  save(); render();
+  save(true); render();   // internal：切换班级属于查看行为，锁定下必须允许
 }
 
 function renderTopBar() {
@@ -7495,7 +7508,7 @@ function doLock() {
     state.lockPass = v;
   }
   state.locked = true;
-  save(); closeModal(); render();
+  save(true); closeModal(); render();   // internal：上锁操作本身必须能落盘
   toast('已锁定为只读模式');
 }
 function _lockPassVal() {
@@ -7520,7 +7533,7 @@ function doUnlock() {
   if (v === state.lockPass || v === RESET_PASSWORD_CODE) {
     const chk = document.getElementById('defaultLockedCheck');
     if (chk) state.defaultLocked = chk.checked;
-    state.locked = false; save(); closeModal(); render();
+    state.locked = false; save(true); closeModal(); render();   // internal：解锁本身必须能落盘
     toast('已解锁，可正常编辑');
   } else {
     const m = document.getElementById('unlockMsg');
@@ -7590,6 +7603,16 @@ function blockLockEvent(e, type) {
 // 该词表已对全量 260+ 内联事件函数逐一验证：0 漏网、0 误伤
 const LOCK_WRITE_RE = /(?:save|delete|del|remove|undo|submit|import|confirm|clear|drop|paste|mark|apply|calc|add|update|edit|rename|move|bulk|settle|gen|snapshot|finish|arrange|setstudent|setsign|setcommstatus|setconvertpreset|setcategory|toggletodo|autoduty|seatclick|seatdrop|seatclear|seatset|seatauto)(?:[A-Z_]|$)/i;
 
+// 显式写操作名单：函数名不含通用写动词（躲过 LOCK_WRITE_RE），但实测会改数据并 save()。
+// 由「全量扫描调用 save() 的函数 → 反查锁定判定」得出，新增函数时请回归此表。
+const LOCK_WRITE_FNS = new Set([
+  'pmToggleStu',                // 职务与值日：点学生名增删任职/值日生（主要漏洞）
+  'toggleAttDay',               // 考勤：切换住校/走读日
+  'resetSampleData',            // 载入示例数据（会清空全部现有数据，最危险）
+  'olEnsureDerivedRankColumns', // 成绩分析：派生排名列
+  'autoArchiveAttendance',      // 考勤：自动归档
+]);
+
 // 判断元素（或其祖先）绑定的内联处理函数是否属于写操作
 function isWriteAction(el) {
   let n = el, guard = 0;
@@ -7607,6 +7630,8 @@ function isWriteAction(el) {
           if (/toggle\w*edit$/i.test(fn)) continue;     // pmToggleDutyEdit / pmToggleRolesEdit
           // 列管理类：全部为写操作
           if (/^cm[A-Z]/.test(fn)) return true;
+          // 显式名单：名称不含写动词但实际会改数据
+          if (LOCK_WRITE_FNS.has(fn)) return true;
           if (LOCK_WRITE_RE.test(fn)) return true;
         }
       }
@@ -8748,7 +8773,7 @@ function doLogin() {
         if (res && res.state) {
           try { state = migrateState(res.state); } catch (e) { state = defaultState(); }
           applyDefaultLock();
-          save(); // 写回本地兜底
+          save(true); // internal：登录拉取数据后写回本地兜底
         }
         render();
         maybeOnboard();
