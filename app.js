@@ -6008,7 +6008,8 @@ function undoPtLogFromStudent(id, sid) {
 // 状态：维度/人数/自动轮换/间隔、内嵌屏与全屏展览的翻页与背景
 let homeExhibit = {
   dim: 'all', pool: 10, auto: true, interval: 8,
-  screen: 'rank', logPage: 0,
+  screen: 'rank', logPage: 0, embedPage: 0,
+  logClass: 'current',
   fs: false, fsBg: 'dark', fsScreen: 'rank', fsRankPage: 0, fsLogPage: 0, fsAuto: true,
   _timer: null, _fsTimer: null, _clock: null,
 };
@@ -6042,6 +6043,7 @@ function renderHomePointsCard() {
     <div id="homeExhibitSettings" class="hidden absolute top-11 right-3 z-20 bg-white border border-gray-200 rounded-xl p-3 w-56 text-xs shadow-xl space-y-2">
       <div><div class="text-gray-400 mb-1">轮换间隔</div><select id="homeIntSel" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
       <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitAuto(true)">开</button><button id="homeAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitAuto(false)">关</button></div></div>
+      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeLogClsSel" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
       <div><div class="text-gray-400 mb-1">全屏背景</div><div class="flex gap-2"><button id="homeBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
     </div>
 
@@ -6071,6 +6073,7 @@ function homeExhibitFsHTML() {
       <div class="font-semibold mb-1">展览设置</div>
       <div><div class="text-gray-400 mb-1">展示范围</div><select id="homeFsPool" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(+this.value)">${poolOpts}</select></div>
       <div><div class="text-gray-400 mb-1">排序维度</div><select id="homeFsDim" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeFsLogCls" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
       <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeFsAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsAuto(true)">开</button><button id="homeFsAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsAuto(false)">关</button></div></div>
       <div><div class="text-gray-400 mb-1">间隔</div><select id="homeFsInt" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
       <div><div class="text-gray-400 mb-1">背景</div><div class="flex gap-2"><button id="homeFsBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeFsBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
@@ -6085,33 +6088,55 @@ function homeExhibitStudents() {
   return homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
 }
 
-// 排行卡（compact=false 内嵌小卡；true 全屏大卡）
+// 排行卡（fs=false 内嵌紧凑卡；fs=true 全屏大卡片）
 function homeExhibitCardHTML(x, i, fs) {
   const s = x.s;
   const total = ptConvTotal(s.id);
   const dims = POINT_DIMS.map(d => ({ d, v: ptConvDim(s.id, d.id) }));
   const maxV = Math.max(1, ...dims.map(o => o.v));
+  if (fs) {
+    // 全屏大卡片：适合教室投屏，2行×3列布局
+    const bar = o => `<div class="flex justify-between text-sm text-white/60"><span>${o.d.icon} ${o.d.label}</span><span class="font-semibold">${fmtScore(o.v)}</span></div>
+      <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1"><div class="${dimStyle(o.d.id).bar} h-full" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`;
+    const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-white/20';
+    return `<div class="bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-5 flex flex-col">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="w-10 h-10 rounded-full ${badgeCls} text-white text-lg font-black flex items-center justify-center flex-shrink-0">${i + 1}</span>
+        <img src="${esc(s.avatar)}" class="w-14 h-14 rounded-full bg-white/10 ring-2 ring-white/20" alt="">
+        <div class="flex-1 min-w-0">
+          <div class="text-xl font-bold text-white truncate">${esc(s.name)}</div>
+        </div>
+        <div class="text-right"><div class="text-3xl font-black tabular-nums ${i < 3 ? 'text-pink-400' : 'text-white'}">${fmtScore(total)}</div></div>
+      </div>
+      <div class="space-y-2 mt-auto">${dims.map(bar).join('')}</div>
+    </div>`;
+  }
+  // 内嵌紧凑卡
   const bar = o => `<div class="flex justify-between text-[9px] text-gray-400"><span>${o.d.icon}${o.d.label}</span><span>${fmtScore(o.v)}</span></div>
     <div class="h-1 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.d.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`;
   const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-400 to-gray-500' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-gray-300';
-  const topCls = fs ? (i === 0 ? 'border-2 border-amber-300' : '') : (i === 0 ? 'ring-2 ring-amber-300 bg-amber-50' : i === 1 ? 'ring-2 ring-gray-200' : i === 2 ? 'ring-2 ring-amber-200 bg-amber-50/60' : '');
-  const cardCls = fs ? 'bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-3' : 'bg-white border border-gray-100 rounded-xl p-2 ' + topCls;
-  return `<div class="${cardCls}">
+  const topCls = i === 0 ? 'ring-2 ring-amber-300 bg-amber-50' : i === 1 ? 'ring-2 ring-gray-200' : i === 2 ? 'ring-2 ring-amber-200 bg-amber-50/60' : '';
+  return `<div class="bg-white border border-gray-100 rounded-xl p-2 ${topCls}">
     <div class="flex items-center gap-1.5 mb-0.5">
       <span class="w-5 h-5 rounded-full ${badgeCls} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
       <img src="${esc(s.avatar)}" class="w-6 h-6 rounded-full bg-gray-100" alt="">
       <span class="text-xs font-semibold text-gray-800">${esc(s.name)}</span>
-      <span class="ml-auto text-sm font-extrabold ${fs ? 'text-pink-300' : 'text-primary'}">${fmtScore(total)}</span>
+      <span class="ml-auto text-sm font-extrabold text-primary">${fmtScore(total)}</span>
     </div>
     <div class="space-y-0.5">${dims.map(bar).join('')}</div>
   </div>`;
 }
 
-// 班级日志按天分组：仅本周内、且截止到今天，无日志的天不显示（避免空白页）
+// 班级日志按天分组：仅本周内、截止到今天、按班级筛选、无日志天不显示
 function homeExhibitLogGroups() {
-  const logs = state.classLogs || [];
+  let logs = state.classLogs || [];
+  const clsFilter = homeExhibit.logClass;
+  if (clsFilter && clsFilter !== 'all') {
+    const targetCls = clsFilter === 'current' ? state.activeClass : clsFilter;
+    logs = logs.filter(l => !l.class || l.class === targetCls);
+  }
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const dow = (today.getDay() + 6) % 7; // 周一=0
+  const dow = (today.getDay() + 6) % 7;
   const monday = new Date(today); monday.setDate(today.getDate() - dow);
   const groups = {};
   logs.forEach(l => {
@@ -6147,9 +6172,16 @@ function renderHomeExhibit() {
   if (homeExhibit.screen === 'rank') {
     icon.textContent = '🏆'; title.textContent = '积分排行展览';
     const list = homeExhibitStudents();
-    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">${list.map((x, i) => homeExhibitCardHTML(x, i, false)).join('')}</div>`;
-    nav.innerHTML = `<span class="text-xs text-gray-400">显示 ${list.length} 人 · 按「${homeExhibit.dim === 'all' ? '总分' : dimLabel(homeExhibit.dim)}」排序</span>
-      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('log')">📓 查看班级日志 →</button>`;
+    // 视口分页：根据容器高度算每页能放几个
+    const per = homeEmbedPerPage();
+    const tp = Math.max(1, Math.ceil(list.length / per));
+    if (homeExhibit.embedPage >= tp) homeExhibit.embedPage = 0;
+    const page = list.slice(homeExhibit.embedPage * per, (homeExhibit.embedPage + 1) * per);
+    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.embedPage * per + i, false)).join('')}</div>`;
+    nav.innerHTML = (tp > 1
+      ? `<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(-1)">‹</button><span class="text-xs text-gray-400">${homeExhibit.embedPage + 1}/${tp}</span><button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(1)">›</button> `
+      : '') + `<span class="text-xs text-gray-400">共 ${list.length} 人 · ${dimLabel(homeExhibit.dim)}</span>
+      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('log')">📓 日志 →</button>`;
   } else {
     icon.textContent = '📓'; title.textContent = '班级日志展览';
     const groups = homeExhibitLogGroups();
@@ -6161,16 +6193,25 @@ function renderHomeExhibit() {
     const pg = Math.max(0, Math.min(groups.length - 1, homeExhibit.logPage));
     homeExhibit.logPage = pg;
     const g = groups[pg];
-    body.innerHTML = `<div class="text-xs text-gray-400 mb-2">本周至 ${esc(g.date)} · 共 ${g.logs.length} 条</div>
+    body.innerHTML = `<div class="text-xs text-gray-400 mb-2">📅 ${esc(g.date)} · 共 ${g.logs.length} 条${homeExhibit.logClass !== 'all' && homeExhibit.logClass !== 'current' ? ' · ' + esc(homeExhibit.logClass) : ''}</div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">${g.logs.map(l => homeExhibitLogCardHTML(l)).join('')}</div>`;
     nav.innerHTML = `<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeExhibitLogPage(-1)">‹</button>
-      <span class="text-xs text-gray-400">📅 ${esc(g.date)} (${pg + 1}/${groups.length})</span>
+      <span class="text-xs text-gray-400">${esc(g.date)} (${pg + 1}/${groups.length})</span>
       <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeExhibitLogPage(1)">›</button>
-      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('rank')">← 返回排行</button>`;
+      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('rank')">← 排行</button>`;
   }
 }
 
-function switchHomeExhibit(s) { homeExhibit.screen = s; homeExhibit.logPage = 0; renderHomeExhibit(); }
+// 内嵌面板每页数量（根据容器可用高度动态计算）
+function homeEmbedPerPage() {
+  const body = document.getElementById('homeExhibitBody');
+  if (!body) return 8;
+  const h = body.parentElement ? body.parentElement.clientHeight - 80 : 280; // 减去头部+导航
+  return Math.max(4, Math.floor(h / 105)); // 每张卡约 105px
+}
+function homeEmbedPage(d) { homeExhibit.embedPage = Math.max(0, homeExhibit.embedPage + d); renderHomeExhibit(); }
+
+function switchHomeExhibit(s) { homeExhibit.screen = s; homeExhibit.logPage = 0; homeExhibit.embedPage = 0; renderHomeExhibit(); }
 function homeExhibitLogPage(d) { homeExhibit.logPage = Math.max(0, homeExhibit.logPage + d); renderHomeExhibit(); }
 
 function toggleHomeExhibitSettings() {
@@ -6196,11 +6237,19 @@ function startHomeExhibitAuto() {
   stopHomeExhibitAuto();
   const sec = (homeExhibit.interval || 8) * 1000;
   homeExhibit._timer = setInterval(() => {
-    if (homeExhibit.screen === 'rank') switchHomeExhibit('log');
-    else {
+    if (homeExhibit.screen === 'rank') {
+      // 排行模式：先翻页，翻完再切到日志
+      const list = homeExhibitStudents();
+      const per = homeEmbedPerPage();
+      const tp = Math.max(1, Math.ceil(list.length / per));
+      homeExhibit.embedPage++;
+      if (homeExhibit.embedPage >= tp) { homeExhibit.embedPage = 0; switchHomeExhibit('log'); }
+      else renderHomeExhibit();
+    } else {
+      // 日志模式：翻日志天，翻完切回排行
       const groups = homeExhibitLogGroups();
       if (homeExhibit.logPage < groups.length - 1) { homeExhibit.logPage++; renderHomeExhibit(); }
-      else switchHomeExhibit('rank');
+      else { homeExhibit.logPage = 0; switchHomeExhibit('rank'); }
     }
   }, sec);
 }
@@ -6208,6 +6257,14 @@ function stopHomeExhibitAuto() { if (homeExhibit._timer) { clearInterval(homeExh
 
 function homeExhibitSetPool(v) { homeExhibit.pool = v; const el = document.getElementById('homePoolSel'); if (el) el.value = String(v); renderHomeExhibit(); renderHomeFs(); }
 function homeExhibitSetDim(v) { homeExhibit.dim = v; const el = document.getElementById('homeDimSel'); if (el) el.value = v; renderHomeExhibit(); renderHomeFs(); }
+function setHomeExhibitLogClass(v) {
+  homeExhibit.logClass = v;
+  homeExhibit.logPage = 0;
+  renderHomeExhibit();
+  // 同步更新全屏设置面板中的选择器（如果存在）
+  const fsSel = document.getElementById('homeFsLogCls');
+  if (fsSel) fsSel.value = v;
+}
 
 // ---- 全屏展览 ----
 function toggleHomeExhibitFs() {
@@ -6219,13 +6276,24 @@ function toggleHomeExhibitFs() {
   else { stopHomeFsClock(); stopHomeExhibitFsAuto(); }
 }
 function toggleHomeExhibitFsSettings() { const p = document.getElementById('homeFsPanel'); if (p) p.classList.toggle('hidden'); }
-function homeFsPerPage() { const h = window.innerHeight - 200; return Math.max(3, Math.floor(h / 175)); }
+
+// 全屏每页固定6人(2×3大卡片)，适合教室投屏
+function homeFsPerPage() { return 6; }
+
+// 响应式列数：根据屏幕宽度自动选择
+function homeFsGridCols() {
+  const w = window.innerWidth;
+  if (w < 768) return 2;       // 手机：2列
+  if (w < 1280) return 3;      // 电脑：3列
+  return 3;                     // 智慧屏/大屏：3列（2行×3=6人）
+}
 
 function renderHomeFs() {
   const body = document.getElementById('homeFsBody');
   if (!body) return;
   const sp = document.getElementById('homeFsPool'); if (sp) sp.value = String(homeExhibit.pool);
   const sd = document.getElementById('homeFsDim'); if (sd) sd.value = homeExhibit.dim;
+  const cols = homeFsGridCols();
   if (homeExhibit.fsScreen === 'rank') {
     document.getElementById('homeFsTitle').textContent = '🏆 积分排行';
     const list = homeExhibitStudents();
@@ -6233,20 +6301,21 @@ function renderHomeFs() {
     const tp = Math.max(1, Math.ceil(list.length / per));
     if (homeExhibit.fsRankPage >= tp) homeExhibit.fsRankPage = tp - 1;
     const page = list.slice(homeExhibit.fsRankPage * per, (homeExhibit.fsRankPage + 1) * per);
-    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.fsRankPage * per + i, true)).join('')}</div>`
-      + (tp > 1 ? `<div class="flex items-center justify-center gap-3 mt-4"><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('rank',-1)">‹</button><span class="text-sm opacity-70">第 ${homeExhibit.fsRankPage + 1}/${tp} 页</span><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('rank',1)">›</button></div>` : '');
+    body.innerHTML = `<div class="grid gap-5" style="grid-template-columns:repeat(${cols},1fr);max-width:1200px;margin:0 auto">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.fsRankPage * per + i, true)).join('')}</div>`
+      + (tp > 1 ? `<div class="flex items-center justify-center gap-4 mt-6"><button class="text-lg px-6 py-2 rounded-full border border-[var(--fsb)] hover:bg-white/10" data-lock-allow onclick="homeFsPage('rank',-1)">‹</button><span class="text-base opacity-70">第 ${homeExhibit.fsRankPage + 1}/${tp} 页</span><button class="text-lg px-6 py-2 rounded-full border border-[var(--fsb)] hover:bg-white/10" data-lock-allow onclick="homeFsPage('rank',1)">›</button></div>` : '');
   } else {
     document.getElementById('homeFsTitle').textContent = '📓 班级日志';
     const groups = homeExhibitLogGroups();
-    if (!groups.length) { body.innerHTML = '<div class="text-center opacity-50 py-16">本周暂无班级日志</div>'; }
+    if (!groups.length) { body.innerHTML = '<div class="text-center opacity-50 py-20 text-lg">本周暂无班级日志</div>'; }
     else {
       const pg = Math.max(0, Math.min(groups.length - 1, homeExhibit.fsLogPage)); homeExhibit.fsLogPage = pg;
       const g = groups[pg];
-      body.innerHTML = `<div class="text-sm opacity-60 mb-3">本周至 ${esc(g.date)} · ${g.logs.length} 条</div><div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${g.logs.map(l => homeExhibitLogCardHTML(l)).join('')}</div>`
-        + (groups.length > 1 ? `<div class="flex items-center justify-center gap-3 mt-4"><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('log',-1)">‹</button><span class="text-sm opacity-70">📅 ${esc(g.date)} (${pg + 1}/${groups.length})</span><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('log',1)">›</button></div>` : '');
+      const logCols = window.innerWidth < 768 ? 1 : (window.innerWidth < 1024 ? 2 : 3);
+      body.innerHTML = `<div class="max-w-[1200px] mx-auto"><div class="text-base opacity-60 mb-4">📅 ${esc(g.date)} · ${g.logs.length} 条${homeExhibit.logClass !== 'all' && homeExhibit.logClass !== 'current' ? ' · ' + esc(homeExhibit.logClass) : ''}</div><div class="grid gap-4" style="grid-template-columns:repeat(${logCols},1fr)">${g.logs.map(l => homeExhibitLogCardHTML(l)).join('')}</div></div>`
+        + (groups.length > 1 ? `<div class="flex items-center justify-center gap-4 mt-6"><button class="text-lg px-6 py-2 rounded-full border border-[var(--fsb)] hover:bg-white/10" data-lock-allow onclick="homeFsPage('log',-1)">‹</button><span class="text-base opacity-70">📅 ${esc(g.date)} (${pg + 1}/${groups.length})</span><button class="text-lg px-6 py-2 rounded-full border border-[var(--fsb)] hover:bg-white/10" data-lock-allow onclick="homeFsPage('log',1)">›</button></div>` : '');
     }
   }
-  body.insertAdjacentHTML('beforeend', `<div class="flex justify-center gap-3 mt-5"><button class="text-sm px-5 py-1.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'rank' ? 'bg-pink-500 text-white border-pink-500' : ''}" data-lock-allow onclick="switchHomeFs('rank')">🏆 积分排行</button><button class="text-sm px-5 py-1.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'log' ? 'bg-pink-500 text-white border-pink-500' : ''}" data-lock-allow onclick="switchHomeFs('log')">📓 班级日志</button></div>`);
+  body.insertAdjacentHTML('beforeend', `<div class="flex justify-center gap-4 mt-8 pb-8"><button class="text-base px-6 py-2.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'rank' ? 'bg-pink-500 text-white border-pink-500' : ''} hover:bg-white/10" data-lock-allow onclick="switchHomeFs('rank')">🏆 积分排行</button><button class="text-base px-6 py-2.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'log' ? 'bg-pink-500 text-white border-pink-500' : ''} hover:bg-white/10" data-lock-allow onclick="switchHomeFs('log')">📓 班级日志</button></div>`);
 }
 
 function switchHomeFs(s) { homeExhibit.fsScreen = s; homeExhibit.fsRankPage = 0; homeExhibit.fsLogPage = 0; renderHomeFs(); }
@@ -6277,6 +6346,8 @@ function startHomeExhibitFsAuto() {
     }
   }, sec);
 }
+// 全屏模式窗口大小变化时重绘（响应式）
+window.addEventListener('resize', () => { if (homeExhibit.fs) renderHomeFs(); });
 function stopHomeExhibitFsAuto() { if (homeExhibit._fsTimer) { clearInterval(homeExhibit._fsTimer); homeExhibit._fsTimer = null; } }
 function startHomeFsClock() { stopHomeFsClock(); const tick = () => { const e = document.getElementById('homeFsClock'); if (e) e.textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }; tick(); homeExhibit._clock = setInterval(tick, 1000); }
 function stopHomeFsClock() { if (homeExhibit._clock) { clearInterval(homeExhibit._clock); homeExhibit._clock = null; } }
@@ -6299,6 +6370,9 @@ function initHomeExhibit() {
   dimSel.value = homeExhibit.dim; poolSel.value = String(homeExhibit.pool);
   dimSel.onchange = () => { homeExhibit.dim = dimSel.value; renderHomeExhibit(); };
   poolSel.onchange = () => { homeExhibit.pool = +poolSel.value; renderHomeExhibit(); };
+  // 初始化日志班级选择器
+  const logClsSel = document.getElementById('homeLogClsSel');
+  if (logClsSel) logClsSel.value = homeExhibit.logClass;
   renderHomeExhibit(); setHomeExhibitAuto(homeExhibit.auto);
   document.removeEventListener('click', homeExhibitDocClick);
   document.addEventListener('click', homeExhibitDocClick);
