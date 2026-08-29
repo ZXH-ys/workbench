@@ -176,7 +176,7 @@ function defaultState() {
       { id: uid(), parent: '王浩然爸爸', student: '王浩然', status: '已沟通', content: '课堂状态反馈，家长表示会配合。' },
     ],
     homework: [
-      { id: uid(), subject: '英语', title: 'Unit 1 单词默写', class: '10班', due: '8月25日' },
+      { id: uid(), studentId: '', studentName: '张明轩', subject: '英语', title: 'Unit 1 单词默写未完成', status: '未完成', class: '10班', date: '' },
     ],
     scores: [
       { id: uid(), name: '张明轩', subject: '英语', exam: '期中考试', score: 78, class: '10班' },
@@ -417,7 +417,12 @@ function migrateState(s) {
   if (Array.isArray(s.homework)) s.homework.forEach(h => {
     h.class = _clsId(h.class) || _headCls;
     if (!h.subject) h.subject = '未指定';
+    // 旧模型为「布置作业」({title,due})，新模型为「作业完成情况台账」：补姓名/状态/日期
+    if (h.date == null) h.date = hwNormDate(h.due) || hwNormDate(h.title) || '';
     if (h.due == null) h.due = '';
+    if (h.studentName == null) h.studentName = '';
+    if (h.studentId == null) h.studentId = '';
+    if (!h.status) h.status = /未完成|没交|未做|不交|未交|漏做|缺交/.test(h.title || '') ? '未完成' : '已完成';
   });
   if (Array.isArray(s.scores)) s.scores.forEach(sc => { sc.class = _clsId(sc.class) || _headCls; });
   // 成绩分析 / 折算 / 快照
@@ -791,8 +796,10 @@ let currentRoute = 'home';
 let gsQuery = '';            // 全局搜索框内容（姓名/科目）
 let profileSid = null;       // 当前查看的学生档案
 let profileSubject = '';     // 档案页成绩趋势所选科目
-let hwSearchName = '';       // 作业模块姓名搜索
+let hwSearchName = '';       // 作业模块搜索（姓名/科目/内容）
 let hwSubjectFilter = '';    // 作业模块科目筛选
+let hwStatusFilter = '';     // 作业模块完成状态筛选：'' / '未完成' / '已完成'
+let hwClassFilter = '';      // 作业模块班级筛选（两个班分开查看）
 let reportRange = 'week';    // 周报/月报切换
 let selStudentIds = {};      // 学生管理批量选择（id -> true）
 
@@ -1192,7 +1199,7 @@ function renderTopBar() {
   else if (currentRoute === 'schedule') extra = `<button data-periods class="text-sm text-gray-500 hover:text-primary mr-2">⚙️ 设置节次</button><button data-addcourse class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark">+ 添加课程</button>`;
   else if (currentRoute === 'seating') extra = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openSeatConfig()">⚙️ 布局</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5 mr-2" onclick="exportSeatTeacher()">👩‍🏫 教师用</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="exportSeatStudent()">🎒 学生用</button>`;
   else if (['students','classLog','homework','reminders'].includes(currentRoute)) {
-    const labels = { students:'+ 新建学生', classLog:'+ 写日志', homework:'+ 布置作业', reminders:'+ 新建提醒' };
+    const labels = { students:'+ 新建学生', classLog:'+ 写日志', homework:'+ 记完成情况', reminders:'+ 新建提醒' };
     const data = { students:'data-newstudent', classLog:'data-newlog', homework:'data-newhw', reminders:'data-newreminder' };
     let importBtn = '';
     if (currentRoute === 'students') importBtn = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openImportStudents()">⬆️ 批量导入</button>`;
@@ -1247,8 +1254,9 @@ function renderGlobalSearch() {
   state.classRecords.filter(r => (!nameSet.size || (r.studentName && nameSet.has(r.studentName))) && kwMatch((r.subject || '') + ' ' + (r.content || ''))).forEach(r => {
     rows.push({ mod: '课堂', tag: '#EEEDFE', tagc: '#534AB7', name: r.studentName || '', subj: r.subject || '', content: r.content || '', date: r.date || '', go: "navigate('classRecord')" });
   });
-  state.homework.filter(h => (!nameSet.size || kwMatch(h.title || '') || nameSet.has(h.class || '')) && kwMatch((h.subject || '') + ' ' + (h.title || ''))).forEach(h => {
-    rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: '', subj: h.subject || '', content: h.title || '', date: h.due || '', go: "navigate('homework')" });
+  // 作业按姓名匹配（旧代码拿 class 去比对姓名，导致按姓名搜不到）
+  state.homework.filter(h => (!nameSet.size || (h.studentName && nameSet.has(h.studentName)) || kwMatch(h.title || '')) && kwMatch((h.subject || '') + ' ' + (h.title || '') + ' ' + (h.studentName || ''))).forEach(h => {
+    rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: h.studentName || '', subj: h.subject || '', content: (h.title || '') + (h.status ? ('（' + h.status + '）') : ''), date: hwNormDate(h.date || h.due) || '', go: "navigate('homework')" });
   });
   state.students.filter(s => !nameSet.size || nameSet.has(s.name)).forEach(s => {
     (s.records || []).filter(r => kwMatch(r.content || '')).forEach(r => {
@@ -1336,9 +1344,21 @@ function renderStudentProfile() {
   const trend = profileTrend(s);
   const crs = state.classRecords.filter(r => r.studentId === s.id).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const crHtml = crs.length ? crs.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无课堂记录</div>';
-  const hwKw = /未完成|没交|未做|不交|作业|背诵|默写/;
-  const hws = crs.filter(r => hwKw.test(r.content || ''));
-  const hwHtml = hws.length ? hws.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无作业相关记录</div>';
+  // 作业区块优先读「作业完成情况台账」（有准确状态与历史），无台账记录时再回退到课堂记录
+  const hwRecs = (state.homework || [])
+    .filter(h => (h.studentId && h.studentId === s.id) || (!h.studentId && h.studentName && h.studentName === s.name))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const hwUndone = hwRecs.filter(r => r.status === '未完成').length;
+  const hwHtml = hwRecs.length
+    ? `<div class="text-xs text-gray-500 mb-2">共 ${hwRecs.length} 条作业记录 · 未完成 ${hwUndone} 次</div>` + hwRecs.slice(0, 12).map(r => {
+        const undone = r.status === '未完成';
+        return `<div class="p-3 rounded-xl ${undone ? 'bg-red-50/60' : 'bg-gray-50'} mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs px-2 py-0.5 rounded-full ${undone ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(r.status || '已完成')}</span><span class="text-xs text-gray-400">${esc(hwDateLabel(r.date))}</span></div><div class="text-sm text-gray-700">${esc(r.title || '')}</div></div>`;
+      }).join('')
+    : (function () {
+        const hwKw = /未完成|没交|未做|不交|作业|背诵|默写/;
+        const hws = crs.filter(r => hwKw.test(r.content || ''));
+        return hws.length ? hws.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无作业相关记录</div>';
+      })();
   const beh = { critic: (s.records || []).filter(r => r.type === 'critic').length, praise: (s.records || []).filter(r => r.type === 'praise').length, chat: (s.records || []).filter(r => r.type === 'chat').length, leave: (s.records || []).filter(r => r.type === 'leave').length };
   return `
   <div class="space-y-5">
@@ -1488,7 +1508,8 @@ function renderHomeTeacher() {
   const students = (state.students || []).filter(s => s && s.class === cls);
   const todayKey = attDateKey(new Date());
   const records = (state.classRecords || []).filter(r => (!r.class || r.class === cls) && r.date === todayKey).slice(0, 5);
-  const homeworks = (state.homework || []).filter(h => (!h.class || h.class === cls) && (h.due === todayKey || !h.due)).slice(0, 5);
+  // 作业按「完成情况台账」取当天记录；日期统一归一化后再比较，避免「M月D日」与 ISO 并列导致永远匹配不上
+  const homeworks = (state.homework || []).filter(h => hwBelongsTo(h, cls) && hwNormDate(h.date || h.due) === todayKey).slice(0, 5);
   const clsExams = (state.examData.exams || [])
     .filter(e => {
       const recs = (state.examData.records || []).filter(r => r.examId === e.id);
@@ -1533,12 +1554,17 @@ function renderHomeTeacher() {
         <div class="font-bold text-gray-800">📚 今日作业</div>
         <button class="text-xs text-primary hover:underline" onclick="navigate('homework')">作业管理</button>
       </div>
-      <div class="space-y-3">
-        ${homeworks.length ? homeworks.map(h => `
-          <div class="p-3 rounded-xl bg-gray-50 text-sm">
-            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(h.subject || '作业')}</span><span class="text-xs text-gray-400">${h.due === todayKey ? '今日' : '无截止日'}</span></div>
-            <div class="text-gray-600 text-xs">${esc(h.title || '').slice(0, 80)}${(h.title || '').length > 80 ? '…' : ''}</div>
-          </div>`).join('') : `<div class="text-sm text-gray-400">今日还没有作业，可在「作业管理」中布置。</div>`}
+      <div class="space-y-2">
+        ${homeworks.length ? homeworks.map(h => {
+          const undone = h.status === '未完成';
+          return `<div class="p-3 rounded-xl ${undone ? 'bg-red-50/60' : 'bg-gray-50'} text-sm">
+            <div class="flex justify-between mb-1">
+              <span class="font-medium text-gray-800">${esc(h.studentName || '未指定')} · ${esc(h.subject || '未指定')}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full ${undone ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(h.status || '已完成')}</span>
+            </div>
+            ${h.title ? `<div class="text-gray-600 text-xs">${esc(h.title).slice(0, 60)}${(h.title || '').length > 60 ? '…' : ''}</div>` : ''}
+          </div>`;
+        }).join('') : `<div class="text-sm text-gray-400">今日还没有作业完成情况记录。</div>`}
       </div>
     </div>
     <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-5 card-hover">
@@ -1939,7 +1965,9 @@ function pickRecordType(btn) {
 // 行为记录同步写入班级日志（带 behaviorId 反向标记，便于删除时清理）
 function logBehaviorToClassLog(recId, name, type, content, date) {
   if (!state.classLogs) state.classLogs = [];
-  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId, class: s.class || state.activeClass });
+  // 按姓名回查学生取其班级（原实现引用了此处并不存在的 s，一旦调用即 ReferenceError）
+  const stu = (state.students || []).find(x => x.name === name);
+  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId, class: (stu && stu.class) || state.activeClass });
 }
 function saveRecord(id) {
   const content = document.getElementById('recContent').value.trim();
@@ -2133,48 +2161,150 @@ function openCommListModal() {
 }
 
 // ===================== Homework =====================
+// 作业日期归一化：兼容「8月25日」「2026-08-25」「8/25」，统一为 YYYY-MM-DD。
+// 旧数据里 due 存的是「M月D日」，而首页筛选用的是 ISO，两套格式并列会导致匹配永远失败。
+function hwNormDate(raw){
+  const s0 = String(raw == null ? '' : raw).trim();
+  if (!s0) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s0)) return s0;
+  const ymd = s0.match(/^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+  if (ymd) return ymd[1] + '-' + String(ymd[2]).padStart(2,'0') + '-' + String(ymd[3]).padStart(2,'0');
+  const md = s0.match(/^(\d{1,2})[月/\-.](\d{1,2})日?$/);
+  if (md) {
+    const n = new Date(), m = +md[1];
+    let y = n.getFullYear();
+    if (m - (n.getMonth() + 1) > 6) y -= 1;         // 跨年：如 12月 出现在 1 月
+    else if ((n.getMonth() + 1) - m > 6) y += 1;    // 跨年：如 1月 出现在 12 月
+    return y + '-' + String(m).padStart(2,'0') + '-' + String(md[2]).padStart(2,'0');
+  }
+  return s0;
+}
+// ISO -> 「M月D日」展示；无法解析时原样返回
+function hwDateLabel(iso){
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? (+m[2]) + '月' + (+m[3]) + '日' : (iso || '未设置');
+}
+// 作业管理 = 作业完成情况台账：姓名 + 科目 + 是否完成 + 日期。
+// 支持：两个班分开查看、单科筛选、按姓名搜索、整体通览统计。
 function renderHomework() {
   const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
+  const classes = state.classes || [];
+  // 班级分开：默认跟随当前班级；班级列表变化或值失效时自动回落
+  if (!hwClassFilter || !classes.some(c => c.id === hwClassFilter)) hwClassFilter = state.activeClass;
+  const curCls = hwClassFilter;
   // 归属判定统一走 hwBelongsTo：记录里的 class 可能是 id、显示名或历史遗留值
-  const mine = (state.homework || []).filter(h => hwBelongsTo(h, state.activeClass));
-  // 科目筛选：若当前筛选值在本班已不存在（如切了班级），自动重置，避免列表空白
+  const mine = (state.homework || []).filter(h => hwBelongsTo(h, curCls));
+
+  // 班级页签（带各自条数，两个班互不干扰）
+  const classTabs = classes.map(c => {
+    const n = (state.homework || []).filter(h => hwBelongsTo(h, c.id)).length;
+    return `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${c.id === curCls ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetClass(${JSON.stringify(c.id)})">${esc(c.name)} ${n}</button>`;
+  }).join('');
+
+  // 科目页签：若当前筛选值在本班已不存在（如切了班级），自动重置，避免列表空白
   const subjects = [...new Set(mine.map(h => h.subject).filter(Boolean))];
   if (hwSubjectFilter && !subjects.includes(hwSubjectFilter)) hwSubjectFilter = '';
   const subjTabs = [{ id: '', name: '全部' }]
     .concat(subjects.map(s => ({ id: s, name: s })))
     .map(s => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject(${JSON.stringify(s.id)})">${esc(s.name)}</button>`).join('');
+
+  const stTabs = [{ id: '', name: '全部' }, { id: '未完成', name: '未完成' }, { id: '已完成', name: '已完成' }]
+    .map(s => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwStatusFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetStatus(${JSON.stringify(s.id)})">${s.name}</button>`).join('');
+
   const kw = (hwSearchName || '').trim();
-  const list = mine.filter(h => (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!kw || (h.title || '').includes(kw) || (h.subject || '').includes(kw)));
-  const filtered = kw || hwSubjectFilter;
+  const hitKw = h => (h.studentName || '').includes(kw) || (h.subject || '').includes(kw) || (h.title || '').includes(kw) || hwDateLabel(h.date).includes(kw);
+  // 列表：班级 → 科目 → 状态 → 关键词
+  const list = mine.filter(h =>
+    (!hwSubjectFilter || h.subject === hwSubjectFilter) &&
+    (!hwStatusFilter || h.status === hwStatusFilter) &&
+    (!kw || hitKw(h))
+  );
+  const filtered = !!(kw || hwSubjectFilter || hwStatusFilter);
+
+  // 整体通览：统计作用于「当前班级 + 科目/状态」范围（不受姓名搜索影响，避免搜一个人就看不到全局）
+  const scope = mine.filter(h => (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!hwStatusFilter || h.status === hwStatusFilter));
+  const nUndone = scope.filter(h => h.status === '未完成').length;
+  const nDone = scope.filter(h => h.status === '已完成').length;
+  const nStu = new Set(scope.filter(h => h.status === '未完成' && h.studentName).map(h => h.studentName)).size;
+
+  // 未交名单汇总（按学生聚合，便于整体通览与点名）
+  const agg = {};
+  mine.forEach(h => {
+    if (h.status !== '未完成') return;
+    if (hwSubjectFilter && h.subject !== hwSubjectFilter) return;
+    const n = h.studentName || '未指定';
+    agg[n] = (agg[n] || 0) + 1;
+  });
+  const aggList = Object.entries(agg).sort((a, b) => b[1] - a[1]);
+
+  const stat = (label, val, cls) => `<div class="flex-1 min-w-[5rem] rounded-xl ${cls} px-3 py-2 text-center"><div class="text-lg font-bold">${val}</div><div class="text-xs text-gray-500">${label}</div></div>`;
+
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <div>
-        <div class="font-bold text-gray-800">作业管理</div>
+        <div class="font-bold text-gray-800">作业管理 · 完成情况台账</div>
         <div class="text-xs text-gray-500 mt-1">快速记录识别词：${esc(kwList)}${(state.homeworkKeywords || []).length > 6 ? '…' : ''}</div>
       </div>
-      <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
+      <div class="flex items-center gap-2">
+        <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
+      </div>
     </div>
-    <div class="flex flex-wrap gap-2 mb-3">${subjTabs}</div>
+
+    ${classes.length > 1 ? `<div class="flex flex-wrap gap-2 mb-3">${classTabs}</div>` : ''}
+
+    <div class="flex gap-2 mb-3">
+      ${stat('总记录', scope.length, 'bg-gray-50')}
+      ${stat('未完成', nUndone, 'bg-red-50')}
+      ${stat('已完成', nDone, 'bg-green-50')}
+      ${stat('涉及学生', nStu, 'bg-gray-50')}
+    </div>
+
+    ${aggList.length ? `<div class="mb-3 p-3 rounded-xl bg-red-50/60">
+      <div class="text-xs font-medium text-red-700 mb-2">未完成名单（共 ${aggList.length} 人 ${nUndone} 次）</div>
+      <div class="flex flex-wrap gap-1.5">${aggList.map(([n, c]) => `<button class="text-xs px-2 py-1 rounded-full bg-white text-red-600 border border-red-100 hover:bg-red-100" onclick="hwSearchStudent(${JSON.stringify(n)})">${esc(n)} <span class="font-bold">${c}</span> 次</button>`).join('')}</div>
+    </div>` : ''}
+
+    <div class="flex flex-wrap gap-2 mb-2">${subjTabs}</div>
+    <div class="flex flex-wrap gap-2 mb-3">${stTabs}</div>
     <div class="relative mb-3">
-      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名 / 科目 / 内容搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
+      ${filtered ? `<button class="absolute right-3 top-2 text-xs text-gray-400 hover:text-primary" onclick="hwResetFilters()">清空</button>` : ''}
     </div>
-    <div class="text-xs text-gray-400 mb-2">${filtered ? `筛选出 ${list.length} 项（本班共 ${mine.length} 项）` : `本班共 ${mine.length} 项作业`}${hwOtherHint(mine.length, filtered)}</div>
-    <div class="grid gap-3">${list.map(h => `
-      <div class="p-4 rounded-xl bg-gray-50 flex gap-3 items-start">
+    <div class="text-xs text-gray-400 mb-2">${filtered ? `筛选出 ${list.length} 条（${esc(className(curCls))}共 ${mine.length} 条）` : `${esc(className(curCls))}共 ${mine.length} 条作业记录`}</div>
+    <div class="grid gap-2">${list.map(h => {
+      const undone = h.status === '未完成';
+      return `<div class="p-3 rounded-xl ${undone ? 'bg-red-50/50' : 'bg-gray-50'} flex gap-3 items-start">
         <div class="flex-1 min-w-0">
-          <div class="font-bold text-gray-800 text-sm break-words whitespace-pre-wrap">${esc(h.title || '（未命名作业）')}</div>
-          <div class="text-xs text-gray-500 mt-1">${esc(className(classIdOf(h.class) || state.headTeacherClass))} · ${esc(h.subject || '未指定')}</div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800 text-sm">${esc(h.studentName || '未指定')}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full ${undone ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(h.status || '已完成')}</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary">${esc(h.subject || '未指定')}</span>
+            <span class="text-xs text-gray-400">${esc(hwDateLabel(h.date))}</span>
+          </div>
+          ${h.title ? `<div class="text-xs text-gray-500 mt-1 break-words whitespace-pre-wrap">${esc(h.title)}</div>` : ''}
         </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full whitespace-nowrap">截止 ${esc(h.due || '未设置')}</div>
+        <div class="flex items-center gap-1 shrink-0">
+          <button class="text-xs px-2 py-1 rounded-full border ${undone ? 'border-green-300 text-green-600 hover:bg-green-50' : 'border-gray-300 text-gray-500 hover:bg-gray-100'}" onclick="hwToggleStatus('${h.id}')">${undone ? '标记已完成' : '标记未完成'}</button>
           <button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button>
         </div>
-      </div>`).join('') || `<div class="text-gray-400 text-sm">${filtered ? '没有匹配的作业，试试清空搜索或切换到「全部」科目。' : '本班暂无作业记录。'}</div>`}</div>
+      </div>`;
+    }).join('') || `<div class="text-gray-400 text-sm">${filtered ? '没有匹配的记录，试试清空搜索或切换到「全部」。' : '本班暂无作业完成情况记录。用首页「一句话记录」记一条即可自动汇总到这里。'}</div>`}</div>
   </div>`;
 }
 function hwSetSearch(v) { hwSearchName = v; render(); }
 function hwSetSubject(s) { hwSubjectFilter = s; render(); }
+function hwSetStatus(s) { hwStatusFilter = s; render(); }
+function hwSetClass(c) { hwClassFilter = c; hwSubjectFilter = ''; hwSearchName = ''; render(); }
+function hwSearchStudent(n) { hwSearchName = n; hwStatusFilter = '未完成'; render(); }
+function hwResetFilters() { hwSearchName = ''; hwSubjectFilter = ''; hwStatusFilter = ''; render(); }
+// 切换完成状态（补交/改判）
+function hwToggleStatus(id) {
+  const h = (state.homework || []).find(x => x.id === id);
+  if (!h) return;
+  h.status = h.status === '未完成' ? '已完成' : '未完成';
+  save(); render();
+}
 // 本班为空时提示其他班是否还有记录，避免误以为数据丢失
 function hwOtherHint(mineLen, filtered) {
   if (mineLen > 0 || filtered) return '';
@@ -2185,26 +2315,44 @@ function hwOtherHint(mineLen, filtered) {
   return `　｜　其他班还有：${others.map(x => esc(x.name) + ' ' + x.n + ' 项').join('、')}`;
 }
 function openHomeworkForm() {
-  openModal('布置作业', `
+  const cls = hwClassFilter || state.activeClass;
+  const names = (state.students || []).filter(s => s && s.name && s.class === cls).map(s => s.name);
+  const nameField = names.length
+    ? `<select id="hwStudentName" class="w-full border rounded-lg p-2 text-sm">${names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select>`
+    : `<input id="hwStudentName" class="w-full border rounded-lg p-2 text-sm" placeholder="本班还没有学生，请先到「学生管理」录入">`;
+  openModal('记一条作业完成情况', `
     <div class="space-y-4">
-      <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="hwSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">作业标题</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：Unit 1 单词默写"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">学生姓名</label>${nameField}</div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="block text-xs text-gray-500 mb-1">班级</label>${classSelectHTML('hwClass', state.activeClass)}</div>
-        <div><label class="block text-xs text-gray-500 mb-1">截止日期</label><input id="hwDue" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="hwSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">完成情况</label>
+          <select id="hwStatus" class="w-full border rounded-lg p-2 text-sm">
+            <option value="未完成">未完成</option><option value="已完成">已完成</option>
+          </select>
+        </div>
       </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="block text-xs text-gray-500 mb-1">班级</label>${classSelectHTML('hwClass', cls)}</div>
+        <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="hwDate" type="date" class="w-full border rounded-lg p-2 text-sm" value="${attDateKey(new Date())}"></div>
+      </div>
+      <div><label class="block text-xs text-gray-500 mb-1">备注（可留空）</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：数学练习册 P12 未交"></div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHomework()">保存</button>
     </div>`);
 }
 function saveHomework() {
-  const subject = document.getElementById('hwSubject').value.trim() || '未指定';
-  const title = document.getElementById('hwTitle').value.trim();
-  if(!title) return alert('请输入作业标题');
+  const nameEl = document.getElementById('hwStudentName');
+  const studentName = (nameEl ? nameEl.value : '').trim();
+  if (!studentName) return alert('请选择或填写学生姓名');
+  const subject = (document.getElementById('hwSubject').value || '').trim() || '未指定';
+  const status = document.getElementById('hwStatus').value === '已完成' ? '已完成' : '未完成';
   // 班级存内部 id（下拉框取值），而非显示名，避免改名后记录查不出来
   const clsEl = document.getElementById('hwClass');
   const cls = clsEl ? clsEl.value : state.activeClass;
-  const due = document.getElementById('hwDue').value.trim() || todayLabel;
-  state.homework.unshift({ id: uid(), subject, title, class: cls, due });
+  // 日期统一存 ISO，避免与首页「今日」判定所用格式不一致导致永远匹配不上
+  const date = hwNormDate(document.getElementById('hwDate').value) || attDateKey(new Date());
+  const title = (document.getElementById('hwTitle').value || '').trim();
+  const stu = (state.students || []).find(s => s.name === studentName && s.class === cls);
+  state.homework.unshift({ id: uid(), studentId: stu ? stu.id : '', studentName, subject, title, status, class: cls, date });
   save(); closeModal(); render();
 }
 function deleteHomework(id) {
@@ -7425,10 +7573,15 @@ function qrSave() {
         state.classRecords.unshift({ id: uid(), date: recDate, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
         nClass++;
       });
-      // 作业管理（仅当内容像布置/发布作业，而非未完成/未交；按学生所属班级归档）
-      if (homework && !/未完成|没交|未做|不交/.test(content)) {
+      // 作业管理（作业完成情况台账）：记「是否完成」，并保留学生姓名以便按人检索
+      if (homework) {
         const hwSubject = subjects[0]?.name || '未指定';
-        state.homework.unshift({ id: uid(), subject: hwSubject, title: content || '作业布置', class: stuClass, due: recDate });
+        const undone = /未完成|没交|未做|不交|未交|漏做|缺交/.test(content);
+        state.homework.unshift({
+          id: uid(), studentId: s.id, studentName: s.name, subject: hwSubject,
+          title: content || '', status: undone ? '未完成' : '已完成',
+          class: stuClass, date: hwNormDate(recDate) || attDateKey(new Date()),
+        });
         nHomework++;
       }
     });
