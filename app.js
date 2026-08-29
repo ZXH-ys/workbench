@@ -65,6 +65,7 @@ function defaultState() {
     defaultLocked: true,
     nav: [
       { id: 'home', label: '工作台首页', icon: '🏠' },
+      { id: 'student', label: '学生视图', icon: '🎒' },
       { section: '日常记录', items: [
         { id: 'schedule', label: '课程表', icon: '📅' },
         { id: 'students', label: '学生管理', icon: '👨‍👩‍👧‍👦' },
@@ -710,6 +711,7 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 function navigate(route) {
+  stopStudentBoard();
   selStudentIds = {};
   currentRoute = route; render();
   const app = document.getElementById('app');
@@ -932,6 +934,7 @@ function finishOnboard() { onboarded = '1'; localStorage.setItem('ct_onboarded',
 // ===================== Render =====================
 let lastRenderRoute = null;
 function render() {
+  homeExhibitClearTimer();
   const app = document.getElementById('app');
   const nav = app && app.querySelector('aside nav');
   const main = document.getElementById('main-content');
@@ -974,6 +977,7 @@ function render() {
     const b = document.querySelector('[data-newreminder]');
     if (b) b.addEventListener('click', openReminderForm);
   }
+  if (currentRoute === 'home') initHomeExhibit();
   applyTheme();
 }
 
@@ -1107,7 +1111,7 @@ function renderPage() {
     home: renderHome, schedule: renderSchedule, students: renderStudents, classLog: renderClassLog,
     seating: renderSeating, classRecord: renderClassRecord, behavior: renderBehavior,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
-    points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
+    points: renderPoints, student: renderStudentView, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
     search: renderGlobalSearch, profile: renderStudentProfile,
   };
   return (map[currentRoute] || renderHome)();
@@ -1379,61 +1383,6 @@ function renderHomeHead() {
     </div>
 
     ${renderHomePointsCard()}
-
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800 text-sm">📚 今日课程</div>
-        <button class="text-xs text-primary hover:underline" onclick="navigate('schedule')">课程表</button>
-      </div>
-      <div class="space-y-2">
-        ${todayCourses.length ? todayCourses.slice(0,6).map(c => {
-          const p = state.schedule.periods.find(x=>x.id===c.period);
-          return `
-          <div class="flex items-start gap-3 p-2 rounded-xl course-card cursor-pointer" onclick="editCourse(${c.day},${c.period})">
-            <div class="text-center min-w-[3rem]">
-              <div class="text-xs font-bold text-primary">${p ? (p.label || `第${p.id}节`) : `第${c.period}节`}</div>
-              <div class="text-xs text-gray-500">${p ? ((p.start||'') + (p.end?'-'+p.end:'')) : ''}</div>
-            </div>
-            <div><div class="font-bold text-gray-800">${esc(c.subject)}</div></div>
-          </div>`;
-        }).join('') : '<div class="text-sm text-gray-400">今天没有课程安排</div>'}
-      </div>
-    </div>
-
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800 text-sm">🔔 待办事项</div>
-        <button class="text-xs text-primary hover:underline" onclick="navigate('reminders')">查看全部</button>
-      </div>
-      <div class="space-y-2">
-        ${state.todos.slice(0,4).map(t => `
-          <div class="flex items-start gap-3 p-2 rounded-xl bg-gray-50">
-            <input type="checkbox" class="mt-1 w-4 h-4 accent-primary" ${t.done?'checked':''} onchange="toggleTodo('${t.id}')">
-            <div class="flex-1"><div class="text-sm ${t.done?'line-through text-gray-400':'text-gray-700'}">${esc(t.title)}</div>
-            <div class="flex gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-600">${esc(t.level)}</span><span class="text-[10px] text-gray-400">${esc(t.due)}</span></div></div>
-          </div>`).join('')}
-      </div>
-    </div>
-
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800 text-sm">📝 最近班级日志</div>
-        <button class="text-xs text-primary hover:underline" onclick="navigate('classLog')">查看全部</button>
-      </div>
-      <div class="space-y-2">
-        ${state.classLogs.slice(0,2).map(l => `<div class="p-2 rounded-xl bg-gray-50 text-sm"><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-gray-700">${esc(l.content)}</div></div>`).join('')}
-      </div>
-    </div>
-
-    <div class="col-span-12 md:col-span-6 bg-white rounded-2xl p-4 card-hover">
-      <div class="flex items-center justify-between mb-3">
-        <div class="font-bold text-gray-800 text-sm">💬 待跟进沟通</div>
-        <button class="text-xs text-primary hover:underline" onclick="openCommListModal()">查看全部</button>
-      </div>
-      <div class="space-y-2">
-        ${state.communications.filter(c=>c.status==='待跟进').slice(0,2).map(c => `<div class="p-2 rounded-xl bg-gray-50 text-sm"><div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(c.student)} · ${esc(c.parent)}</span><span class="text-xs text-red-500">${esc(c.status)}</span></div><div class="text-gray-600 text-xs">${esc(c.content)}</div></div>`).join('')}
-      </div>
-    </div>
   </div>`;
 }
 
@@ -3017,6 +2966,165 @@ ${periodLabel}概况：表扬 ${praiseTotal} 次，需关注 ${criticTotal} 次�
     </div>
     <pre id="reportText" class="hidden">${esc(reportText)}</pre>
   </div>`;
+}
+
+// ===================== 学生激励视图（段位 / 进步 / 模块均衡） =====================
+// 段位：本班相对分档，不淘汰，人人有档；激励点是“升档”
+const STUDENT_TIERS = [
+  { id: 'star', icon: '🌟', label: '自律之星', minPct: 0.85 },
+  { id: 'gem',  icon: '💎', label: '进阶之星', minPct: 0.50 },
+  { id: 'fire', icon: '🔥', label: '潜力之星', minPct: 0.15 },
+  { id: 'seed', icon: '🌱', label: '起步之星', minPct: 0.0 },
+];
+
+function ptClassConvList() {
+  return state.students.filter(s => s.class === state.activeClass)
+    .map(s => ({ s, v: ptConvTotal(s.id) }))
+    .sort((a, b) => b.v - a.v);
+}
+function ptTierOf(sid) {
+  const arr = ptClassConvList();
+  const idx = arr.findIndex(x => x.s.id === sid);
+  if (idx < 0) return { tier: STUDENT_TIERS[3], rank: 0, total: 0, gap: 0, next: null, pct: 0 };
+  const pct = arr.length > 1 ? (arr.length - 1 - idx) / (arr.length - 1) : 1;
+  let tier = STUDENT_TIERS[3];
+  for (const t of STUDENT_TIERS) { if (pct >= t.minPct) { tier = t; break; } }
+  const order = STUDENT_TIERS;
+  const ti = order.findIndex(t => t.id === tier.id);
+  const nextTier = ti > 0 ? order[ti - 1] : null;
+  let gap = 0, next = null;
+  if (nextTier && idx > 0) { next = arr[idx - 1].s; gap = Math.max(0, Math.ceil(arr[idx - 1].v - arr[idx].v)); }
+  return { tier, nextTier, rank: idx + 1, total: arr[idx].v, gap, next, pct };
+}
+// 最近 n 周该学生原始分净变动（用原始分看趋势，不含折算缩放）
+function ptStudentWeekRaw(sid, weekRef) {
+  const { start, end } = attWeekRange(weekRef);
+  const logs = (state.points.logs || []).filter(l => l.studentId === sid && attInRange(l.date, start, end));
+  return ptSum(logs);
+}
+function ptStudentWeekly(sid, n) {
+  const out = []; const now = new Date();
+  for (let i = 0; i < n; i++) { const ref = new Date(now); ref.setDate(ref.getDate() - 7 * i); out.push(ptStudentWeekRaw(sid, ref)); }
+  return out;
+}
+function ptModuleBalance(sid) {
+  const dims = POINT_DIMS.map(d => ({ ...d, v: ptConvDim(sid, d.id) }));
+  const min = dims.reduce((a, b) => b.v < a.v ? b : a);
+  return { dims, min };
+}
+function ptProgressBoard(n) {
+  const cls = state.students.filter(s => s.class === state.activeClass);
+  return cls.map(s => { const w = ptStudentWeekly(s.id, 2); return { s, cur: w[0], prev: w[1], delta: w[0] - w[1] }; })
+    .filter(x => x.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, n || 10);
+}
+
+let studentViewMode = 'card';
+let studentViewQuery = '';
+let studentBoardTimer = null;
+function setStudentViewMode(m) { studentViewMode = m; stopStudentBoard(); render(); if (m === 'board') setTimeout(startStudentBoard, 0); }
+function setStudentViewQuery(name) { studentViewQuery = name; render(); }
+function startStudentBoard() {
+  stopStudentBoard();
+  const screens = document.querySelectorAll('[data-board-screen]');
+  if (!screens.length) return;
+  let idx = 0;
+  const show = i => screens.forEach((el, k) => { el.style.display = k === i ? 'block' : 'none'; });
+  show(0);
+  studentBoardTimer = setInterval(() => {
+    if (currentRoute !== 'student' || studentViewMode !== 'board') { stopStudentBoard(); return; }
+    idx = (idx + 1) % screens.length; show(idx);
+  }, 15000);
+}
+function stopStudentBoard() { if (studentBoardTimer) { clearInterval(studentBoardTimer); studentBoardTimer = null; } }
+
+function studentCard(stu) {
+  const t = ptTierOf(stu.id);
+  const w = ptStudentWeekly(stu.id, 3);
+  const bal = ptModuleBalance(stu.id);
+  const bonus = attComputeBonus();
+  const badges = [];
+  if (bonus.sport[stu.id]) badges.push('🏃 体育全勤');
+  if (bonus.attend[stu.id]) badges.push('📋 考勤全勤');
+  if (bonus.post[stu.id]) badges.push('🤝 履职到位');
+  let streak = 0; for (let i = 0; i < w.length - 1; i++) { if (w[i] > w[i + 1]) streak++; else break; }
+  if (streak >= 1) badges.push('🔥 连胜 ' + streak + ' 周');
+  const maxV = Math.max.apply(null, bal.dims.map(d => d.v).concat([1]));
+  const bars = bal.dims.map(d => {
+    const st = dimStyle(d.id); const pct = Math.round(d.v / maxV * 100);
+    const low = d.id === bal.min.id ? '<span class="text-[11px] text-amber-600">· 建议多参与</span>' : '';
+    return '<div class="mb-2"><div class="flex justify-between text-xs"><span class="' + st.text + '">' + d.icon + ' ' + d.label + '</span><span class="text-gray-500">' + fmtScore(d.v) + '</span></div>'
+      + '<div class="h-2 bg-gray-100 rounded-full overflow-hidden mt-1"><div class="' + st.bar + ' h-full" style="width:' + pct + '%"></div></div>' + low + '</div>';
+  }).join('');
+  const weekNow = w[0] || 0, weekPrev = w[1] || 0;
+  const delta = weekNow - weekPrev;
+  const arrow = delta > 0 ? '↑ 比上周进步' : (delta < 0 ? '↓ 比上周退步' : '— 与上周持平');
+  const gapTxt = t.next ? ('距 <b>' + esc(t.next.name) + '</b> 升档还差 <b>' + t.gap + '</b> 分') : '已是最高段位 🎉';
+  const weekLabels = ['本周', '上周', '上上周'];
+  const weekStr = w.map((x, i) => (weekLabels[i] || ('第' + (i + 1) + '周')) + ' ' + (x >= 0 ? '+' : '') + fmtScore(x)).join(' · ');
+  const badgeHtml = badges.length ? '<div class="pt-2 flex flex-wrap gap-1">' + badges.map(b => '<span class="text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">' + b + '</span>').join('') + '</div>' : '';
+  return '<div class="bg-white rounded-2xl p-6 shadow-sm max-w-2xl">'
+    + '<div class="flex items-center gap-3 mb-4"><div class="text-4xl">' + t.tier.icon + '</div>'
+    + '<div><div class="text-lg font-bold text-gray-800">' + esc(stu.name) + '</div><div class="text-sm text-primary">' + t.tier.label + ' · 折算总分 ' + fmtScore(t.total) + '</div></div>'
+    + '<div class="ml-auto text-right"><div class="text-2xl font-bold ' + (delta >= 0 ? 'text-red-500' : 'text-emerald-600') + '">' + (delta >= 0 ? '+' : '') + fmtScore(weekNow) + '</div><div class="text-[11px] text-gray-400">本周得分 · ' + arrow + '</div></div></div>'
+    + '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">'
+    + '<div class="rounded-xl bg-gray-50 p-4">' + bars + '</div>'
+    + '<div class="rounded-xl bg-gray-50 p-4 space-y-2"><div class="text-xs text-gray-500">升档进度</div><div class="text-sm text-gray-700">' + gapTxt + '</div>'
+    + '<div class="text-xs text-gray-500 mt-2">最近三周得分</div><div class="text-sm">' + weekStr + '</div>' + badgeHtml + '</div>'
+    + '</div>'
+    + '<div class="text-[11px] text-gray-400 mt-3">积分用于老师排座位参考；这里只展示你的成长，不显示他人分数。建议：别放弃任一模块，每个最多占 1/4 总分。</div>'
+    + '</div>';
+}
+function studentCardHtml(cls) {
+  const q = (studentViewQuery || '').trim();
+  if (!q) {
+    const chips = cls.map(s => '<button class="text-sm px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-primary/10" onclick="setStudentViewQuery(\'' + esc(s.name) + '\')">' + esc(s.name) + '</button>').join('');
+    return '<div class="bg-white rounded-2xl p-6 shadow-sm">'
+      + '<div class="text-sm text-gray-500 mb-3">输入你的姓名，或点击下方查看自己的激励卡片（只看自己，不显示他人分数）：</div>'
+      + '<input value="' + esc(q) + '" oninput="studentViewQuery=this.value" placeholder="输入姓名…" class="border rounded-full px-4 py-2 text-sm w-60 focus:outline-none focus:border-primary">'
+      + '<button class="ml-2 bg-primary text-white px-4 py-2 rounded-full text-sm" onclick="render()">查看</button>'
+      + '<div class="flex flex-wrap gap-2 mt-4">' + chips + '</div></div>';
+  }
+  const stu = cls.find(s => s.name === q) || cls.find(s => s.name.indexOf(q) >= 0);
+  if (!stu) return '<div class="bg-white rounded-2xl p-6 shadow-sm text-gray-500">未找到「' + esc(q) + '」，换个名字试试。</div>';
+  return studentCard(stu);
+}
+function studentBoardHtml(cls) {
+  const tiers = {}; STUDENT_TIERS.forEach(t => tiers[t.id] = []);
+  cls.forEach(s => { const t = ptTierOf(s.id); tiers[t.tier.id].push({ s, v: t.total }); });
+  const tierScreen = STUDENT_TIERS.slice().reverse().map(t => {
+    const list = (tiers[t.id] || []).sort((a, b) => b.v - a.v);
+    if (!list.length) return '';
+    return '<div class="mb-4"><div class="text-xl font-bold mb-2">' + t.icon + ' ' + t.label + ' <span class="text-sm text-gray-400">' + list.length + '人</span></div>'
+      + '<div class="flex flex-wrap gap-2">' + list.map(x => '<span class="px-3 py-1.5 rounded-full bg-white shadow-sm text-sm">' + esc(x.s.name) + ' <span class="text-gray-400">' + fmtScore(x.v) + '</span></span>').join('') + '</div></div>';
+  }).join('');
+  const prog = ptProgressBoard(10);
+  const progScreen = prog.length ? ('<div class="text-xl font-bold mb-2">🔥 本周进步榜</div><div class="space-y-2">' + prog.map((x, i) => '<div class="flex items-center gap-3 bg-white rounded-xl p-3 shadow-sm"><span class="text-lg font-bold text-gray-400 w-6">' + (i + 1) + '</span><span class="text-sm font-medium">' + esc(x.s.name) + '</span><span class="ml-auto text-red-500 font-bold">↑ +' + fmtScore(x.delta) + '</span></div>').join('') + '</div>') : '<div class="text-gray-400">本周暂无显著进步记录</div>';
+  const bonus = attComputeBonus();
+  const sportN = cls.filter(s => bonus.sport[s.id]).length, attendN = cls.filter(s => bonus.attend[s.id]).length, postN = cls.filter(s => bonus.post[s.id]).length;
+  const newsScreen = '<div class="text-xl font-bold mb-2">📣 今日新鲜事</div>'
+    + '<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">'
+    + '<div class="bg-white rounded-xl p-4 shadow-sm"><div class="text-3xl font-bold text-emerald-600">' + sportN + '</div><div class="text-sm text-gray-500">体育打卡全勤</div></div>'
+    + '<div class="bg-white rounded-xl p-4 shadow-sm"><div class="text-3xl font-bold text-sky-600">' + attendN + '</div><div class="text-sm text-gray-500">考勤全勤</div></div>'
+    + '<div class="bg-white rounded-xl p-4 shadow-sm"><div class="text-3xl font-bold text-violet-600">' + postN + '</div><div class="text-sm text-gray-500">履职到位</div></div>'
+    + '</div><div class="text-sm text-gray-500 mt-4">把每一次全勤、每一点进步都看见 ✨</div>';
+  return '<div>'
+    + '<div data-board-screen class="space-y-3">' + tierScreen + '</div>'
+    + '<div data-board-screen style="display:none">' + progScreen + '</div>'
+    + '<div data-board-screen style="display:none">' + newsScreen + '</div>'
+    + '<div class="text-center text-xs text-gray-400 mt-4">大屏每 15 秒自动切换 · 段位榜 → 进步榜 → 今日新鲜事</div></div>';
+}
+function renderStudentView() {
+  const cls = state.students.filter(s => s.class === state.activeClass);
+  if (!cls.length) return '<div class="bg-white rounded-2xl p-10 text-center shadow-sm"><div class="text-4xl mb-3">🎒</div><div class="font-bold text-gray-800 mb-2">还没有学生</div><p class="text-sm text-gray-500">先到「学生管理」建立名单。</p></div>';
+  const mode = studentViewMode;
+  const toolbar = '<div class="flex flex-wrap items-center gap-2 mb-4">'
+    + '<button class="px-4 py-1.5 rounded-full text-sm ' + (mode === 'card' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600') + '" onclick="setStudentViewMode(\'card\')">🎒 个人卡</button>'
+    + '<button class="px-4 py-1.5 rounded-full text-sm ' + (mode === 'board' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600') + '" onclick="setStudentViewMode(\'board\')">📺 大屏榜</button>'
+    + '<button class="ml-auto text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50" onclick="openLockSettings()">🔒 锁定大屏</button></div>';
+  const body = mode === 'board' ? studentBoardHtml(cls) : studentCardHtml(cls);
+  const html = '<div class="space-y-4">' + toolbar + body + '</div>';
+  if (mode === 'board') setTimeout(startStudentBoard, 0);
+  return html;
 }
 
 // ===================== Points: 积分管理 =====================
@@ -6056,32 +6164,315 @@ function undoPtLogFromStudent(id, sid) {
 }
 
 // ---------- 首页积分卡片 ----------
+// ===================== 首页积分排行 + 内嵌展览面板 =====================
+// 状态：维度/人数/自动轮换/间隔、内嵌屏与全屏展览的翻页与背景
+let homeExhibit = {
+  dim: 'all', pool: 10, auto: true, interval: 8,
+  screen: 'rank', logPage: 0,
+  fs: false, fsBg: 'dark', fsScreen: 'rank', fsRankPage: 0, fsLogPage: 0, fsAuto: true,
+  _timer: null, _fsTimer: null, _clock: null,
+};
+
 function renderHomePointsCard() {
-  const top = ptRanked('all').slice(0, 5);
   const week = ptRecent(7);
-  const medals = ['🥇', '🥈', '🥉'];
+  const dimOpts = `<option value="all">总分</option>` + POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('');
+  const poolOpts = `<option value="10">前 10</option><option value="15">前 15</option><option value="20">前 20</option><option value="0">全部</option>`;
+  const intOpts = `<option value="5">5 秒</option><option value="8" selected>8 秒</option><option value="12">12 秒</option>`;
   return `
   <div class="col-span-12 bg-white rounded-2xl p-4 card-hover">
-    <div class="flex items-center justify-between mb-3">
-      <div class="font-bold text-gray-800 text-sm">🏆 积分榜（Top 5）</div>
-      <div class="flex items-center gap-3">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div class="font-bold text-gray-800 text-sm">🏆 积分排行</div>
+      <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs text-gray-400">近7天 ${ptSum(week) >= 0 ? '+' : ''}${ptSum(week)} 分 / ${week.length} 条</span>
-        <button class="text-xs text-primary hover:underline" onclick="navigate('points')">积分管理</button>
+        <select id="homeDimSel" class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${dimOpts}</select>
+        <select id="homePoolSel" class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white">${poolOpts}</select>
+        <button class="text-xs border border-primary text-primary px-3 py-1 rounded-full hover:bg-primary/5" data-lock-allow onclick="toggleHomeExhibitFs()">📺 全屏展览</button>
+        <a class="text-xs text-primary hover:underline cursor-pointer" data-lock-allow onclick="navigate('points')">积分管理 →</a>
+        <button id="homeAutoBtn" class="text-xs border border-gray-300 px-3 py-1 rounded-full hover:bg-gray-50" data-lock-allow onclick="toggleHomeExhibitAuto()">⏸️ 暂停</button>
+        <button id="homeSetBtn" class="text-xs border border-gray-300 px-3 py-1 rounded-full hover:bg-gray-50" data-lock-allow onclick="toggleHomeExhibitSettings()">⚙️</button>
       </div>
     </div>
-    ${top.length ? `<div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-      ${top.map((x, i) => `<div class="p-3 rounded-xl bg-gray-50 text-center cursor-pointer hover:bg-primary/5 transition" onclick="openPtStudent('${x.s.id}')">
-        <div class="text-lg">${medals[i] || `<span class="text-xs text-gray-400">${i + 1}</span>`}</div>
-        <img src="${esc(x.s.avatar)}" class="w-9 h-9 rounded-full bg-white mx-auto my-1" alt="">
-        <div class="text-sm font-medium text-gray-800 truncate">${esc(x.s.name)}</div>
-        <div class="text-lg font-bold text-primary">${fmtScore(x.score)}</div>
-      </div>`).join('')}
-    </div>` : '<div class="text-sm text-gray-400">还没有学生或积分记录，去「积分管理」开始吧。</div>'}
-    <div class="flex gap-2 mt-3">
-      <button class="flex-1 text-sm border border-primary text-primary py-2 rounded-full hover:bg-primary/5" onclick="openPtAdjust(null,'daily',1)">＋ 快速加减分</button>
-      <button class="flex-1 text-sm border border-gray-300 py-2 rounded-full hover:bg-gray-50" onclick="openPtBatch()">批量加减分</button>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2" id="homeRankGrid"></div>
+
+    <!-- 内嵌展览面板（首页空白区填充，自动轮换） -->
+    <div class="mt-4 rounded-2xl overflow-hidden border border-gray-200 relative bg-gradient-to-br from-slate-50 to-gray-100">
+      <div class="flex items-center justify-between px-4 py-2 bg-white/70 backdrop-blur">
+        <div class="flex items-center gap-2 text-sm font-bold text-gray-800">
+          <span id="homeExIcon">🏆</span>
+          <span id="homeExTitle">积分排行展览</span>
+          <span id="homeExBadge" class="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold">自动轮换中</span>
+        </div>
+      </div>
+      <div id="homeExhibitSettings" class="hidden absolute top-9 right-3 z-20 bg-white border border-gray-200 rounded-xl p-3 w-56 text-xs shadow-xl space-y-2">
+        <div><div class="text-gray-400 mb-1">轮换间隔</div><select id="homeIntSel" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
+        <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitAuto(true)">开</button><button id="homeAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitAuto(false)">关</button></div></div>
+        <div><div class="text-gray-400 mb-1">全屏背景</div><div class="flex gap-2"><button id="homeBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
+      </div>
+      <div id="homeExhibitBody" class="p-4 min-h-[260px]"></div>
+      <div id="homeExhibitNav" class="flex items-center justify-center gap-3 py-3 border-t border-black/5"></div>
     </div>
+
+    ${homeExhibitFsHTML()}
   </div>`;
+}
+
+// 全屏展览覆盖层
+function homeExhibitFsHTML() {
+  const dimOpts = `<option value="all">总分</option>` + POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('');
+  const poolOpts = `<option value="10">前 10</option><option value="15">前 15</option><option value="20">前 20</option><option value="30">前 30</option><option value="0">全部</option>`;
+  const intOpts = `<option value="5">5 秒</option><option value="10" selected>10 秒</option><option value="15">15 秒</option>`;
+  return `
+  <div id="homeFsOverlay" class="hidden fixed inset-0 z-[100] overflow-auto" style="--fsc:rgba(30,41,59,.6);--fsb:rgba(148,163,184,.25);background:linear-gradient(135deg,#0f172a,#1e293b);color:#e2e8f0">
+    <div class="sticky top-0 z-10 flex items-center justify-between px-6 py-3" style="background:rgba(15,23,42,.6);backdrop-filter:blur(8px)">
+      <div class="flex items-center gap-3"><span id="homeFsTitle" class="text-lg font-bold">🏆 积分排行</span><span id="homeFsClock" class="text-sm opacity-70 tabular-nums"></span></div>
+      <div class="flex items-center gap-2">
+        <button class="text-xl bg-transparent border-0 cursor-pointer text-current" data-fsset data-lock-allow onclick="toggleHomeExhibitFsSettings()">⚙️</button>
+        <button class="text-xl bg-transparent border-0 cursor-pointer text-current" data-lock-allow onclick="toggleHomeExhibitFs()">✕</button>
+      </div>
+    </div>
+    <div id="homeFsPanel" class="hidden fixed top-16 right-4 z-[60] bg-white border border-gray-200 rounded-xl p-3 w-60 text-xs shadow-xl space-y-2" style="color:#1f2937">
+      <div class="font-semibold mb-1">展览设置</div>
+      <div><div class="text-gray-400 mb-1">展示范围</div><select id="homeFsPool" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(+this.value)">${poolOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">排序维度</div><select id="homeFsDim" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeFsAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsAuto(true)">开</button><button id="homeFsAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsAuto(false)">关</button></div></div>
+      <div><div class="text-gray-400 mb-1">间隔</div><select id="homeFsInt" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">背景</div><div class="flex gap-2"><button id="homeFsBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeFsBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
+    </div>
+    <div id="homeFsBody" class="px-6 pb-12 max-w-[1200px] mx-auto"></div>
+  </div>`;
+}
+
+// 取当前排行列表（按维度排序 + 截取人数）
+function homeExhibitStudents() {
+  const arr = ptRanked(homeExhibit.dim).map(x => ({ s: x.s }));
+  return homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
+}
+
+// 排行卡（compact=false 内嵌小卡；true 全屏大卡）
+function homeExhibitCardHTML(x, i, fs) {
+  const s = x.s;
+  const total = ptConvTotal(s.id);
+  const dims = POINT_DIMS.map(d => ({ d, v: ptConvDim(s.id, d.id) }));
+  const maxV = Math.max(1, ...dims.map(o => o.v));
+  const bar = o => `<div class="flex justify-between text-[10px] text-gray-400"><span>${o.d.icon}${o.d.label}</span><span>${fmtScore(o.v)}</span></div>
+    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.d.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`;
+  const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-400 to-gray-500' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-gray-300';
+  const topCls = fs ? (i === 0 ? 'border-2 border-amber-300' : '') : (i === 0 ? 'ring-2 ring-amber-300 bg-amber-50' : i === 1 ? 'ring-2 ring-gray-200' : i === 2 ? 'ring-2 ring-amber-200 bg-amber-50/60' : '');
+  const cardCls = fs ? 'bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-4' : 'bg-white border border-gray-100 rounded-xl p-3 ' + topCls;
+  return `<div class="${cardCls}">
+    <div class="flex items-center gap-2 mb-1">
+      <span class="w-6 h-6 rounded-full ${badgeCls} text-white text-xs font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
+      <img src="${esc(s.avatar)}" class="w-7 h-7 rounded-full bg-gray-100" alt="">
+      <span class="text-sm font-semibold text-gray-800 truncate">${esc(s.name)}</span>
+      <span class="ml-auto text-lg font-extrabold ${fs ? 'text-pink-300' : 'text-primary'}">${fmtScore(total)}<span class="text-[10px] text-gray-400 font-normal">/400</span></span>
+    </div>
+    <div class="space-y-1 mt-1">${dims.map(bar).join('')}</div>
+  </div>`;
+}
+
+// 班级日志按天分组：仅本周内、且截止到今天，无日志的天不显示（避免空白页）
+function homeExhibitLogGroups() {
+  const logs = state.classLogs || [];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dow = (today.getDay() + 6) % 7; // 周一=0
+  const monday = new Date(today); monday.setDate(today.getDate() - dow);
+  const groups = {};
+  logs.forEach(l => {
+    const d = ptParseDate(l.date);
+    if (!d) return;
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    if (day.getTime() < monday.getTime() || day.getTime() > today.getTime()) return;
+    (groups[l.date] = groups[l.date] || []).push(l);
+  });
+  return Object.keys(groups).filter(k => groups[k].length)
+    .sort((a, b) => (ptParseDate(a) || 0) - (ptParseDate(b) || 0))
+    .map(k => ({ date: k, logs: groups[k] }));
+}
+
+function homeExhibitLogCardHTML(l) {
+  const c = l.content || '';
+  const warn = /(迟到|违纪|扣分|警告|⚠️|退步|未完成|未交|打架|顶撞|没交)/.test(c);
+  const good = /(表扬|获奖|🏆|👍|流动红旗|全勤|主动|进步|好人好事|拾金不昧)/.test(c);
+  const border = warn ? 'border-l-4 border-amber-400' : good ? 'border-l-4 border-emerald-400' : 'border-l-4 border-slate-300';
+  return `<div class="bg-white rounded-xl p-3 ${border} text-sm"><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-gray-700 leading-relaxed">${esc(c)}</div></div>`;
+}
+
+function renderHomeRank() {
+  const el = document.getElementById('homeRankGrid');
+  if (el) el.innerHTML = homeExhibitStudents().map((x, i) => homeExhibitCardHTML(x, i, false)).join('');
+}
+
+function renderHomeExhibit() {
+  const body = document.getElementById('homeExhibitBody');
+  const nav = document.getElementById('homeExhibitNav');
+  const icon = document.getElementById('homeExIcon');
+  const title = document.getElementById('homeExTitle');
+  if (!body) return;
+  if (homeExhibit.screen === 'rank') {
+    icon.textContent = '🏆'; title.textContent = '积分排行展览';
+    const list = homeExhibitStudents();
+    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">${list.map((x, i) => homeExhibitCardHTML(x, i, false)).join('')}</div>`;
+    nav.innerHTML = `<span class="text-xs text-gray-400">显示 ${list.length} 人 · 按「${homeExhibit.dim === 'all' ? '总分' : dimLabel(homeExhibit.dim)}」排序</span>
+      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('log')">📓 查看班级日志 →</button>`;
+  } else {
+    icon.textContent = '📓'; title.textContent = '班级日志展览';
+    const groups = homeExhibitLogGroups();
+    if (!groups.length) {
+      body.innerHTML = '<div class="text-center text-gray-400 py-10 text-sm">本周暂无班级日志</div>';
+      nav.innerHTML = '<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit(\'rank\')">← 返回排行</button>';
+      return;
+    }
+    const pg = Math.max(0, Math.min(groups.length - 1, homeExhibit.logPage));
+    homeExhibit.logPage = pg;
+    const g = groups[pg];
+    body.innerHTML = `<div class="text-xs text-gray-400 mb-2">本周至 ${esc(g.date)} · 共 ${g.logs.length} 条</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">${g.logs.map(l => homeExhibitLogCardHTML(l)).join('')}</div>`;
+    nav.innerHTML = `<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeExhibitLogPage(-1)">‹</button>
+      <span class="text-xs text-gray-400">📅 ${esc(g.date)} (${pg + 1}/${groups.length})</span>
+      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeExhibitLogPage(1)">›</button>
+      <button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="switchHomeExhibit('rank')">← 返回排行</button>`;
+  }
+}
+
+function switchHomeExhibit(s) { homeExhibit.screen = s; homeExhibit.logPage = 0; renderHomeExhibit(); }
+function homeExhibitLogPage(d) { homeExhibit.logPage = Math.max(0, homeExhibit.logPage + d); renderHomeExhibit(); }
+
+function toggleHomeExhibitSettings() {
+  const p = document.getElementById('homeExhibitSettings');
+  if (p) p.classList.toggle('hidden');
+}
+
+function setHomeExhibitAuto(v) {
+  homeExhibit.auto = v;
+  const btn = document.getElementById('homeAutoBtn');
+  const badge = document.getElementById('homeExBadge');
+  const on = document.getElementById('homeAutoOn'), off = document.getElementById('homeAutoOff');
+  if (on) on.className = 'flex-1 border rounded-lg py-1 ' + (v ? 'bg-primary text-white' : '');
+  if (off) off.className = 'flex-1 border rounded-lg py-1 ' + (v ? '' : 'bg-primary text-white');
+  if (btn) btn.textContent = v ? '⏸️ 暂停' : '▶️ 轮换';
+  if (badge) { badge.textContent = v ? '自动轮换中' : '已暂停'; badge.className = 'text-[10px] px-2 py-0.5 rounded-full ' + (v ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400') + ' font-semibold'; }
+  if (v) startHomeExhibitAuto(); else stopHomeExhibitAuto();
+}
+function toggleHomeExhibitAuto() { setHomeExhibitAuto(!homeExhibit.auto); }
+function setHomeExhibitInterval(v) { homeExhibit.interval = v; if (homeExhibit.auto) startHomeExhibitAuto(); if (homeExhibit.fsAuto) startHomeExhibitFsAuto(); }
+
+function startHomeExhibitAuto() {
+  stopHomeExhibitAuto();
+  const sec = (homeExhibit.interval || 8) * 1000;
+  homeExhibit._timer = setInterval(() => {
+    if (homeExhibit.screen === 'rank') switchHomeExhibit('log');
+    else {
+      const groups = homeExhibitLogGroups();
+      if (homeExhibit.logPage < groups.length - 1) { homeExhibit.logPage++; renderHomeExhibit(); }
+      else switchHomeExhibit('rank');
+    }
+  }, sec);
+}
+function stopHomeExhibitAuto() { if (homeExhibit._timer) { clearInterval(homeExhibit._timer); homeExhibit._timer = null; } }
+
+function homeExhibitSetPool(v) { homeExhibit.pool = v; const el = document.getElementById('homePoolSel'); if (el) el.value = String(v); renderHomeRank(); renderHomeExhibit(); renderHomeFs(); }
+function homeExhibitSetDim(v) { homeExhibit.dim = v; const el = document.getElementById('homeDimSel'); if (el) el.value = v; renderHomeRank(); renderHomeExhibit(); renderHomeFs(); }
+
+// ---- 全屏展览 ----
+function toggleHomeExhibitFs() {
+  const o = document.getElementById('homeFsOverlay');
+  if (!o) return;
+  homeExhibit.fs = !homeExhibit.fs;
+  o.classList.toggle('hidden', !homeExhibit.fs);
+  if (homeExhibit.fs) { renderHomeFs(); startHomeFsClock(); if (homeExhibit.fsAuto) startHomeExhibitFsAuto(); }
+  else { stopHomeFsClock(); stopHomeExhibitFsAuto(); }
+}
+function toggleHomeExhibitFsSettings() { const p = document.getElementById('homeFsPanel'); if (p) p.classList.toggle('hidden'); }
+function homeFsPerPage() { const h = window.innerHeight - 200; return Math.max(3, Math.floor(h / 175)); }
+
+function renderHomeFs() {
+  const body = document.getElementById('homeFsBody');
+  if (!body) return;
+  const sp = document.getElementById('homeFsPool'); if (sp) sp.value = String(homeExhibit.pool);
+  const sd = document.getElementById('homeFsDim'); if (sd) sd.value = homeExhibit.dim;
+  if (homeExhibit.fsScreen === 'rank') {
+    document.getElementById('homeFsTitle').textContent = '🏆 积分排行';
+    const list = homeExhibitStudents();
+    const per = homeFsPerPage();
+    const tp = Math.max(1, Math.ceil(list.length / per));
+    if (homeExhibit.fsRankPage >= tp) homeExhibit.fsRankPage = tp - 1;
+    const page = list.slice(homeExhibit.fsRankPage * per, (homeExhibit.fsRankPage + 1) * per);
+    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.fsRankPage * per + i, true)).join('')}</div>`
+      + (tp > 1 ? `<div class="flex items-center justify-center gap-3 mt-4"><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('rank',-1)">‹</button><span class="text-sm opacity-70">第 ${homeExhibit.fsRankPage + 1}/${tp} 页</span><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('rank',1)">›</button></div>` : '');
+  } else {
+    document.getElementById('homeFsTitle').textContent = '📓 班级日志';
+    const groups = homeExhibitLogGroups();
+    if (!groups.length) { body.innerHTML = '<div class="text-center opacity-50 py-16">本周暂无班级日志</div>'; }
+    else {
+      const pg = Math.max(0, Math.min(groups.length - 1, homeExhibit.fsLogPage)); homeExhibit.fsLogPage = pg;
+      const g = groups[pg];
+      body.innerHTML = `<div class="text-sm opacity-60 mb-3">本周至 ${esc(g.date)} · ${g.logs.length} 条</div><div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${g.logs.map(l => homeExhibitLogCardHTML(l)).join('')}</div>`
+        + (groups.length > 1 ? `<div class="flex items-center justify-center gap-3 mt-4"><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('log',-1)">‹</button><span class="text-sm opacity-70">📅 ${esc(g.date)} (${pg + 1}/${groups.length})</span><button class="text-sm px-4 py-1.5 rounded-full border border-[var(--fsb)]" data-lock-allow onclick="homeFsPage('log',1)">›</button></div>` : '');
+    }
+  }
+  body.insertAdjacentHTML('beforeend', `<div class="flex justify-center gap-3 mt-5"><button class="text-sm px-5 py-1.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'rank' ? 'bg-pink-500 text-white border-pink-500' : ''}" data-lock-allow onclick="switchHomeFs('rank')">🏆 积分排行</button><button class="text-sm px-5 py-1.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'log' ? 'bg-pink-500 text-white border-pink-500' : ''}" data-lock-allow onclick="switchHomeFs('log')">📓 班级日志</button></div>`);
+}
+
+function switchHomeFs(s) { homeExhibit.fsScreen = s; homeExhibit.fsRankPage = 0; homeExhibit.fsLogPage = 0; renderHomeFs(); }
+function homeFsPage(which, d) {
+  if (which === 'rank') { const list = homeExhibitStudents(), per = homeFsPerPage(), tp = Math.max(1, Math.ceil(list.length / per)); homeExhibit.fsRankPage = Math.max(0, Math.min(tp - 1, homeExhibit.fsRankPage + d)); }
+  else { const n = homeExhibitLogGroups().length; homeExhibit.fsLogPage = Math.max(0, Math.min(n - 1, homeExhibit.fsLogPage + d)); }
+  renderHomeFs();
+}
+function setHomeExhibitFsAuto(v) {
+  homeExhibit.fsAuto = v;
+  const on = document.getElementById('homeFsAutoOn'), off = document.getElementById('homeFsAutoOff');
+  if (on) on.className = 'flex-1 border rounded-lg py-1 ' + (v ? 'bg-primary text-white' : '');
+  if (off) off.className = 'flex-1 border rounded-lg py-1 ' + (v ? '' : 'bg-primary text-white');
+  if (v) startHomeExhibitFsAuto(); else stopHomeExhibitFsAuto();
+}
+function startHomeExhibitFsAuto() {
+  stopHomeExhibitFsAuto();
+  const sec = (homeExhibit.interval || 8) * 1000;
+  homeExhibit._fsTimer = setInterval(() => {
+    if (homeExhibit.fsScreen === 'rank') {
+      const list = homeExhibitStudents(), per = homeFsPerPage(), tp = Math.max(1, Math.ceil(list.length / per));
+      homeExhibit.fsRankPage++;
+      if (homeExhibit.fsRankPage >= tp) { homeExhibit.fsRankPage = 0; switchHomeFs('log'); } else renderHomeFs();
+    } else {
+      const groups = homeExhibitLogGroups();
+      homeExhibit.fsLogPage++;
+      if (homeExhibit.fsLogPage >= groups.length) { homeExhibit.fsLogPage = 0; switchHomeFs('rank'); } else renderHomeFs();
+    }
+  }, sec);
+}
+function stopHomeExhibitFsAuto() { if (homeExhibit._fsTimer) { clearInterval(homeExhibit._fsTimer); homeExhibit._fsTimer = null; } }
+function startHomeFsClock() { stopHomeFsClock(); const tick = () => { const e = document.getElementById('homeFsClock'); if (e) e.textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }; tick(); homeExhibit._clock = setInterval(tick, 1000); }
+function stopHomeFsClock() { if (homeExhibit._clock) { clearInterval(homeExhibit._clock); homeExhibit._clock = null; } }
+function setHomeExhibitFsBg(light) {
+  const o = document.getElementById('homeFsOverlay'); if (!o) return;
+  homeExhibit.fsBg = light ? 'light' : 'dark';
+  if (light) { o.style.background = 'linear-gradient(135deg,#f8fafc,#e2e8f0)'; o.style.color = '#1e293b'; o.style.setProperty('--fsc', 'rgba(255,255,255,.9)'); o.style.setProperty('--fsb', 'rgba(148,163,184,.3)'); }
+  else { o.style.background = 'linear-gradient(135deg,#0f172a,#1e293b)'; o.style.color = '#e2e8f0'; o.style.setProperty('--fsc', 'rgba(30,41,59,.6)'); o.style.setProperty('--fsb', 'rgba(148,163,184,.25)'); }
+  [['homeBgDark', !light], ['homeBgLight', light], ['homeFsBgDark', !light], ['homeFsBgLight', light]].forEach(([id, on]) => {
+    const b = document.getElementById(id); if (b) { b.classList.toggle('bg-primary', on); b.classList.toggle('text-white', on); }
+  });
+}
+function homeExhibitClearTimer() { stopHomeExhibitAuto(); stopHomeExhibitFsAuto(); stopHomeFsClock(); }
+
+// 首页渲染后初始化内嵌展览（仅在班主任首页存在 #homeRankGrid 时生效）
+function initHomeExhibit() {
+  const dimSel = document.getElementById('homeDimSel');
+  const poolSel = document.getElementById('homePoolSel');
+  if (!dimSel || !poolSel) return;
+  dimSel.value = homeExhibit.dim; poolSel.value = String(homeExhibit.pool);
+  dimSel.onchange = () => { homeExhibit.dim = dimSel.value; renderHomeRank(); renderHomeExhibit(); };
+  poolSel.onchange = () => { homeExhibit.pool = +poolSel.value; renderHomeRank(); renderHomeExhibit(); };
+  renderHomeRank(); renderHomeExhibit(); setHomeExhibitAuto(homeExhibit.auto);
+  document.removeEventListener('click', homeExhibitDocClick);
+  document.addEventListener('click', homeExhibitDocClick);
+}
+function homeExhibitDocClick(e) {
+  const p = document.getElementById('homeExhibitSettings');
+  if (p && !p.classList.contains('hidden') && !p.contains(e.target) && !e.target.closest('#homeSetBtn')) p.classList.add('hidden');
+  const fp = document.getElementById('homeFsPanel');
+  if (fp && !fp.classList.contains('hidden') && !fp.contains(e.target) && !e.target.closest('[data-fsset]')) fp.classList.add('hidden');
 }
 
 // ===================== 一句话记录（自然语言识别） =====================
