@@ -2204,41 +2204,45 @@ function hwStudentName(h){
 }
 // 作业管理 = 作业完成情况台账：姓名 + 科目 + 是否完成 + 日期。
 // 支持：两个班分开查看、单科筛选、按姓名搜索、整体通览统计。
-function renderHomework() {
-  const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
+// —— 渲染拆成「静态骨架 + 三个可局部刷新区块」：
+//    #hwStats     统计条 / 未完成名单（只随班级·科目·状态变化，不随搜索词变化）
+//    #hwFilterBar 当前筛选状态条（随搜索词变化）
+//    #hwList      条数说明 + 记录列表（随搜索词变化）
+// 搜索框输入时只刷新后两块，整页 DOM 与输入框本身不动，避免元素被销毁导致掉焦点、中文输入法组词被打断。
+
+// 统一筛选上下文：班级 → 本班记录 → 本班科目（数据变化时自动回落，避免列表空白）
+function hwFilterState() {
   const classes = state.classes || [];
   // 班级分开：默认跟随当前班级；班级列表变化或值失效时自动回落
   if (!hwClassFilter || !classes.some(c => c.id === hwClassFilter)) hwClassFilter = state.activeClass;
   const curCls = hwClassFilter;
   // 归属判定统一走 hwBelongsTo：记录里的 class 可能是 id、显示名或历史遗留值
   const mine = (state.homework || []).filter(h => hwBelongsTo(h, curCls));
-
-  // 班级页签（带各自条数，两个班互不干扰；只读模式下切换班级属于查看操作，放行）
-  const classTabs = classes.map(c => {
-    const n = (state.homework || []).filter(h => hwBelongsTo(h, c.id)).length;
-    return `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${c.id === curCls ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetClass(${JSON.stringify(c.id)})">${esc(c.name)} ${n}</button>`;
-  }).join('');
-
-  // 科目页签：若当前筛选值在本班已不存在（如切了班级），自动重置，避免列表空白
   const subjects = [...new Set(mine.map(h => h.subject).filter(Boolean))];
+  // 若当前科目筛选值在本班已不存在（如切了班级），自动重置，避免列表空白
   if (hwSubjectFilter && !subjects.includes(hwSubjectFilter)) hwSubjectFilter = '';
-  const subjTabs = [{ id: '', name: '全部' }]
-    .concat(subjects.map(s => ({ id: s, name: s })))
-    .map(s => `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject(${JSON.stringify(s.id)})">${esc(s.name)}</button>`).join('');
+  return { classes, curCls, mine, subjects };
+}
 
-  const stTabs = [{ id: '', name: '全部' }, { id: '未完成', name: '未完成' }, { id: '已完成', name: '已完成' }]
-    .map(s => `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwStatusFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetStatus(${JSON.stringify(s.id)})">${s.name}</button>`).join('');
+function hwStatHTML(label, val, cls) {
+  return `<div class="flex-1 min-w-[5rem] rounded-xl ${cls} px-3 py-2 text-center"><div class="text-lg font-bold">${val}</div><div class="text-xs text-gray-500">${label}</div></div>`;
+}
 
+// 当前筛选状态条（受搜索词影响）
+function hwFilterBarHTML() {
   const kw = (hwSearchName || '').trim();
-  const hitKw = h => (hwStudentName(h) || h.studentName || '').includes(kw) || (h.subject || '').includes(kw) || (h.title || '').includes(kw) || hwDateLabel(h.date).includes(kw);
-  // 列表：班级 → 科目 → 状态 → 关键词；按日期倒序，方便查看最新记录
-  const list = mine.filter(h =>
-    (!hwSubjectFilter || h.subject === hwSubjectFilter) &&
-    (!hwStatusFilter || h.status === hwStatusFilter) &&
-    (!kw || hitKw(h))
-  ).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  const filtered = !!(kw || hwSubjectFilter || hwStatusFilter);
+  if (!(kw || hwSubjectFilter || hwStatusFilter)) return '';
+  return `<div class="mb-3 flex items-center gap-2 flex-wrap text-xs text-gray-500">
+      <span>当前筛选：</span>
+      ${hwSubjectFilter ? `<span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary">${esc(hwSubjectFilter)}</span>` : ''}
+      ${hwStatusFilter ? `<span class="px-2 py-0.5 rounded-full ${hwStatusFilter === '未完成' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(hwStatusFilter)}</span>` : ''}
+      ${kw ? `<span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">搜索：${esc(kw)}</span>` : ''}
+      <button data-lock-allow class="text-primary hover:underline" onclick="hwResetFilters()">清空全部</button>
+    </div>`;
+}
 
+// 统计条 + 未完成名单：不受搜索词影响，保证搜一个人也能通览全局
+function hwStatsHTML(mine) {
   // 整体通览：统计作用于「当前班级 + 科目/状态」范围（不受姓名搜索影响，避免搜一个人就看不到全局）
   const scope = mine.filter(h => (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!hwStatusFilter || h.status === hwStatusFilter));
   const nUndone = scope.filter(h => h.status === '未完成').length;
@@ -2255,48 +2259,31 @@ function renderHomework() {
   });
   const aggList = Object.entries(agg).sort((a, b) => b[1] - a[1]);
 
-  const stat = (label, val, cls) => `<div class="flex-1 min-w-[5rem] rounded-xl ${cls} px-3 py-2 text-center"><div class="text-lg font-bold">${val}</div><div class="text-xs text-gray-500">${label}</div></div>`;
-
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <div>
-        <div class="font-bold text-gray-800">作业管理 · 完成情况台账</div>
-        <div class="text-xs text-gray-500 mt-1">快速记录识别词：${esc(kwList)}${(state.homeworkKeywords || []).length > 6 ? '…' : ''}</div>
-      </div>
-      <div class="flex items-center gap-2">
-        <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
-      </div>
+  return `<div class="flex gap-2 mb-3">
+      ${hwStatHTML('总记录', scope.length, 'bg-gray-50')}
+      ${hwStatHTML('未完成', nUndone, 'bg-red-50')}
+      ${hwStatHTML('已完成', nDone, 'bg-green-50')}
+      ${hwStatHTML('涉及学生', nStu, 'bg-gray-50')}
     </div>
-
-    ${classes.length > 1 ? `<div class="flex flex-wrap gap-2 mb-3">${classTabs}</div>` : ''}
-
-    <div class="flex gap-2 mb-3">
-      ${stat('总记录', scope.length, 'bg-gray-50')}
-      ${stat('未完成', nUndone, 'bg-red-50')}
-      ${stat('已完成', nDone, 'bg-green-50')}
-      ${stat('涉及学生', nStu, 'bg-gray-50')}
-    </div>
-
     ${aggList.length ? `<div class="mb-3 p-3 rounded-xl bg-red-50/60">
       <div class="text-xs font-medium text-red-700 mb-2">未完成名单（共 ${aggList.length} 人 ${nUndone} 次）</div>
-      <div class="flex flex-wrap gap-1.5">${aggList.map(([n, c]) => `<button data-lock-allow class="text-xs px-2 py-1 rounded-full bg-white text-red-600 border border-red-100 hover:bg-red-100" onclick="hwSearchStudent(${JSON.stringify(n)})">${esc(n)} <span class="font-bold">${c}</span> 次</button>`).join('')}</div>
-    </div>` : ''}
+      <div class="flex flex-wrap gap-1.5">${aggList.map(([n, c]) => `<button data-lock-allow class="text-xs px-2 py-1 rounded-full bg-white text-red-600 border border-red-100 hover:bg-red-100" onclick="hwSearchStudent(${esc(JSON.stringify(n))})">${esc(n)} <span class="font-bold">${c}</span> 次</button>`).join('')}</div>
+    </div>` : ''}`;
+}
 
-    <div class="flex flex-wrap gap-2 mb-2">${subjTabs}</div>
-    <div class="flex flex-wrap gap-2 mb-3">${stTabs}</div>
-    ${filtered ? `<div class="mb-3 flex items-center gap-2 flex-wrap text-xs text-gray-500">
-      <span>当前筛选：</span>
-      ${hwSubjectFilter ? `<span class="px-2 py-0.5 rounded-full bg-primary/10 text-primary">${esc(hwSubjectFilter)}</span>` : ''}
-      ${hwStatusFilter ? `<span class="px-2 py-0.5 rounded-full ${hwStatusFilter === '未完成' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(hwStatusFilter)}</span>` : ''}
-      ${kw ? `<span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">搜索：${esc(kw)}</span>` : ''}
-      <button data-lock-allow class="text-primary hover:underline" onclick="hwResetFilters()">清空全部</button>
-    </div>` : ''}
-    <div class="relative mb-3">
-      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名 / 科目 / 内容搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
-      <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
-      ${filtered ? `<button data-lock-allow class="absolute right-3 top-2 text-xs text-gray-400 hover:text-primary" onclick="hwResetFilters()">清空</button>` : ''}
-    </div>
-    <div class="text-xs text-gray-400 mb-2">${filtered ? `筛选出 ${list.length} 条（${esc(className(curCls))}共 ${mine.length} 条）` : `${esc(className(curCls))}共 ${mine.length} 条作业记录`}${hwOtherHint(curCls, filtered)}</div>
+// 条数说明 + 记录列表（受搜索词影响）
+function hwListHTML(curCls, mine) {
+  const kw = (hwSearchName || '').trim();
+  const hitKw = h => (hwStudentName(h) || h.studentName || '').includes(kw) || (h.subject || '').includes(kw) || (h.title || '').includes(kw) || hwDateLabel(h.date).includes(kw);
+  // 列表：班级 → 科目 → 状态 → 关键词；按日期倒序，方便查看最新记录
+  const list = mine.filter(h =>
+    (!hwSubjectFilter || h.subject === hwSubjectFilter) &&
+    (!hwStatusFilter || h.status === hwStatusFilter) &&
+    (!kw || hitKw(h))
+  ).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  const filtered = !!(kw || hwSubjectFilter || hwStatusFilter);
+
+  return `<div class="text-xs text-gray-400 mb-2">${filtered ? `筛选出 ${list.length} 条（${esc(className(curCls))}共 ${mine.length} 条）` : `${esc(className(curCls))}共 ${mine.length} 条作业记录`}${hwOtherHint(curCls, filtered)}</div>
     <div class="grid gap-2">${list.map(h => {
       const undone = h.status === '未完成';
       const stuName = hwStudentName(h);
@@ -2318,10 +2305,71 @@ function renderHomework() {
           <button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button>
         </div>
       </div>`;
-    }).join('') || `<div class="text-gray-400 text-sm">${filtered ? '没有匹配的记录，试试清空搜索或切换到「全部」。' : '本班暂无作业完成情况记录。用首页「一句话记录」记一条即可自动汇总到这里。'}</div>`}</div>
+    }).join('') || `<div class="text-gray-400 text-sm">${filtered ? '没有匹配的记录，试试清空搜索或切换到「全部」。' : '本班暂无作业完成情况记录。用首页「一句话记录」记一条即可自动汇总到这里。'}</div>`}</div>`;
+}
+
+function renderHomework() {
+  const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
+  const { classes, curCls, mine, subjects } = hwFilterState();
+  const hasFilter = !!(hwSearchName || hwSubjectFilter || hwStatusFilter);
+
+  // 班级页签（带各自条数，两个班互不干扰；只读模式下切换班级属于查看操作，放行）
+  const classTabs = classes.map(c => {
+    const n = (state.homework || []).filter(h => hwBelongsTo(h, c.id)).length;
+    return `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${c.id === curCls ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetClass(${esc(JSON.stringify(c.id))})">${esc(c.name)} ${n}</button>`;
+  }).join('');
+
+  // 科目页签
+  const subjTabs = [{ id: '', name: '全部' }]
+    .concat(subjects.map(s => ({ id: s, name: s })))
+    .map(s => `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject(${esc(JSON.stringify(s.id))})">${esc(s.name)}</button>`).join('');
+
+  // 状态页签
+  const stTabs = [{ id: '', name: '全部' }, { id: '未完成', name: '未完成' }, { id: '已完成', name: '已完成' }]
+    .map(s => `<button data-lock-allow class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwStatusFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetStatus(${esc(JSON.stringify(s.id))})">${s.name}</button>`).join('');
+
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div>
+        <div class="font-bold text-gray-800">作业管理 · 完成情况台账</div>
+        <div class="text-xs text-gray-500 mt-1">快速记录识别词：${esc(kwList)}${(state.homeworkKeywords || []).length > 6 ? '…' : ''}</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openHomeworkKeywordSettings()">⚙️ 识别关键词</button>
+      </div>
+    </div>
+
+    ${classes.length > 1 ? `<div class="flex flex-wrap gap-2 mb-3">${classTabs}</div>` : ''}
+
+    <div id="hwStats">${hwStatsHTML(mine)}</div>
+
+    <div class="flex flex-wrap gap-2 mb-2">${subjTabs}</div>
+    <div class="flex flex-wrap gap-2 mb-3">${stTabs}</div>
+
+    <div id="hwFilterBar">${hwFilterBarHTML()}</div>
+
+    <div class="relative mb-3">
+      <input id="hwSearchInput" data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名 / 科目 / 内容搜索…" class="w-full border rounded-lg pl-9 pr-12 py-2 text-sm">
+      <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
+      <button id="hwClearBtn" data-lock-allow class="absolute right-3 top-2 text-xs text-gray-400 hover:text-primary" style="display:${hasFilter ? '' : 'none'}" onclick="hwResetFilters()">清空</button>
+    </div>
+
+    <div id="hwList">${hwListHTML(curCls, mine)}</div>
   </div>`;
 }
-function hwSetSearch(v) { hwSearchName = v; render(); }
+
+// 只刷新受搜索词影响的区块：搜索框本身与整页 DOM 保持不动，保证连续输入（含中文输入法）不被打断
+function hwRefreshPartial() {
+  const { curCls, mine } = hwFilterState();
+  const bar = document.getElementById('hwFilterBar');
+  if (bar) bar.innerHTML = hwFilterBarHTML();
+  const box = document.getElementById('hwList');
+  if (box) box.innerHTML = hwListHTML(curCls, mine);
+  const cb = document.getElementById('hwClearBtn');
+  if (cb) cb.style.display = (hwSearchName || hwSubjectFilter || hwStatusFilter) ? '' : 'none';
+}
+
+function hwSetSearch(v) { hwSearchName = v; hwRefreshPartial(); }
 function hwSetSubject(s) { hwSubjectFilter = s; render(); }
 function hwSetStatus(s) { hwStatusFilter = s; render(); }
 function hwSetClass(c) { hwClassFilter = c; hwSubjectFilter = ''; hwSearchName = ''; render(); }
@@ -2353,7 +2401,7 @@ function hwOtherHint(curCls, filtered) {
     .map(c => ({ id: c.id, name: c.name, n: (state.homework || []).filter(h => hwBelongsTo(h, c.id)).length }))
     .filter(x => x.n > 0);
   if (!others.length) return '';
-  return `　｜　其他班还有：${others.map(x => `<button data-lock-allow class="text-primary hover:underline" onclick="hwSetClass(${JSON.stringify(x.id)})">${esc(x.name)} ${x.n} 项</button>`).join('、')}`;
+  return `　｜　其他班还有：${others.map(x => `<button data-lock-allow class="text-primary hover:underline" onclick="hwSetClass(${esc(JSON.stringify(x.id))})">${esc(x.name)} ${x.n} 项</button>`).join('、')}`;
 }
 function openHomeworkForm() {
   const cls = hwClassFilter || state.activeClass;
@@ -5862,7 +5910,7 @@ function olRender() {
   const skippedDiag = defs.filter(d => (d.kind === 'score' || d.kind === 'rank') && !d.newHeader)
     .map(d => ({ header: esc(d.header), reason: olDiagnoseMismatch(d) }));
   const allClasses = olAllClasses();
-  const clsChips = allClasses.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" onchange="olToggleClass(${JSON.stringify(c)}, this.checked)" ${olSelClasses.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('');
+  const clsChips = allClasses.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" onchange="olToggleClass(${esc(JSON.stringify(c))}, this.checked)" ${olSelClasses.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('');
   let preview = '<p class="text-xs text-gray-400">请勾选要保留的班级。</p>';
   if (olSelClasses.length) {
     try {
