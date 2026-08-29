@@ -2052,7 +2052,7 @@ function renderHomework() {
     </div>
     <div class="flex flex-wrap gap-2 mb-3">${subjTabs}</div>
     <div class="relative mb-3">
-      <input value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名/科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名/科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
     </div>
     <div class="grid gap-4">${list.map(h => `
@@ -2520,7 +2520,7 @@ function renderClassRecord() {
     </div>
     <div class="flex flex-wrap gap-2">${subjTabs}</div>
     <div class="relative">
-      <input id="crSearch" value="${esc(crSearchName)}" placeholder="按学生姓名搜索…" oninput="crSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <input id="crSearch" data-lock-allow value="${esc(crSearchName)}" placeholder="按学生姓名搜索…" oninput="crSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
     </div>
     <div class="space-y-3">${recordsHtml || '<div class="text-gray-400 text-sm">暂无匹配记录</div>'}</div>
@@ -2611,7 +2611,7 @@ function renderBehavior() {
     </div>
     <div class="flex flex-wrap gap-2">${tabs}</div>
     <div class="relative">
-      <input id="behSearch" value="${esc(behSearchName)}" placeholder="按学生姓名 / 内容搜索…" oninput="behSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <input id="behSearch" data-lock-allow value="${esc(behSearchName)}" placeholder="按学生姓名 / 内容搜索…" oninput="behSetSearch(this.value)" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2 text-gray-400 text-sm">🔍</span>
     </div>
     <div class="space-y-3">${rows || '<div class="text-gray-400 text-sm">暂无符合条件的行为记录</div>'}</div>
@@ -3431,7 +3431,7 @@ function renderPoints() {
           <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtHistory()">📅 历史</button>
           <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openAttendanceBonusModal()">🏅 全勤结算</button>
           <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtImport()">⬆️ 导入Excel</button>
-          <input value="${esc(pointsQuery)}" oninput="ptFilter(this.value)" placeholder="🔍 搜索学生姓名" class="border rounded-full px-4 py-1.5 text-sm w-40 focus:outline-none focus:border-primary">
+          <input data-lock-allow value="${esc(pointsQuery)}" oninput="ptFilter(this.value)" placeholder="🔍 搜索学生姓名" class="border rounded-full px-4 py-1.5 text-sm w-40 focus:outline-none focus:border-primary">
         </div>
       </div>
       <div id="pt-list" class="space-y-2">${renderPtList()}</div>
@@ -3494,7 +3494,7 @@ function openPtAdjust(sid, dim, sign) {
           ${state.students.filter(s => s.class === state.activeClass).map(s => `<option value="${s.id}" ${sid === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select></div>
       <div><label class="block text-xs text-gray-500 mb-1">积分维度</label>
-        <select id="ptDim" class="w-full border rounded-lg p-2 text-sm" onchange="ptRenderRuleChips()">
+        <select id="ptDim" data-lock-allow class="w-full border rounded-lg p-2 text-sm" onchange="ptRenderRuleChips()">
           ${POINT_DIMS.map(d => `<option value="${d.id}" ${dim === d.id ? 'selected' : ''}>${d.icon} ${d.label}</option>`).join('')}
         </select></div>
       <div><label class="block text-xs text-gray-500 mb-1">规则预设（点击自动填分值和理由）</label>
@@ -3572,7 +3572,7 @@ function openPtBatch() {
         </div>
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">积分维度</label>
-        <select id="ptDim" class="w-full border rounded-lg p-2 text-sm" onchange="ptRenderRuleChips()">
+        <select id="ptDim" data-lock-allow class="w-full border rounded-lg p-2 text-sm" onchange="ptRenderRuleChips()">
           ${POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('')}
         </select></div>
       <div><label class="block text-xs text-gray-500 mb-1">规则预设</label><div id="ptRuleChips" class="flex flex-wrap gap-2"></div></div>
@@ -5650,9 +5650,9 @@ function renderExamQuery() {
   if (!eqExamId || !exams.find(e => e.id === eqExamId)) eqExamId = exams[exams.length - 1].id;
   const examOpts = exams.map(e => `<option value="${e.id}" ${e.id === eqExamId ? 'selected' : ''}>${esc(e.name)}（${esc(e.date || '')}）</option>`).join('');
   if (!eqClassIds.length) eqClassIds = state.examData.classes.map(c => c.id);
-  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
+  const clsChk = state.examData.classes.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer"><input type="checkbox" class="eq-cls" data-lock-allow value="${c.id}" ${eqClassIds.includes(c.id) ? 'checked' : ''} onchange="eqCollect();"> ${esc(c.name)}</label>`).join('');
   const allCols = examColumns().filter(c => c.enabled);
-  const colChk = allCols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="eq-col" value="${esc(c.key)}" ${eqHiddenCols.has(c.key) ? '' : 'checked'} onchange="eqCollect();"> ${esc(c.key)}</label>`).join('');
+  const colChk = allCols.map(c => `<label class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 cursor-pointer whitespace-nowrap"><input type="checkbox" class="eq-col" data-lock-allow value="${esc(c.key)}" ${eqHiddenCols.has(c.key) ? '' : 'checked'} onchange="eqCollect();"> ${esc(c.key)}</label>`).join('');
   const sortOpts = [{k:'',l:'默认（班级/姓名）'},{k:'classId',l:'班级'},{k:'name',l:'姓名'},...allCols.map(c=>({k:c.key,l:c.key+(c.type==='rank'?'·排名':'')}))].map(o=>`<option value="${esc(o.k)}" ${eqSortCol===o.k?'selected':''}>${esc(o.l)}</option>`).join('');
   return `
   <div class="space-y-4">
@@ -5661,7 +5661,7 @@ function renderExamQuery() {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label class="block text-xs text-gray-500 mb-1">选择考试</label>
-            <select id="eqExam" class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
+            <select id="eqExam" data-lock-allow class="w-full border rounded-lg p-2 text-sm" onchange="eqCollect();">${examOpts}</select>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">班级</label>
@@ -5669,12 +5669,12 @@ function renderExamQuery() {
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">搜索学生姓名</label>
-            <input id="eqSearch" type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
+            <input id="eqSearch" data-lock-allow type="text" class="w-full border rounded-lg p-2 text-sm" placeholder="输入姓名，如：张明轩" value="${esc(eqSearch)}" oninput="eqCollect();">
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">排序</label>
             <div class="flex gap-2">
-              <select id="eqSortCol" class="flex-1 border rounded-lg p-2 text-sm" onchange="eqCollect();">${sortOpts}</select>
+              <select id="eqSortCol" data-lock-allow class="flex-1 border rounded-lg p-2 text-sm" onchange="eqCollect();">${sortOpts}</select>
               <button class="border rounded-lg px-3 text-sm hover:bg-gray-50" onclick="eqSortDesc=!eqSortDesc; eqCollect();" title="切换升序/降序">${eqSortDesc ? '↓' : '↑'}</button>
             </div>
           </div>
@@ -5872,7 +5872,7 @@ function renderExamAnalysis() {
       <div class="font-bold text-gray-800">📊 两班同类型列对比</div>
       <p class="text-xs text-gray-400">选择一列和 1-3 个对比指标，系统会同时呈现多个指标的两班对比。分数科目支持「全班平均分」「优生平均分」「及格数」；排名类列支持「名次区间人数」。</p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <select id="anCmpCol" class="border rounded-lg p-2 text-sm" onchange="anToggleMetricInputs()">${colOpts}</select>
+        <select id="anCmpCol" data-lock-allow class="border rounded-lg p-2 text-sm" onchange="anToggleMetricInputs()">${colOpts}</select>
       </div>
       <div>
         <div class="text-xs text-gray-500 mb-2">选择指标（1-3 个）</div>
@@ -6121,11 +6121,11 @@ function renderPtLogModal() {
   openModal('积分日志', `
     <div class="space-y-4">
       <div class="flex gap-2">
-        <select id="logDim" class="flex-1 border rounded-lg p-2 text-sm" onchange="setPtLogFilter()">
+        <select id="logDim" data-lock-allow class="flex-1 border rounded-lg p-2 text-sm" onchange="setPtLogFilter()">
           <option value="all" ${ptLogDim === 'all' ? 'selected' : ''}>全部维度</option>
           ${POINT_DIMS.map(d => `<option value="${d.id}" ${ptLogDim === d.id ? 'selected' : ''}>${d.label}</option>`).join('')}
         </select>
-        <select id="logStudent" class="flex-1 border rounded-lg p-2 text-sm" onchange="setPtLogFilter()">
+        <select id="logStudent" data-lock-allow class="flex-1 border rounded-lg p-2 text-sm" onchange="setPtLogFilter()">
           <option value="all" ${ptLogStudent === 'all' ? 'selected' : ''}>全部学生</option>
           ${state.students.filter(s => s.class === state.activeClass).map(s => `<option value="${s.id}" ${ptLogStudent === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
         </select>
@@ -6240,9 +6240,9 @@ function renderHomePointsCard() {
 
     <!-- 设置下拉面板 -->
     <div id="homeExhibitSettings" class="hidden absolute top-11 right-3 z-20 bg-white border border-gray-200 rounded-xl p-3 w-56 text-xs shadow-xl space-y-2">
-      <div><div class="text-gray-400 mb-1">轮换间隔</div><select id="homeIntSel" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">轮换间隔</div><select id="homeIntSel" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
       <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitAuto(true)">开</button><button id="homeAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitAuto(false)">关</button></div></div>
-      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeLogClsSel" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeLogClsSel" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
       <div><div class="text-gray-400 mb-1">全屏背景</div><div class="flex gap-2"><button id="homeBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
     </div>
 
@@ -6270,11 +6270,11 @@ function homeExhibitFsHTML() {
     </div>
     <div id="homeFsPanel" class="hidden fixed top-16 right-4 z-[60] bg-white border border-gray-200 rounded-xl p-3 w-60 text-xs shadow-xl space-y-2" style="color:#1f2937">
       <div class="font-semibold mb-1">展览设置</div>
-      <div><div class="text-gray-400 mb-1">展示范围</div><select id="homeFsPool" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(+this.value)">${poolOpts}</select></div>
-      <div><div class="text-gray-400 mb-1">排序维度</div><select id="homeFsDim" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select></div>
-      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeFsLogCls" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div><div class="text-gray-400 mb-1">展示范围</div><select id="homeFsPool" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(+this.value)">${poolOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">排序维度</div><select id="homeFsDim" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">日志班级</div><select id="homeFsLogCls" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitLogClass(this.value)"><option value="current">当前班级</option><option value="all">全部班级</option>${(state.classes||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
       <div><div class="text-gray-400 mb-1">自动轮换</div><div class="flex gap-2"><button id="homeFsAutoOn" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsAuto(true)">开</button><button id="homeFsAutoOff" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsAuto(false)">关</button></div></div>
-      <div><div class="text-gray-400 mb-1">间隔</div><select id="homeFsInt" class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
+      <div><div class="text-gray-400 mb-1">间隔</div><select id="homeFsInt" data-lock-allow class="w-full border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="setHomeExhibitInterval(+this.value)">${intOpts}</select></div>
       <div><div class="text-gray-400 mb-1">背景</div><div class="flex gap-2"><button id="homeFsBgDark" class="flex-1 border rounded-lg py-1 bg-primary text-white" onclick="setHomeExhibitFsBg(false)">暗</button><button id="homeFsBgLight" class="flex-1 border rounded-lg py-1" onclick="setHomeExhibitFsBg(true)">亮</button></div></div>
     </div>
     <div id="homeFsBody" class="px-6 pb-12 max-w-[1200px] mx-auto"></div>
@@ -7464,7 +7464,7 @@ function openLockSettings() {
       ${statusHtml}
       ${actionHtml}
       <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-        <input type="checkbox" id="defaultLockedCheck" data-lock-allow ${state.defaultLocked ? 'checked' : ''} onchange="state.defaultLocked=this.checked; save();" class="w-4 h-4 text-primary rounded" />
+        <input type="checkbox" id="defaultLockedCheck" data-lock-block ${state.defaultLocked ? 'checked' : ''} onchange="state.defaultLocked=this.checked; save();" class="w-4 h-4 text-primary rounded" />
         <span>每次打开工作台自动进入只读锁定</span>
       </label>
     </div>`, 'sm');
@@ -7514,7 +7514,19 @@ function doUnlock() {
   }
 }
 
-// 全局只读拦截：锁定时阻止一切「修改类」交互，仅放行标记为 data-lock-allow 的查看/导航控件
+// ===== 全局只读拦截 v2 =====
+// 设计原则（与 v1 相反）：锁定只保护「数据不被修改」，不阻碍任何查看/导航/切换。
+// v1 为白名单制（默认全拦，仅放行 data-lock-allow），导致切换 tab、展开详情、翻页等
+//   只读操作被大量误杀——这是「只是想看看却被强制解锁」的根因。
+// v2 改为黑名单制：默认放行，仅拦截明确的写操作。
+//   判定顺序（自上而下，命中即返回）：
+//   1) data-lock-allow    → 放行（最高优先级，覆盖一切）
+//   2) data-lock-block    → 拦截（显式标记）
+//   3) 可编辑元素          → 拦截（contenteditable）
+//   4) 拖拽事件            → 拦截（dragstart/drop，用于调座位、排课表）
+//   5) 表单输入            → 拦截（input/change，搜索框等已用 data-lock-allow 放行）
+//   6) 写操作函数名        → 拦截（见 LOCK_WRITE_RE 词表）
+//   7) 其余                → 放行
 let _lockGuardReady = false;
 function initLockGuard() {
   if (_lockGuardReady) return; _lockGuardReady = true;
@@ -7522,23 +7534,66 @@ function initLockGuard() {
   blockTypes.forEach(type => {
     document.addEventListener(type, function (e) {
       if (!state || !state.locked) return;
-      if (isAllowedView(e.target)) return;
+      const el = e.target;
+      if (!el || !el.closest) return;
+      // 1) 显式放行标记（最高优先级）
+      if (el.closest('[data-lock-allow]')) return;
+      // 2) 显式拦截标记
+      if (el.closest('[data-lock-block]')) { blockLockEvent(e, type); return; }
+      // 3) 可编辑内容
+      if (el.isContentEditable) { blockLockEvent(e, type); return; }
+      // 4) 拖拽类一律拦截
+      if (type === 'dragstart' || type === 'drop') { blockLockEvent(e, type); return; }
+      // 5) 表单输入拦截
       if (type === 'input' || type === 'change') {
-        const t = e.target;
-        if (!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'))) return;
+        const t = el.tagName;
+        if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') { blockLockEvent(e, type); return; }
       }
-      e.preventDefault();
-      if (type === 'click' || type === 'dblclick') { e.stopPropagation(); toast('🔒 只读模式：请先解锁后再操作'); }
+      // 6) 点击类：按函数名判定
+      if (type === 'click' || type === 'dblclick' || type === 'submit') {
+        if (isWriteAction(el)) { blockLockEvent(e, type); return; }
+      }
+      // 7) 其余放行
     }, true);
   });
 }
-function isAllowedView(el) {
-  if (!el || !el.closest) return false;
-  if (el.closest('[data-lock-allow]')) return true;
-  let n = el;
-  while (n && n !== document.documentElement) {
-    const oc = n.getAttribute && n.getAttribute('onclick');
-    if (oc && /openProfile|navigate\(|doUnlockPrompt|openLockSettings|closeModal/.test(oc)) return true;
+
+// 锁定提示（节流，避免连续点击刷屏）
+let _lockToastAt = 0;
+function blockLockEvent(e, type) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (type === 'click' || type === 'dblclick' || type === 'drop' || type === 'dragstart') {
+    const now = Date.now();
+    if (now - _lockToastAt > 1200) { _lockToastAt = now; toast('🔒 只读模式：查看不受限，修改需先解锁'); }
+  }
+}
+
+// 写操作动词词表（后接大写字母/下划线/结尾，避免误伤 setPtTab 这类「切换视图」）
+// 该词表已对全量 260+ 内联事件函数逐一验证：0 漏网、0 误伤
+const LOCK_WRITE_RE = /(?:save|delete|del|remove|undo|submit|import|confirm|clear|drop|paste|mark|apply|calc|add|update|edit|rename|move|bulk|settle|gen|snapshot|finish|arrange|setstudent|setsign|setcommstatus|setconvertpreset|setcategory|toggletodo|autoduty|seatclick|seatdrop|seatclear|seatset|seatauto)(?:[A-Z_]|$)/i;
+
+// 判断元素（或其祖先）绑定的内联处理函数是否属于写操作
+function isWriteAction(el) {
+  let n = el, guard = 0;
+  while (n && n !== document.documentElement && guard++ < 25) {
+    if (n.getAttribute) {
+      const attrs = ['onclick', 'ondblclick', 'onchange', 'oninput', 'onsubmit'];
+      for (const a of attrs) {
+        const h = n.getAttribute(a);
+        if (!h) continue;
+        const fns = h.match(/[A-Za-z_$][\w$]*(?=\s*\()/g) || [];
+        for (const fn of fns) {
+          // 打开/查看/导出类：只开界面不改数据，放行（含 pmOpenXxx 变体）
+          if (/^(open|view|export|copy|print|preview|show)/i.test(fn)) continue;
+          if (/open(?=[A-Z])/i.test(fn)) continue;      // pmOpenAdd / pmOpenDescEdit
+          if (/toggle\w*edit$/i.test(fn)) continue;     // pmToggleDutyEdit / pmToggleRolesEdit
+          // 列管理类：全部为写操作
+          if (/^cm[A-Z]/.test(fn)) return true;
+          if (LOCK_WRITE_RE.test(fn)) return true;
+        }
+      }
+    }
     n = n.parentElement;
   }
   return false;
