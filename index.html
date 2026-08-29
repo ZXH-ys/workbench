@@ -194,11 +194,32 @@
     }
     /* ===== 手机端微调 ===== */
     @media (max-width: 768px) {
-      #main-content { padding: 1rem !important; }
+      #main-content { padding: 1rem !important; padding-bottom: 6rem !important; }
       header { padding-left: 1rem !important; padding-right: 1rem !important; }
-      .fab { bottom: 1rem; right: 1rem; width: 3.5rem; height: 3.5rem; font-size: 1.5rem; }
-      .modal-bg > div { margin: 0; max-height: 100vh; height: 100%; border-radius: 0; }
+      .fab { bottom: calc(1rem + env(safe-area-inset-bottom)); right: 1rem; width: 3.5rem; height: 3.5rem; font-size: 1.5rem; }
+      /* 弹窗铺满：手机上一句话记录要当「随手记」用，半屏弹窗会被键盘挤没 */
+      .modal-bg { align-items: stretch !important; padding: 0 !important; }
+      .modal-bg > div {
+        margin: 0; border-radius: 0; width: 100%; max-width: 100%;
+        /* dvh 会随软键盘收起/弹出而变化；第一行是老浏览器（iOS 15.4 以下）的兜底 */
+        height: 100%; max-height: 100vh;
+        height: 100dvh; max-height: 100dvh;
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .modal-bg > div > .p-6 { padding: 1rem !important; }
+      /* 吸顶区用负外边距铺满宽度，手机端内边距是 1rem，要跟着改 */
+      .qr-sticky { margin-left: -1rem; margin-right: -1rem; padding-left: 1rem; padding-right: 1rem; }
+      /* iOS 上字号小于 16px 的输入框被聚焦时会自动放大页面，必须锁 16px */
+      .modal-bg textarea, .modal-bg input, .modal-bg select { font-size: 16px !important; }
+      /* 触控目标不小于 44px（Apple HIG），免得点不准 */
+      .qr-tap { min-height: 44px; }
+      .qr-tap-sm { min-height: 36px; }
     }
+    /* 一句话记录：输入框与状态条吸在顶部，识别结果在下方独立滚动 */
+    .qr-sticky { position: sticky; top: 0; z-index: 2; background: #fff; }
+    html.dark .qr-sticky { background: #1b1b29; }
+    .qr-more summary, .qr-hint summary { list-style: none; cursor: pointer; }
+    .qr-more summary::-webkit-details-marker, .qr-hint summary::-webkit-details-marker { display: none; }
 
     /* ===== 家长群截图版报告 ===== */
     .report-parent { font-size: 1.05rem; padding: 1.5rem !important; }

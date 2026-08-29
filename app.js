@@ -1331,7 +1331,9 @@ function renderTopBar() {
 
 function renderFab() {
   if (isLocked()) return '';
-  return `<button class="fab absolute bottom-6 right-6 w-12 h-12 rounded-full text-white flex items-center justify-center text-xl hover:scale-105 transition" onclick="openFabDefault()" title="快速记录">✏️</button>`;
+  // 单击直接进一句话记录（手机端要的是「掏出手机 → 点一下 → 立刻能打字」）。
+  // 其余 8 个入口收进一句话记录弹窗底部的「更多录入方式」，功能一个没少。
+  return `<button class="fab absolute bottom-6 right-6 w-12 h-12 rounded-full text-white flex items-center justify-center text-xl hover:scale-105 transition" onclick="openQuickRecord()" title="一句话记录">✏️</button>`;
 }
 
 function renderPage() {
@@ -7876,21 +7878,89 @@ function recognizeClause(text, matched) {
 
 let qrDraft = null; // 当前确认草稿
 let qrDeductDraft = null; // 一句话记录：待确认的关联扣分草稿
+// —— 连续记录模式（手机端课间一口气记好几个学生）——
+let qrAutoTimer = null;   // 边打边识别的防抖定时器
+let qrLastText = '';      // 上次已识别的输入内容，内容没变就不重复识别（免得覆盖用户手改的卡片）
+let qrSessionCount = 0;   // 本次弹窗内累计记录条数
+let qrLastSummary = '';   // 上一次保存的明细，显示在顶部状态条
 function openQuickRecord() {
-  const tip = '输入一句话即可自动识别多名学生、多个事件。例如：\n「张明轩参加体育早训，提出表扬；秦梦茹月考满分，提出表扬；王浩然迟到批评」\n系统会按学生拆分为多条记录，并自动识别科目、作业、积分规则、类型等。你可以在识别结果中编辑或删除不满意的分项。';
+  // 重新打开弹窗 = 新的一次记录会话，计数清零（连续记录只在同一次弹窗内累计）
+  qrSessionCount = 0; qrLastSummary = ''; qrLastText = '';
+  clearTimeout(qrAutoTimer);
+  qrDraft = null; qrDeductDraft = null;
+  const tip = '输入一句话即可自动识别多名学生、多个事件。例如：\n「张明轩参加体育早训，提出表扬；秦梦茹月考满分，提出表扬；王浩然迟到批评」\n系统会按学生拆分为多条记录，并自动识别科目、作业、积分规则、类型等。停止输入约 0.4 秒即自动识别。';
   openModal('一句话记录', `
     <div class="space-y-3">
-      ${(state.activeClass !== state.headTeacherClass) ? `<div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">⚠️ 当前为任课视角（${esc(className(state.activeClass))}），一句话记录只会保存「课堂记录」与「作业」；行为 / 积分 / 请假请在班主任班（${esc(className(state.headTeacherClass))}）记录。</div>` : ''}
-      <p class="text-xs text-gray-500 leading-relaxed whitespace-pre-line">${esc(tip)}</p>
-      <textarea id="qrText" rows="3" class="w-full border rounded-lg p-3 text-sm" placeholder="输入一句话，例如：赵吉晨数学作业未完成且上语文课说话"></textarea>
-      <button class="w-full bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrRecognize()">🔍 识别并预览</button>
+      <div id="qrStatus">${qrStatusHtml()}</div>
+      <div class="qr-sticky -mx-6 px-6 pt-3 pb-2 -mt-3 border-b border-gray-100">
+        ${(state.activeClass !== state.headTeacherClass) ? `<div class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mb-2">⚠️ 当前为任课视角（${esc(className(state.activeClass))}），一句话记录只会保存「课堂记录」与「作业」；行为 / 积分 / 请假请在班主任班（${esc(className(state.headTeacherClass))}）记录。</div>` : ''}
+        <textarea id="qrText" rows="3" class="w-full border rounded-lg p-3 text-base" oninput="qrOnInput()" placeholder="输入一句话，例如：赵吉晨数学作业未完成且上语文课说话"></textarea>
+        <details class="text-[11px] text-gray-400 mt-1.5 qr-hint">
+          <summary class="cursor-pointer select-none py-1 text-xs">识别说明 ▾</summary>
+          <div class="leading-relaxed whitespace-pre-line py-1">${esc(tip)}</div>
+        </details>
+      </div>
       <div id="qrResult"></div>
+      <details class="qr-more pt-1">
+        <summary class="text-xs text-gray-400 select-none py-2 qr-tap-sm flex items-center">▸ 更多录入方式（积分 / 学生 / 日志 / 待办…）</summary>
+        <div class="grid grid-cols-2 gap-2 pb-2">${fabMoreEntries()}</div>
+      </details>
     </div>`, 'lg');
+  // 必须在同一次用户手势内同步 focus，否则手机软键盘弹不出来（setTimeout 会丢失手势上下文）
+  try {
+    const el = document.getElementById('qrText');
+    if (el) { el.focus({ preventScroll: true }); }
+  } catch (e) {}
+}
+
+// FAB 里除一句话记录之外的其余入口（收进弹窗「更多」，保证功能不丢）
+function fabMoreEntries() {
+  const items = [
+    ['🏆 积分加分/扣分', "openPtAdjust(null,'daily',1)"],
+    ['👥 批量加减分', 'openPtBatch()'],
+    ['👤 新建学生', 'openStudentForm(null)'],
+    ['📈 添加行为记录', 'openRecordForm(state.students[0]?state.students[0].id:null)'],
+    ['📝 写班级日志', 'openClassLogForm()'],
+    ['💬 记录家校沟通', 'openCommForm()'],
+    ['🔔 新建待办', 'openTodoForm()'],
+    ['📅 值日与职务', "navigate('positions')"],
+  ];
+  return items.map(([label, fn]) =>
+    `<button class="qr-tap text-left text-xs px-3 py-2 rounded-xl bg-gray-50 hover:bg-primary/10 text-gray-700" onclick="closeModal(); ${fn}">${label}</button>`
+  ).join('');
+}
+
+// 顶部状态条：连续记录模式下提示「已记录 N 条」
+function qrStatusHtml() {
+  if (!qrSessionCount) return '';
+  return `<div class="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-700">
+    <span class="font-bold shrink-0">✅ 本次已记录 ${qrSessionCount} 条</span>
+    ${qrLastSummary ? `<span class="truncate text-emerald-600">${esc(qrLastSummary)}</span>` : ''}
+    <button class="ml-auto shrink-0 text-emerald-600 hover:text-emerald-800" onclick="closeModal()">完成</button>
+  </div>`;
+}
+
+// 边打边识别：停止输入 0.4 秒后自动出预览，省掉「识别并预览」这一步。
+// 只重绘 #qrResult，输入框本身不动，所以打字过程中焦点和光标位置不受影响。
+function qrOnInput() {
+  clearTimeout(qrAutoTimer);
+  qrAutoTimer = setTimeout(function () {
+    const el = document.getElementById('qrText');
+    if (!el) return;
+    const t = (el.value || '').trim();
+    if (!t) {                      // 清空输入框 → 连预览一起清掉
+      qrLastText = ''; qrDraft = null; qrDeductDraft = null; qrRenderDraft(); return;
+    }
+    if (t === qrLastText) return;  // 内容没变就不重识别，避免覆盖用户在结果卡里手改的设置
+    qrLastText = t;
+    qrRecognize();
+  }, 400);
 }
 
 function qrRecognize() {
-  const text = document.getElementById('qrText').value;
-  if (!text.trim()) return alert('请先输入内容');
+  const el = document.getElementById('qrText');
+  const text = el ? (el.value || '') : '';
+  if (!text.trim()) { qrDraft = null; qrDeductDraft = null; qrRenderDraft(); return; }
   qrDraft = parseQuickRecord(text);
   // 关联扣分识别（沿职务树向上追责）
   qrDeductDraft = null;
@@ -7909,6 +7979,14 @@ function qrRenderDraft() {
   if (!resultEl) return;
   const noSegments = !qrDraft || !qrDraft.segments.length;
   if (noSegments && !qrDeductDraft) {
+    // 连续记录模式下刚保存完、输入框已清空：不要报「未识别」，给个让人安心的提示
+    const typed = ((document.getElementById('qrText') || {}).value || '').trim();
+    if (!typed) {
+      resultEl.innerHTML = qrSessionCount
+        ? '<div class="text-sm text-emerald-600 text-center py-4">✅ 已保存，继续输入下一条…</div>'
+        : '';
+      return;
+    }
     resultEl.innerHTML = '<div class="text-sm text-gray-500 text-center py-4">未识别到可记录的内容，请检查学生姓名或补充描述。</div>';
     return;
   }
@@ -7953,10 +8031,10 @@ function qrRenderDraft() {
     ${unknownTip}
     ${unmatchedTip}
     <div class="grid grid-cols-1 ${use2Col ? 'md:grid-cols-2' : ''} gap-3">${list}</div>
-    <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+    <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm qr-tap" value="${todayLabel}"></div>
     <div class="flex gap-2 pt-1">
-      <button class="flex-1 bg-primary text-white py-2 rounded-full text-sm hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
-      <button class="px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal(); openFabDefault()">取消</button>
+      <button class="qr-tap flex-1 bg-primary text-white py-3 rounded-full text-sm font-medium hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
+      <button class="qr-tap px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal()">取消</button>
     </div>
   </div>`;
   const noteBody = noSegments ? `<div class="space-y-3">
@@ -8170,15 +8248,33 @@ function qrSave() {
     state.classLogs.unshift({ id: uid(), date, content: logContent });
   }
   lastRecordContent = qrDraft.raw;
-  save(); closeModal();
-  let msg = '已记录';
-  if (nRecord) msg += ` ${nRecord} 条行为`;
-  if (nLeave) msg += ` ${nLeave} 条请假`;
-  if (nPoint) msg += ` ${nPoint} 笔积分`;
-  if (nClass) msg += ` ${nClass} 条课堂记录`;
-  if (nHomework) msg += ` ${nHomework} 条作业`;
-  toast(msg);
+  const totalSaved = nRecord + nLeave + nPoint + nClass + nHomework;
+  save();
+  // ===== 连续记录模式 =====
+  // 保存后不关弹窗：清空输入框、把光标放回去，顶部提示「本次已记录 N 条」。
+  // 课间一口气记好几个学生时，不用每次都重新点 FAB。想退出点右上角 × 或「完成」。
+  // 累计的是「实际写入的条目数」，不是保存次数 —— 老师看到的是"这节课记了多少条"
+  qrSessionCount += totalSaved;
+  const parts = [];
+  if (nRecord) parts.push(`${nRecord} 条行为`);
+  if (nLeave) parts.push(`${nLeave} 条请假`);
+  if (nPoint) parts.push(`${nPoint} 笔积分`);
+  if (nClass) parts.push(`${nClass} 条课堂记录`);
+  if (nHomework) parts.push(`${nHomework} 条作业`);
+  qrLastSummary = parts.join('、') || `${totalSaved} 项`;
+
+  clearTimeout(qrAutoTimer);
+  qrDraft = null; qrDeductDraft = null; qrLastText = '';
+  const inputEl = document.getElementById('qrText');
+  if (inputEl) inputEl.value = '';
+  const stEl = document.getElementById('qrStatus');
+  if (stEl) stEl.innerHTML = qrStatusHtml();   // 状态条在 #qrResult 之外，要单独刷
+  qrRenderDraft();                              // 清空预览区
+  toast(`已记录 ${qrLastSummary}`);
   render();
+  // 焦点必须在 render() 之后再放：render 只重绘 #app，弹窗在 #app 之外不受影响，
+  // 但放在后面可以确保光标不会因为任何重排而丢失
+  if (inputEl) { try { inputEl.focus({ preventScroll: true }); inputEl.setSelectionRange(0, 0); } catch (e) {} }
 }
 
 // 一句话记录中的关联扣分确认
@@ -8208,19 +8304,9 @@ function toast(text, ms) {
 }
 
 // ===================== FAB =====================
-function openFabDefault() {
-  openModal('快速记录', `
-    <div class="space-y-4">
-      <button class="w-full text-left p-4 rounded-xl bg-primary/10 hover:bg-primary/20 font-medium" onclick="closeModal(); openQuickRecord()">🤖 一句话记录</button>
-      <button class="w-full text-left p-4 rounded-xl bg-primary/5 hover:bg-primary/10" onclick="closeModal(); openPtAdjust(null,'daily',1)">🏆 积分加分 / 扣分</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openPtBatch()">👥 批量加减分</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openStudentForm(null)">👤 新建学生</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openRecordForm(state.students[0]?state.students[0].id:null)">📈 添加行为记录</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openClassLogForm()">📝 写班级日志</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openCommForm()">💬 记录家校沟通</button>
-      <button class="w-full text-left p-4 rounded-xl bg-gray-50 hover:bg-primary/5" onclick="closeModal(); openTodoForm()">🔔 新建待办</button>
-    </div>`, 'sm');
-}
+// 单击 FAB 直接进一句话记录。原「快速记录」菜单的 8 个入口已挪进弹窗内的
+// 「更多录入方式」（fabMoreEntries），这里保留同名函数只是为了兼容旧调用。
+function openFabDefault() { openQuickRecord(); }
 
 // ===================== Data management =====================
 // 修改密码固定口令（前后端保持一致，可通过环境变量 RESET_PASSWORD_CODE 覆盖后端默认值）
