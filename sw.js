@@ -1,10 +1,11 @@
 // 班主任工作台 Service Worker
 // 策略：网络优先（保证每次部署更新立即可见），离线时回退到缓存壳
-const CACHE = 'wb-shell-v1';
+// 缓存版本：每次发布递增，activate 阶段会自动清掉旧缓存
+const CACHE = 'wb-shell-v2';
 const ASSETS = [
   './',
   './index.html',
-  './app.js',
+  './app.js?v=20260829b',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

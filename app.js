@@ -1,6 +1,7 @@
 // ===================== Storage =====================
 const STORAGE_KEY = 'ct_workbench_v1';
 const AUTH_KEY = 'ct_auth_token';
+const CLOUD_BACKUP_KEY = 'ct_cloud_backup_v1'; // 合并前留一份云端原始数据，出问题可回滚
 let AUTH_TOKEN = (typeof localStorage !== 'undefined') ? localStorage.getItem(AUTH_KEY) : '';
 
 // 后端 API（多设备同步）。无后端时自动退化到纯本地。
@@ -22,11 +23,22 @@ function setSyncBadge(text, isErr) {
   el.textContent = text;
   el.className = 'text-[11px] ' + (isErr ? 'text-orange-500' : 'text-gray-400');
 }
+let _syncFailCount = 0;
 function pushSync() {
   setSyncBadge('同步中…', false);
   apiPost('/api/data', { state }).then(r => {
-    if (r && r.ok) setSyncBadge('已同步 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), false);
-    else setSyncBadge('离线（本地已存）', true);
+    if (r && r.ok) {
+      _syncFailCount = 0;
+      setSyncBadge('已同步 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), false);
+    } else {
+      _syncFailCount++;
+      // 同步失败必须显眼：此时改动只在本机，刷新会被云端旧数据覆盖
+      setSyncBadge('⚠️ 未同步（仅存本机）', true);
+      // 连续第 2 次失败才弹提示，避免弱网下每次保存都打扰
+      if (_syncFailCount === 2) {
+        try { toast('⚠️ 云端同步失败，改动只存在本机。请检查网络后重新保存一次，否则刷新后可能丢失。', 6000); } catch (e) {}
+      }
+    }
   });
 }
 
@@ -563,10 +575,75 @@ function save(internal) {
     console.warn('[只读模式] 已阻止一次数据写入');
     return false;
   }
+  // 记录落盘时间：启动时会拿它和云端数据的时间戳比对，
+  // 从而识别「本地改过但推送失败」的情况（否则刷新后被云端旧数据覆盖，记录凭空消失）
+  if (state && typeof state === 'object') state._savedAt = Date.now();
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   pushSync();
   _bumpExhibitDataVer(); // 数据变更后失效展览缓存
+}
+
+// ===== 云端数据接入：避免「本地已存但推送失败」的记录被覆盖丢失 =====
+// 背景：启动时云端数据会无条件覆盖本地。若上次保存时 pushSync 失败
+// （网络抖动 / token 过期 / 服务器重启），新增的记录只存在于 localStorage，
+// 一刷新就被云端旧数据盖掉 —— 表现为「记录没了 / 新增的不显示」。
+const MERGE_ARRAY_KEYS = ['students', 'scores', 'attendance', 'classRecords', 'classLogs', 'communications', 'homework', 'todosReminders', 'templates', 'snapshots'];
+// 把 local 里有、cloud 里没有的记录补进 cloud（按 id 取并集，不做覆盖式替换）
+function mergeMissing(local, cloud) {
+  let added = 0;
+  MERGE_ARRAY_KEYS.forEach(k => {
+    const la = Array.isArray(local[k]) ? local[k] : [];
+    if (!la.length) return;
+    if (!Array.isArray(cloud[k])) cloud[k] = [];
+    const have = new Set(cloud[k].map(x => x && x.id));
+    la.forEach(x => {
+      if (x && x.id && !have.has(x.id)) { cloud[k].unshift(x); have.add(x.id); added++; }
+    });
+  });
+  // 积分流水（points.logs）
+  const ll = local.points && Array.isArray(local.points.logs) ? local.points.logs : [];
+  if (ll.length) {
+    cloud.points = cloud.points || {};
+    if (!Array.isArray(cloud.points.logs)) cloud.points.logs = [];
+    const have = new Set(cloud.points.logs.map(x => x && x.id));
+    ll.forEach(x => { if (x && x.id && !have.has(x.id)) { cloud.points.logs.unshift(x); have.add(x.id); added++; } });
+  }
+  // 学生身上的行为记录（students[].records）
+  if (Array.isArray(cloud.students) && Array.isArray(local.students)) {
+    const byId = {};
+    local.students.forEach(s => { if (s && s.id) byId[s.id] = s; });
+    cloud.students.forEach(cs => {
+      const ls = byId[cs.id];
+      if (!ls || !Array.isArray(ls.records)) return;
+      if (!Array.isArray(cs.records)) cs.records = [];
+      const have = new Set(cs.records.map(x => x && x.id));
+      ls.records.forEach(r => { if (r && r.id && !have.has(r.id)) { cs.records.unshift(r); have.add(r.id); added++; } });
+    });
+  }
+  return added;
+}
+// 拉取云端数据后的统一入口：判断是否需要把本地未同步的记录补回云端
+function applyCloudState(cloudRaw) {
+  if (!cloudRaw) { applyDefaultLock(); return; }
+  let cloud;
+  try { cloud = migrateState(cloudRaw); } catch (e) { cloud = null; }
+  if (!cloud) { applyDefaultLock(); return; }
+  const lt = state && state._savedAt ? state._savedAt : 0;
+  const ct = cloud._savedAt ? cloud._savedAt : 0;
+  // 仅当「本地保存时间明显晚于云端」时才合并 —— 说明本地有改动没推上去。
+  // 云端没有时间戳（旧数据）时不合并，避免把别处已删除的记录大量复活。
+  let added = 0;
+  if (lt && ct && lt > ct + 5000) {
+    try { localStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify(cloud)); } catch (e) {} // 合并前留底，便于回滚
+    added = mergeMissing(state, cloud);
+  }
+  state = cloud;
+  if (added > 0) {
+    save(true); // internal：恢复数据属于系统行为，锁定状态下也要写回
+    setTimeout(() => { try { toast(`已恢复 ${added} 条未同步到云端的记录`); } catch (e) {} }, 600);
+  }
+  applyDefaultLock();
 }
 
 // ===================== 成绩分析（数学单科 + 班级预设）=====================
@@ -7385,7 +7462,7 @@ function pmConfirmQrDeduct() {
   qrDeductDraft = null;
 }
 // 轻量提示
-function toast(text) {
+function toast(text, ms) {
   const root = document.getElementById('undo-root');
   if (!root) return;
   let el = document.getElementById('qrToast');
@@ -7397,7 +7474,7 @@ function toast(text) {
   }
   el.innerHTML = `<span>${esc(text)}</span>`;
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; }, 2200);
+  el._t = setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .4s'; }, ms || 2200);
   el.style.opacity = '1';
 }
 
@@ -7456,6 +7533,87 @@ function resolveClass(raw, fallback) {
   return c ? c.id : def;
 }
 
+// ---------- 数据自检：对比本机与云端，找出「刷新后会丢」的记录 ----------
+function openDataDiag() {
+  const cnt = s => ({
+    '学生': (s.students || []).length,
+    '作业': (s.homework || []).length,
+    '课堂记录': (s.classRecords || []).length,
+    '班级日志': (s.classLogs || []).length,
+    '积分流水': ((s.points || {}).logs || []).length
+  });
+  const local = cnt(state);
+  const lt = state._savedAt ? new Date(state._savedAt).toLocaleString('zh-CN') : '（无时间戳·旧版数据）';
+  const byCls = {};
+  (state.homework || []).forEach(h => { const k = String(h.class == null ? '(空)' : h.class); byCls[k] = (byCls[k] || 0) + 1; });
+  const clsDist = Object.keys(byCls).length
+    ? Object.entries(byCls).map(([k, v]) => `${esc(k)} ${v} 项`).join('　')
+    : '（无作业记录）';
+  const clsList = (state.classes || []).map(c => `${esc(c.name)}`).join('、') || '（未设置）';
+  openModal('数据自检', `
+    <div class="space-y-3 text-sm">
+      <div class="p-3 rounded-xl bg-gray-50">
+        <div class="font-medium mb-1">本机数据（当前页面）</div>
+        <div class="text-xs text-gray-600">${Object.entries(local).map(([k, v]) => k + ' ' + v).join(' · ')}</div>
+        <div class="text-xs text-gray-400 mt-1">最后保存：${esc(lt)}</div>
+      </div>
+      <div class="p-3 rounded-xl bg-gray-50">
+        <div class="font-medium mb-1">作业按班级分布</div>
+        <div class="text-xs text-gray-600">${clsDist}</div>
+        <div class="text-xs text-gray-400 mt-1">班级列表：${clsList}</div>
+      </div>
+      <div id="diagCloud" class="p-3 rounded-xl bg-blue-50 text-xs text-gray-600">正在读取云端数据…</div>
+      <div id="diagActions"></div>
+      <button class="w-full border py-2 rounded-full text-sm hover:bg-gray-50" onclick="closeModal()">关闭</button>
+    </div>`, 'md');
+  apiGet('/api/data').then(res => {
+    const box = document.getElementById('diagCloud');
+    const act = document.getElementById('diagActions');
+    if (!box) return;
+    if (!res || !res.state) { box.innerHTML = '⚠️ 读取云端失败（未登录或网络异常）'; return; }
+    const cloudRaw = res.state;
+    const c = cnt(cloudRaw);
+    const ct = cloudRaw._savedAt ? new Date(cloudRaw._savedAt).toLocaleString('zh-CN') : '（无时间戳·旧版数据）';
+    box.innerHTML = `<div class="font-medium mb-1">云端数据</div>`
+      + Object.keys(local).map(k => {
+          const a = local[k], b = c[k], diff = a - b;
+          const tag = diff === 0 ? '' : (diff > 0
+            ? `<span class="text-orange-600">（本机多 ${diff}）</span>`
+            : `<span class="text-blue-600">（云端多 ${-diff}）</span>`);
+          return `<div>${k}：本机 ${a} / 云端 ${b} ${tag}</div>`;
+        }).join('')
+      + `<div class="text-gray-400 mt-1">云端最后保存：${esc(ct)}</div>`;
+    // 用真实合并函数算出「本机有而云端没有」的记录数
+    let snap = null, missing = 0;
+    try { snap = JSON.parse(JSON.stringify(cloudRaw)); missing = mergeMissing(JSON.parse(JSON.stringify(state)), snap); } catch (e) {}
+    if (missing > 0 && snap) {
+      window.__diagSnap = snap;
+      act.innerHTML = `<div class="p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-800">
+        检测到本机有 <b>${missing}</b> 条记录不在云端。<br/>
+        若上次保存时网络异常，这些记录刷新后会被云端旧数据覆盖而丢失。<br/>
+        <button class="mt-2 w-full bg-primary text-white py-2 rounded-full text-sm" onclick="diagUploadMissing()">⬆️ 立即补传到云端（${missing} 条）</button>
+      </div>`;
+    } else {
+      act.innerHTML = `<div class="p-3 rounded-xl bg-green-50 text-xs text-green-700">✅ 本机与云端数据一致，没有检测到会丢失的记录。</div>`;
+    }
+  }).catch(() => {
+    const box = document.getElementById('diagCloud');
+    if (box) box.innerHTML = '⚠️ 读取云端失败（未登录或网络异常）';
+  });
+}
+// 把「本机有、云端没有」的记录补传上去（本机数据优先，不动云端已有的记录）
+function diagUploadMissing() {
+  const snap = window.__diagSnap;
+  if (!snap) return toast('没有需要补传的数据');
+  if (state && state.locked) return toast('🔒 只读模式：请先解锁后再补传');
+  state = migrateState(snap);
+  save();
+  window.__diagSnap = null;
+  closeModal();
+  render();
+  toast('已补传到云端');
+}
+
 function openSettings() {
   openModal('设置', `
     <div class="grid grid-cols-2 gap-3 text-sm">
@@ -7476,6 +7634,9 @@ function openSettings() {
       </button>
       <button class="p-4 rounded-xl border border-amber-200 text-amber-600 hover:bg-amber-50 flex flex-col items-center gap-2" onclick="closeModal(); openLockSettings()">
         <span class="text-2xl">🔒</span><span>只读锁定</span>
+      </button>
+      <button class="p-4 rounded-xl border border-teal-200 text-teal-600 hover:bg-teal-50 flex flex-col items-center gap-2" onclick="closeModal(); openDataDiag()">
+        <span class="text-2xl">🔍</span><span>数据自检</span>
       </button>
       <button class="p-4 rounded-xl border border-emerald-200 text-emerald-600 hover:bg-emerald-50 flex flex-col items-center gap-2" onclick="closeModal(); openRecKeywordEditor()">
         <span class="text-2xl">🔤</span><span>关键词管理</span>
@@ -7664,6 +7825,7 @@ const LOCK_WRITE_FNS = new Set([
   'resetSampleData',            // 载入示例数据（会清空全部现有数据，最危险）
   'olEnsureDerivedRankColumns', // 成绩分析：派生排名列
   'autoArchiveAttendance',      // 考勤：自动归档
+  'diagUploadMissing',          // 数据自检：把本机记录补传到云端（会覆盖云端）
 ]);
 
 // 判断元素（或其祖先）绑定的内联处理函数是否属于写操作
@@ -8821,12 +8983,13 @@ function doLogin() {
     .then(d => {
       AUTH_TOKEN = d.token;
       localStorage.setItem(AUTH_KEY, d.token);
-      // 拉取服务端数据
+      // 拉取服务端数据（applyCloudState 会把本地未同步的记录补回，避免丢数据）
       apiGet('/api/data').then(res => {
         if (res && res.state) {
-          try { state = migrateState(res.state); } catch (e) { state = defaultState(); }
-          applyDefaultLock();
+          applyCloudState(res.state);
           save(true); // internal：登录拉取数据后写回本地兜底
+        } else {
+          applyDefaultLock();
         }
         render();
         maybeOnboard();
@@ -8854,10 +9017,7 @@ function maybeOnboard() {
 // 优先：已登录 -> 拉云端数据；未登录 -> 登录页
 if (AUTH_TOKEN) {
   apiGet('/api/data').then(res => {
-    if (res && res.state) {
-      try { state = migrateState(res.state); } catch (e) { state = defaultState(); }
-    }
-    applyDefaultLock();
+    applyCloudState(res && res.state); // 内部含本地未同步记录的补回逻辑
     render();
     maybeOnboard();
   }).catch(() => { render(); maybeOnboard(); });
