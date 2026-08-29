@@ -2688,42 +2688,37 @@ function renderReport() {
       </div>
       <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
     </div>
-    <!-- 本周速览：一行紧凑统计（替代原来4个大卡片） -->
-    <div class="flex flex-wrap items-center gap-4 mb-4 py-3 px-4 rounded-xl bg-gray-50 border border-gray-100 text-sm">
-      <span class="text-gray-500">👥 ${totalStudents} 名学生</span>
-      <span class="text-gray-300">|</span>
-      <span class="text-emerald-600 font-medium">👍 表扬 ${praiseCount}</span>
-      <span class="text-rose-500 font-medium">👎 批评 ${criticCount}</span>
-      <span class="text-gray-300">|</span>
-      <span class="text-amber-600">📞 待跟进 ${pendingComm}</span>
-    </div>
-    <!-- 积分排行前10（全宽，含4维度小条） -->
-    <div class="rounded-xl p-4 bg-gray-50 border border-gray-100 mb-4">
-      <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行前10</div>
-      ${top10.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 gap-0.5">${top10.map((x, i) => {
-        const ds = POINT_DIMS.map(d => ({...d, v: ptDimScore(x.s.id, d.id)}));
-        const miniBar = ds.map(d => `<span class="text-[11px]">${d.icon}<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} font-medium tabular-nums">${fmtScore(d.v)}</span></span>`).join(' ');
-        return `<div class="flex items-center justify-between py-2 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} ${i < top10.length - 1 ? 'border-b border-gray-200/40' : ''}">
-          <div class="flex items-center gap-2 min-w-0"><span class="${i < 3 ? 'text-base' : 'text-xs text-gray-400'} w-5 text-center flex-shrink-0">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200 flex-shrink-0" alt=""><span class="text-sm text-gray-700 truncate">${esc(x.s.name)}</span></div>
-          <div class="flex items-center gap-2 flex-shrink-0"><div class="hidden sm:flex items-center gap-1.5">${miniBar}</div><span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'} tabular-nums ml-1">${fmtScore(x.score)}</span></div>
-        </div>`;
-      }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
-    </div>
-    <!-- 班级日志摘要（双模式：按日期 / 按人违纪；严格按班级筛选） -->
-    <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+    <!-- 左右双栏：积分排行（左）+ 班级日志摘要（右） -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <!-- 左栏：积分排行前10 -->
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+        <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行</div>
+        ${top10.length ? `<div class="space-y-0.5">${top10.map((x, i) => {
+          const convTotal = ptConvTotal(x.s.id);
+          return `<div class="flex items-center justify-between py-2 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''}">
+            <div class="flex items-center gap-2 min-w-0"><span class="${i < 3 ? 'text-base font-black' : 'text-xs text-gray-400'} w-5 text-center flex-shrink-0">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200 flex-shrink-0" alt=""><span class="text-sm text-gray-700 truncate">${esc(x.s.name)}</span></div>
+            <div class="flex items-center gap-3 flex-shrink-0">
+              <span class="text-xs text-gray-400 hidden sm:inline">折算</span><span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'} tabular-nums">${fmtScore(convTotal)}</span>
+              <span class="text-xs text-gray-300">|</span>
+              <span class="font-bold ${i < 3 ? 'text-pink-500 text-sm' : 'text-gray-500 text-xs'} tabular-nums">${fmtScore(x.score)}</span>
+            </div>
+          </div>`;
+        }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
+      </div>
+      <!-- 右栏：班级日志摘要 -->
+      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
       <div class="flex items-center justify-between mb-3">
         <div class="text-sm font-bold text-gray-700">📓 班级日志摘要</div>
         <div class="flex gap-1">
           <button class="text-xs px-2.5 py-1 rounded-full transition ${reportLogMode === 'date' ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}" onclick="reportLogMode='date';render()">📅 按日期</button>
-          <button class="text-xs px-2.5 py-1 rounded-full transition ${reportLogMode === 'person' ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}" onclick="reportLogMode='person';render()">👤 按人违纪</button>
+          <button class="text-xs px-2.5 py-1 rounded-full transition ${reportLogMode === 'person' ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}" onclick="reportLogMode='person';render()">👤 按姓名</button>
         </div>
       </div>
       ${(() => {
-        // ===== 关键：只取当前班级的日志（两班分离） =====
+        // ===== 只取当前班级的日志（两班分离） =====
         const targetCls = state.activeClass;
         let logs = (state.classLogs || []).filter(l => {
           if (l.class) return l.class === targetCls;
-          // 旧数据无class字段：从内容中的学生名推断班级
           const c = l.content || '';
           const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
           if (!namePart) return false;
@@ -2738,112 +2733,95 @@ function renderReport() {
           if (!d) return dstr;
           return weekdays[d.getDay()] + '（' + (d.getMonth()+1) + '月' + d.getDate() + '日）';
         };
+        // 从日志内容提取人名和事件描述（更健壮）
+        const parseLogEntry = (content) => {
+          const c = content || '';
+          const m = c.match(/^([\u4e00-\u9fa5]{2,4})\s*(?:（[^）]*）)?\s*(?:表扬|批评|提醒|记录)?\s*[：:]?\s*(.*)$/);
+          if (m) return { name: m[1], desc: (m[3] || m[2] || c).trim() };
+          return { name: '', desc: c };
+        };
+        // 判断事件类型
+        const eventTypeOf = (desc) => {
+          if (/请假|病假|事假/.test(desc)) return 'leave';
+          if (/批评|违纪|扣分|警告|迟到|说话|不认真|走神|睡觉|玩手机|打架|顶撞|没交作业|未完成|未交|抄袭|作弊/.test(desc)) return 'critic';
+          if (/表扬|获奖|🏆|👍|流动红旗|全勤|主动|进步|好人好事|拾金不昧|优秀|积极/.test(desc)) return 'praise';
+          if (/谈心|谈话|沟通|家访|约谈|开导|安慰|鼓励/.test(desc)) return 'chat';
+          return 'other';
+        };
+        const typeIcon = { leave:'🏥', critic:'⚠️', praise:'👍', chat:'💬', other:'📌' };
 
         if (reportLogMode === 'date') {
           // ===== 按日期模式：同类事件压缩合并 =====
           const groups = {};
           logs.forEach(l => { (groups[l.date] = groups[l.date] || []).push(l); });
           const dates = Object.keys(groups).sort((a,b) => (ptParseDate(a)||0) - (ptParseDate(b)||0));
-          // 事件分类关键词
-          const eventTypeOf = (content) => {
-            const c = content || '';
-            if (/请假|病假|事假/.test(c)) return 'leave';
-            if (/批评|违纪|扣分|警告|迟到|说话|不认真|走神|睡觉|玩手机|打架|顶撞|没交|未完成|未交|抄袭|作弊/.test(c)) return 'critic';
-            if (/表扬|获奖|🏆|👍|流动红旗|全勤|主动|进步|好人好事|拾金不昧|优秀/.test(c)) return 'praise';
-            if (/谈心|谈话|沟通|家访|约谈|开导|安慰|鼓励/.test(c)) return 'chat';
-            if (/一句话记录/.test(c)) return 'record';
-            return 'other';
-          };
-          const typeIcon = { leave:'🏥', critic:'⚠️', praise:'👍', chat:'💬', record:'📝', other:'📌' };
-          const typeLabel = { leave:'请假', critic:'违纪', praise:'表扬', chat:'谈心', record:'记录', other:'' };
-          // 每个日期内按事件类型分组，同类合并人名
           const lines = dates.map(date => {
             const items = groups[date];
             const typed = {};
             items.forEach(l => {
-              const t = eventTypeOf(l.content);
-              // 提取人名（通常是内容开头的名字）
-              const nameMatch = (l.content || '').match(/^([\u4e00-\u9fa5]{2,4})/);
-              const name = nameMatch ? nameMatch[1] : '';
-              // 提取事件描述（去掉人名前缀后剩余的内容）
-              let desc = (l.content || '').replace(/^[\u4e00-\u9fa5]{2,4}\s*(表扬|批评|提醒|记录)?[：:]\s*/, '');
-              if (!desc) desc = l.content || '';
+              const { name, desc } = parseLogEntry(l.content);
+              const t = eventTypeOf(desc);
               (typed[t] = typed[t] || []).push({ name, desc, raw: l.content });
             });
-            // 为每种类型生成压缩文本
             const parts = Object.entries(typed).map(([type, entries]) => {
+              const names = entries.map(e => e.name).filter(Boolean);
+              const uniqueNames = [...new Set(names)];
               if (type === 'leave') {
-                // 请假：合并人名 + 原因（如果原因相同）
-                const names = entries.map(e => e.name).filter(Boolean);
-                const reasons = [...new Set(entries.map(e => e.desc.replace(/^[^\s]*/,'').trim()).filter(Boolean))];
-                return (typeIcon[type]||'') + names.join('、') + ' 请假' + (reasons[0] ? '（'+reasons[0]+'）' : '');
+                const sampleDesc = entries[0]?.desc || '';
+                const reason = sampleDesc.replace(/^[^\u4e00-\u9fa5]*/,'').replace(/请假/,'').trim();
+                return (typeIcon[type]||'') + uniqueNames.join('、') + ' 请假' + (reason ? '（'+reason+'）' : '');
               }
               if (type === 'critic' || type === 'praise') {
-                // 批评/表扬：尝试按相似描述分组
                 const byDesc = {};
                 entries.forEach(e => {
-                  // 简化描述用于分组（去掉具体人名）
-                  const key = e.desc.replace(/[\u4e00-\u9fa5]{2,4}/g,'').trim() || e.desc;
+                  let key = e.desc.slice(0, 20);
                   (byDesc[key] = byDesc[key] || []).push(e.name);
                 });
-                return Object.entries(byDesc).map(([desc, names]) => {
-                  return (typeIcon[type]||'') + names.filter(n=>n).join('、') + (desc ? ' '+desc : (typeLabel[type]||''));
+                return Object.entries(byDesc).map(([descKey, ns]) => {
+                  const uniqNs = [...new Set(ns.filter(n=>n))];
+                  return (typeIcon[type]||'') + uniqNs.join('、') + ' ' + descKey;
                 }).join('；');
               }
-              // 其他类型：逐条显示但紧凑排列
               return entries.map(e => (typeIcon[type]||'') + (e.name ? e.name+' ':'') + e.desc).join('；');
             });
             return `<div class="py-2 border-b border-gray-200/30 last:border-0"><div class="text-xs font-semibold text-gray-500 mb-1">${fmtDate(date)}</div><div class="text-sm text-gray-700 leading-relaxed">${parts.join('　')}</div></div>`;
           });
-          return `<div class="divide-y divide-gray-200/30">${lines.join('')}</div>` + (logs.length > 0 ? `<div class="text-xs text-gray-400 pt-1">...共 ${logs.length} 条 · ${esc(className(targetCls))}</div>` : '');
+          return `<div class="divide-y divide-gray-200/30 max-h-[360px] overflow-y-auto">${lines.join('')}</div>` + `<div class="text-xs text-gray-400 pt-1">共 ${logs.length} 条 · ${esc(className(targetCls))}</div>`;
         } else {
-          // ===== 按人违纪模式：汇总每人一周表现 =====
+          // ===== 按姓名模式：每人显示具体记录 =====
           const clsStudents = state.students.filter(s => s.class === targetCls);
           const personData = {};
           logs.forEach(l => {
-            // 从日志中提取学生名
-            clsStudents.forEach(s => {
-              if ((l.content || '').includes(s.name)) {
-                if (!personData[s.id]) personData[s.id] = { name: s.name, avatar: s.avatar, events: [] };
-                personData[s.id].events.push(l.content || '');
-              }
-            });
+            const { name } = parseLogEntry(l.content);
+            const stu = clsStudents.find(s => (l.content || '').includes(s.name));
+            if (stu) {
+              if (!personData[stu.id]) personData[stu.id] = { name: stu.name, avatar: stu.avatar, events: [] };
+              personData[stu.id].events.push({ content: l.content, date: l.date });
+            }
           });
-          // 为每人生成摘要
-          const ranked = Object.values(personData).map(p => {
-            // 统计各类事件
-            let leaveCount = 0, criticTypes = [], praiseCount = 0;
-            p.events.forEach(ev => {
-              if (/请假/.test(ev)) { leaveCount++; return; }
-              if (/表扬|获奖|👍|进步|好人好事/.test(ev)) { praiseCount++; return; }
-              // 提取违纪类型关键词
-              const kwMatch = ev.match(/(上课说话|迟到|走神|睡觉|玩手机|没交|未完成|未交|抄袭|作弊|打架|顶撞|不认真|不专心|小动作|传纸条|吃零食|喧哗)/);
-              if (kwMatch) criticTypes.push(kwMatch[1]);
-            });
-            // 去重+计数
-            const criticSummary = {};
-            criticTypes.forEach(t => { criticSummary[t] = (criticSummary[t]||0)+1; });
-            const criticParts = Object.entries(criticSummary).map(([k,v]) => k+v+'次').join('，');
-            // 组装摘要文字
-            const summaryParts = [];
-            if (leaveCount > 0) summaryParts.push('请假'+leaveCount+'次');
-            if (criticParts) summaryParts.push(criticParts);
-            if (praiseCount > 0) summaryParts.push('被表扬'+praiseCount+'次');
-            p.summary = summaryParts.length ? summaryParts.join('；') : '有日志记录'+p.events.length+'条';
-            return p;
-          }).sort((a, b) => {
-            // 有违纪的排前面
-            const aBad = a.summary.includes('次') && !a.summary.match(/表扬|请假$/);
-            const bBad = b.summary.includes('次') && !b.summary.match(/表扬|请假$/);
-            if (aBad && !bBad) return -1; if (!aBad && bBad) return 1;
-            return b.events.length - a.events.length;
-          });
-          return ranked.length ? `<div class="space-y-1">${ranked.map((p, i) => `<div class="flex items-start gap-2 py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-rose-50/60' : ''}">
-              <div class="flex items-center gap-2 min-w-0"><span class="text-xs text-gray-400 w-5 flex-shrink-0">${i + 1}</span><img src="${esc(p.avatar)}" class="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" alt=""><span class="text-sm font-medium text-gray-700">${esc(p.name)}</span></div>
-              <span class="text-xs text-gray-600 truncate ml-auto">${p.summary}</span>
-            </div>`).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无违纪记录</div>';
+          const ranked = Object.values(personData).sort((a, b) => b.events.length - a.events.length);
+          return ranked.length ? `<div class="space-y-2 max-h-[360px] overflow-y-auto">${ranked.map((p, i) => {
+            const recentEvents = p.events.slice(0, 3);
+            const eventLines = recentEvents.map(e => {
+              const { desc } = parseLogEntry(e.content);
+              const shortDesc = desc.length > 30 ? desc.slice(0, 30) + '...' : desc;
+              const t = eventTypeOf(desc);
+              return `<div class="text-xs text-gray-600 pl-4 py-0.5 border-l-2 ${t==='critic'?'border-rose-300':t==='praise'?'border-emerald-300':t==='leave'?'border-blue-300':'border-gray-200'}">${(typeIcon[t]||'·')} ${esc(shortDesc)}</div>`;
+            }).join('');
+            const moreHint = p.events.length > 3 ? `<div class="text-xs text-gray-400 pl-4">...等${p.events.length}条</div>` : '';
+            return `<div class="py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-rose-50/40' : ''}">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="text-xs text-gray-400 w-5 flex-shrink-0 font-medium">${i + 1}</span>
+                <img src="${esc(p.avatar)}" class="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" alt="">
+                <span class="text-sm font-medium text-gray-800">${esc(p.name)}</span>
+                <span class="text-xs text-gray-400 ml-auto">${p.events.length}条</span>
+              </div>
+              <div>${eventLines}${moreHint}</div>
+            </div>`;
+          }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无日志记录</div>';
         }
       })()}
+    </div>
     </div>
   </div>`;
 
@@ -6227,7 +6205,7 @@ function homeExhibitCardHTML(x, i, fs) {
     const _d = id => POINT_DIMS.find(d => d.id === id) || {};
     const bar = o => `<div class="flex justify-between text-sm text-white/70"><span>${_d(o.id).icon} ${_d(o.id).label}</span><span class="font-bold text-white/90">${fmtScore(o.v)}</span></div>
       <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1.5"><div class="${FS_BAR[o.id] || 'bg-white/40'} h-full rounded-full transition-all" style="width:${Math.round(o.v / maxV * 100)}%;min-width:4px;box-shadow:0 0 6px ${FS_BAR[o.id]?.replace('bg-','') || 'fff'}40"></div></div>`;
-    const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-white/20';
+    const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500 shadow-lg shadow-amber-400/50 ring-2 ring-amber-300' : i === 1 ? 'bg-gradient-to-br from-gray-200 to-gray-400 shadow-md shadow-gray-400/40 ring-2 ring-gray-300' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-800 shadow-lg shadow-amber-700/50 ring-2 ring-amber-500' : 'bg-gray-400 shadow-sm ring-1.5 ring-gray-300';
     return `<div class="bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-5 flex flex-col">
       <div class="flex items-center gap-3 mb-3">
         <span class="w-10 h-10 rounded-full ${badgeCls} text-white text-lg font-black flex items-center justify-center flex-shrink-0">${i + 1}</span>
@@ -6242,8 +6220,8 @@ function homeExhibitCardHTML(x, i, fs) {
   const _de = id => POINT_DIMS.find(d => d.id === id) || {};
   const bar = o => `<div class="flex justify-between text-[10px] text-gray-500"><span>${_de(o.id).icon}${_de(o.id).label}</span><span class="font-semibold text-gray-700">${fmtScore(o.v)}</span></div>
     <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.id).bar} h-full rounded-full" style="width:${Math.round(o.v / maxV * 100)}%;min-width:2px"></div></div>`;
-  const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-400 to-gray-500' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-gray-300';
-  const topCls = i === 0 ? 'ring-1.5 ring-amber-300 bg-amber-50/70' : '';
+  const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500 shadow-md shadow-amber-400/40 ring-1.5 ring-amber-300' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-500 shadow-sm ring-1.5 ring-gray-300' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700 shadow-md shadow-amber-500/30 ring-1.5 ring-amber-400' : 'bg-gray-400/80 shadow-sm ring-1 ring-gray-300';
+  const topCls = i < 3 ? `ring-1.5 ${i===0?'ring-amber-300 shadow-sm shadow-amber-100/50':i===1?'ring-gray-300 shadow-sm shadow-gray-100/50':'ring-amber-400/40 shadow-sm shadow-amber-100/30'}` : '';
   return `<div class="bg-white border border-gray-100 rounded-xl p-2.5 shadow-sm ${topCls}">
     <div class="flex items-center gap-2 mb-1">
       <span class="w-6 h-6 rounded-full ${badgeCls} text-white text-xs font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
