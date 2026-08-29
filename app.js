@@ -546,6 +546,7 @@ function save() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   pushSync();
+  _bumpExhibitDataVer(); // 数据变更后失效展览缓存
 }
 
 // ===================== 成绩分析（数学单科 + 班级预设）=====================
@@ -1843,7 +1844,7 @@ function pickRecordType(btn) {
 // 行为记录同步写入班级日志（带 behaviorId 反向标记，便于删除时清理）
 function logBehaviorToClassLog(recId, name, type, content, date) {
   if (!state.classLogs) state.classLogs = [];
-  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId });
+  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId, class: s.class || state.activeClass });
 }
 function saveRecord(id) {
   const content = document.getElementById('recContent').value.trim();
@@ -1941,7 +1942,7 @@ function saveClassLog() {
   const content = document.getElementById('logContent').value.trim();
   const date = document.getElementById('logDate').value.trim() || todayLabel;
   if(!content) return alert('请输入日志内容');
-  state.classLogs.unshift({ id: uid(), date, content });
+  state.classLogs.unshift({ id: uid(), date, content, class: state.activeClass });
   save(); closeModal(); render();
 }
 function deleteClassLog(id) {
@@ -6012,6 +6013,9 @@ let homeExhibit = {
   logClass: 'current',
   fs: false, fsBg: 'dark', fsScreen: 'rank', fsRankPage: 0, fsLogPage: 0, fsAuto: true,
   _timer: null, _fsTimer: null, _clock: null,
+  // 缓存层：避免每次渲染重复计算排序/折算
+  _dataVer: 0, _cacheDim: '', _cachePool: 0, _cacheLogCls: '',
+  _cachedStudents: null, _cachedLogGroups: null,
 };
 
 function renderHomePointsCard() {
@@ -6082,22 +6086,39 @@ function homeExhibitFsHTML() {
   </div>`;
 }
 
-// 取当前排行列表（按维度排序 + 截取人数）
+// 数据版本号：积分/日志变化时递增，用于缓存失效
+let _exhibitDataVerVal = 0;
+function _exhibitDataVer() { return _exhibitDataVerVal; }
+function _bumpExhibitDataVer() { _exhibitDataVerVal++; homeExhibit._cachedStudents = null; homeExhibit._cachedLogGroups = null; }
+
+// 取当前排行列表（带缓存：预计算每人的折算分，避免渲染时重复计算）
 function homeExhibitStudents() {
-  const arr = ptRanked(homeExhibit.dim).map(x => ({ s: x.s }));
-  return homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
+  const key = homeExhibit.dim + '|' + homeExhibit.pool;
+  if (homeExhibit._cachedStudents && homeExhibit._cacheDim === homeExhibit.dim && homeExhibit._dataVer === _exhibitDataVer()) {
+    return homeExhibit._cachedStudents;
+  }
+  const arr = ptRanked(homeExhibit.dim).map(x => {
+    const s = x.s;
+    return { s, total: ptConvTotal(s.id), dims: POINT_DIMS.map(d => ({ id: d.id, v: ptConvDim(s.id, d.id) })) };
+  });
+  const result = homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
+  homeExhibit._cachedStudents = result;
+  homeExhibit._cacheDim = homeExhibit.dim;
+  homeExhibit._cachePool = homeExhibit.pool;
+  return result;
 }
 
-// 排行卡（fs=false 内嵌紧凑卡；fs=true 全屏大卡片）
+// 排行卡（fs=false 内嵌紧凑卡；fs=true 全屏大卡片）—— 使用缓存数据，不实时计算
 function homeExhibitCardHTML(x, i, fs) {
   const s = x.s;
-  const total = ptConvTotal(s.id);
-  const dims = POINT_DIMS.map(d => ({ d, v: ptConvDim(s.id, d.id) }));
+  const total = x.total;   // 缓存预计算值
+  const dims = x.dims;     // 缓存预计算值 [{id, v}, ...]
   const maxV = Math.max(1, ...dims.map(o => o.v));
   if (fs) {
     // 全屏大卡片：适合教室投屏，2行×3列布局
-    const bar = o => `<div class="flex justify-between text-sm text-white/60"><span>${o.d.icon} ${o.d.label}</span><span class="font-semibold">${fmtScore(o.v)}</span></div>
-      <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1"><div class="${dimStyle(o.d.id).bar} h-full" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`;
+    const _dimByIdFs = id => POINT_DIMS.find(d => d.id === id) || {};
+    const bar = o => { const d = _dimByIdFs(o.id); return `<div class="flex justify-between text-sm text-white/60"><span>${d.icon} ${d.label}</span><span class="font-semibold">${fmtScore(o.v)}</span></div>
+      <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1"><div class="${dimStyle(o.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`; };
     const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-white/20';
     return `<div class="bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-5 flex flex-col">
       <div class="flex items-center gap-3 mb-3">
@@ -6111,29 +6132,40 @@ function homeExhibitCardHTML(x, i, fs) {
       <div class="space-y-2 mt-auto">${dims.map(bar).join('')}</div>
     </div>`;
   }
-  // 内嵌紧凑卡
-  const bar = o => `<div class="flex justify-between text-[9px] text-gray-400"><span>${o.d.icon}${o.d.label}</span><span>${fmtScore(o.v)}</span></div>
-    <div class="h-1 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.d.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`;
+  // 内嵌紧凑卡（高度优化至 ~78px）
+  const bar = o => { const d = (POINT_DIMS.find(D => D.id === o.id) || {}); return `<div class="flex justify-between text-[8px] text-gray-400"><span>${d.icon}${d.label}</span><span>${fmtScore(o.v)}</span></div>
+    <div class="h-[3px] bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`; };
   const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-400 to-gray-500' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-gray-300';
-  const topCls = i === 0 ? 'ring-2 ring-amber-300 bg-amber-50' : i === 1 ? 'ring-2 ring-gray-200' : i === 2 ? 'ring-2 ring-amber-200 bg-amber-50/60' : '';
-  return `<div class="bg-white border border-gray-100 rounded-xl p-2 ${topCls}">
-    <div class="flex items-center gap-1.5 mb-0.5">
-      <span class="w-5 h-5 rounded-full ${badgeCls} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
-      <img src="${esc(s.avatar)}" class="w-6 h-6 rounded-full bg-gray-100" alt="">
-      <span class="text-xs font-semibold text-gray-800">${esc(s.name)}</span>
-      <span class="ml-auto text-sm font-extrabold text-primary">${fmtScore(total)}</span>
+  const topCls = i === 0 ? 'ring-1.5 ring-amber-300 bg-amber-50/70' : '';
+  return `<div class="bg-white border border-gray-100 rounded-lg p-1.5 ${topCls}">
+    <div class="flex items-center gap-1 mb-0.5">
+      <span class="w-4.5 h-4.5 rounded-full ${badgeCls} text-white text-[9px] font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
+      <img src="${esc(s.avatar)}" class="w-5 h-5 rounded-full bg-gray-100" alt="">
+      <span class="text-[11px] font-semibold text-gray-800 truncate">${esc(s.name)}</span>
+      <span class="ml-auto text-xs font-extrabold text-primary">${fmtScore(total)}</span>
     </div>
     <div class="space-y-0.5">${dims.map(bar).join('')}</div>
   </div>`;
 }
 
-// 班级日志按天分组：仅本周内、截止到今天、按班级筛选、无日志天不显示
+// 班级日志按天分组（带缓存）：仅本周内、截止到今天、按班级筛选、无日志天不显示
 function homeExhibitLogGroups() {
+  if (homeExhibit._cachedLogGroups && homeExhibit._cacheLogCls === homeExhibit.logClass && homeExhibit._dataVer === _exhibitDataVer()) {
+    return homeExhibit._cachedLogGroups;
+  }
   let logs = state.classLogs || [];
   const clsFilter = homeExhibit.logClass;
   if (clsFilter && clsFilter !== 'all') {
     const targetCls = clsFilter === 'current' ? state.activeClass : clsFilter;
-    logs = logs.filter(l => !l.class || l.class === targetCls);
+    logs = logs.filter(l => {
+      if (l.class) return l.class === targetCls;
+      // 旧数据无class字段：从内容中的学生名推断班级
+      const c = l.content || '';
+      const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
+      if (!namePart) return false;
+      const stu = state.students.find(s => s.name === namePart);
+      return stu && stu.class === targetCls;
+    });
   }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const dow = (today.getDay() + 6) % 7;
@@ -6146,9 +6178,12 @@ function homeExhibitLogGroups() {
     if (day.getTime() < monday.getTime() || day.getTime() > today.getTime()) return;
     (groups[l.date] = groups[l.date] || []).push(l);
   });
-  return Object.keys(groups).filter(k => groups[k].length)
+  const result = Object.keys(groups).filter(k => groups[k].length)
     .sort((a, b) => (ptParseDate(a) || 0) - (ptParseDate(b) || 0))
     .map(k => ({ date: k, logs: groups[k] }));
+  homeExhibit._cachedLogGroups = result;
+  homeExhibit._cacheLogCls = homeExhibit.logClass;
+  return result;
 }
 
 function homeExhibitLogCardHTML(l) {
@@ -6177,7 +6212,7 @@ function renderHomeExhibit() {
     const tp = Math.max(1, Math.ceil(list.length / per));
     if (homeExhibit.embedPage >= tp) homeExhibit.embedPage = 0;
     const page = list.slice(homeExhibit.embedPage * per, (homeExhibit.embedPage + 1) * per);
-    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.embedPage * per + i, false)).join('')}</div>`;
+    body.innerHTML = `<div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-1.5">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.embedPage * per + i, false)).join('')}</div>`;
     nav.innerHTML = (tp > 1
       ? `<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(-1)">‹</button><span class="text-xs text-gray-400">${homeExhibit.embedPage + 1}/${tp}</span><button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(1)">›</button> `
       : '') + `<span class="text-xs text-gray-400">共 ${list.length} 人 · ${dimLabel(homeExhibit.dim)}</span>
@@ -6205,9 +6240,9 @@ function renderHomeExhibit() {
 // 内嵌面板每页数量（根据容器可用高度动态计算）
 function homeEmbedPerPage() {
   const body = document.getElementById('homeExhibitBody');
-  if (!body) return 8;
-  const h = body.parentElement ? body.parentElement.clientHeight - 80 : 280; // 减去头部+导航
-  return Math.max(4, Math.floor(h / 105)); // 每张卡约 105px
+  if (!body) return 10;
+  const h = body.parentElement ? body.parentElement.clientHeight - 70 : 280;
+  return Math.max(6, Math.floor(h / 82)); // 压缩后每张卡约 82px
 }
 function homeEmbedPage(d) { homeExhibit.embedPage = Math.max(0, homeExhibit.embedPage + d); renderHomeExhibit(); }
 
