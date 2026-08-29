@@ -395,12 +395,19 @@ function migrateState(s) {
   if (!Array.isArray(s.classes) || !s.classes.length) s.classes = [{ id: '10班', name: '10班', role: 'head' }, { id: '9班', name: '9班', role: 'teacher' }];
   if (!s.headTeacherClass) s.headTeacherClass = '10班';
   if (!s.activeClass) s.activeClass = s.headTeacherClass;
-  const _knownCls = s.classes.map(c => c.id);
   const _headCls = s.headTeacherClass;
-  if (Array.isArray(s.students)) s.students.forEach(st => { if (!st.class || !_knownCls.includes(st.class)) st.class = _headCls; });
-  if (Array.isArray(s.classRecords)) s.classRecords.forEach(r => { if (!r.class) r.class = _headCls; });
-  if (Array.isArray(s.homework)) s.homework.forEach(h => { if (!h.class) h.class = _headCls; });
-  if (Array.isArray(s.scores)) s.scores.forEach(sc => { if (!sc.class || !_knownCls.includes(sc.class)) sc.class = _headCls; });
+  // 班级值归一化：存量数据里可能存的是显示名（如"初三10班"）而非内部 id，
+  // 直接 === 比较会漏掉记录，这里统一反解为 id，识别不了再归到班主任班
+  const _clsId = raw => { const r = String(raw == null ? '' : raw).trim(); if (!r) return ''; const c = s.classes.find(x => x.id === r || x.name === r); return c ? c.id : ''; };
+  // 用显示名匹配兜底（旧版本可能把显示名写进了 class 字段），识别不了才归班主任班
+  if (Array.isArray(s.students)) s.students.forEach(st => { st.class = _clsId(st.class) || _headCls; });
+  if (Array.isArray(s.classRecords)) s.classRecords.forEach(r => { r.class = _clsId(r.class) || _headCls; });
+  if (Array.isArray(s.homework)) s.homework.forEach(h => {
+    h.class = _clsId(h.class) || _headCls;
+    if (!h.subject) h.subject = '未指定';
+    if (h.due == null) h.due = '';
+  });
+  if (Array.isArray(s.scores)) s.scores.forEach(sc => { sc.class = _clsId(sc.class) || _headCls; });
   // 成绩分析 / 折算 / 快照
   if (!s.examData || typeof s.examData !== 'object') s.examData = { classes: [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}], exams: [], records: [], subjects: [] };
   if (!Array.isArray(s.examData.classes) || !s.examData.classes.length) s.examData.classes = [{id:'c1',name:'初三(1)班',studentNames:[]},{id:'c2',name:'初三(2)班',studentNames:[]}];
@@ -1738,9 +1745,7 @@ function openStudentForm(id) {
       <div><label class="block text-xs text-gray-500 mb-1">姓名</label><input id="stName" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.name:'')}"></div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">性别</label><select id="stGender" class="w-full border rounded-lg p-2 text-sm"><option ${s&&s.gender==='男'?'selected':''}>男</option><option ${s&&s.gender==='女'?'selected':''}>女</option></select></div>
-        ${state.activeClass === state.headTeacherClass
-          ? `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.class:'')}" placeholder="如：10班"></div>`
-          : `<div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="stClass" class="w-full border rounded-lg p-2 text-sm bg-gray-100" value="${esc(className(state.activeClass))}" readonly></div>`}
+        <div><label class="block text-xs text-gray-500 mb-1">班级</label>${classSelectHTML('stClass', s ? s.class : state.activeClass, state.activeClass === state.headTeacherClass ? '' : 'bg-gray-100', state.activeClass !== state.headTeacherClass)}</div>
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">头像（可选，留空随机生成）</label><input id="stAvatar" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.avatar:'')}" placeholder="图片链接，留空自动生成"></div>
       <div><label class="block text-xs text-gray-500 mb-1">昵称/别称（可选，用于快速记录识别，多个用空格隔开）</label><input id="stAlias" class="w-full border rounded-lg p-2 text-sm" value="${esc(s? s.alias:'')}" placeholder="如：小明 明明"></div>
@@ -1754,7 +1759,8 @@ function saveStudent(id) {
   const name = document.getElementById('stName').value.trim();
   if(!name) return alert('请输入姓名');
   const gender = document.getElementById('stGender').value;
-  const cls = document.getElementById('stClass').value.trim() || '未分班';
+  // 取内部 id（下拉框的 value），不再取显示名，避免改名后学生被判到别的班
+  const cls = document.getElementById('stClass').value.trim() || state.activeClass;
   let avatar = document.getElementById('stAvatar').value.trim();
   if(!avatar) avatar = 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + encodeURIComponent(name);
   const alias = document.getElementById('stAlias').value.trim();
@@ -2052,9 +2058,17 @@ function openCommListModal() {
 // ===================== Homework =====================
 function renderHomework() {
   const kwList = (state.homeworkKeywords || []).slice(0, 6).join(' / ');
-  const subjects = [...new Set(state.homework.filter(h => !h.class || h.class === state.activeClass).map(h => h.subject).filter(Boolean))];
-  const subjTabs = [{ id: '', name: '全部' }].concat(subjects).map(s => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject('${s.id}')">${esc(s.name)}</button>`).join('');
-  const list = state.homework.filter(h => (!h.class || h.class === state.activeClass) && (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!hwSearchName.trim() || (h.title || '').includes(hwSearchName.trim()) || (h.subject || '').includes(hwSearchName.trim())));
+  // 归属判定统一走 hwBelongsTo：记录里的 class 可能是 id、显示名或历史遗留值
+  const mine = (state.homework || []).filter(h => hwBelongsTo(h, state.activeClass));
+  // 科目筛选：若当前筛选值在本班已不存在（如切了班级），自动重置，避免列表空白
+  const subjects = [...new Set(mine.map(h => h.subject).filter(Boolean))];
+  if (hwSubjectFilter && !subjects.includes(hwSubjectFilter)) hwSubjectFilter = '';
+  const subjTabs = [{ id: '', name: '全部' }]
+    .concat(subjects.map(s => ({ id: s, name: s })))
+    .map(s => `<button class="px-3 py-1.5 rounded-full text-xs font-medium transition ${hwSubjectFilter === s.id ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="hwSetSubject(${JSON.stringify(s.id)})">${esc(s.name)}</button>`).join('');
+  const kw = (hwSearchName || '').trim();
+  const list = mine.filter(h => (!hwSubjectFilter || h.subject === hwSubjectFilter) && (!kw || (h.title || '').includes(kw) || (h.subject || '').includes(kw)));
+  const filtered = kw || hwSubjectFilter;
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -2065,25 +2079,41 @@ function renderHomework() {
     </div>
     <div class="flex flex-wrap gap-2 mb-3">${subjTabs}</div>
     <div class="relative mb-3">
-      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按姓名/科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
+      <input data-lock-allow value="${esc(hwSearchName)}" oninput="hwSetSearch(this.value)" placeholder="按科目/标题搜索…" class="w-full border rounded-lg pl-9 pr-3 py-2 text-sm">
       <span class="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
     </div>
-    <div class="grid gap-4">${list.map(h => `
-      <div class="p-4 rounded-xl bg-gray-50 flex justify-between items-center">
-        <div><div class="font-bold text-gray-800 text-sm">${esc(h.title)}</div><div class="text-xs text-gray-500 mt-1">${esc(h.class)} · ${esc(h.subject)}</div></div>
-        <div class="flex items-center gap-3"><div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full">截止 ${esc(h.due)}</div><button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button></div>
-      </div>`).join('') || '<div class="text-gray-400 text-sm">暂无匹配的作业。</div>'}</div>
+    <div class="text-xs text-gray-400 mb-2">${filtered ? `筛选出 ${list.length} 项（本班共 ${mine.length} 项）` : `本班共 ${mine.length} 项作业`}${hwOtherHint(mine.length, filtered)}</div>
+    <div class="grid gap-3">${list.map(h => `
+      <div class="p-4 rounded-xl bg-gray-50 flex gap-3 items-start">
+        <div class="flex-1 min-w-0">
+          <div class="font-bold text-gray-800 text-sm break-words whitespace-pre-wrap">${esc(h.title || '（未命名作业）')}</div>
+          <div class="text-xs text-gray-500 mt-1">${esc(className(classIdOf(h.class) || state.headTeacherClass))} · ${esc(h.subject || '未指定')}</div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <div class="text-xs text-primary bg-primary/10 px-2 py-1 rounded-full whitespace-nowrap">截止 ${esc(h.due || '未设置')}</div>
+          <button class="text-gray-300 hover:text-red-500" onclick="deleteHomework('${h.id}')">🗑️</button>
+        </div>
+      </div>`).join('') || `<div class="text-gray-400 text-sm">${filtered ? '没有匹配的作业，试试清空搜索或切换到「全部」科目。' : '本班暂无作业记录。'}</div>`}</div>
   </div>`;
 }
 function hwSetSearch(v) { hwSearchName = v; render(); }
 function hwSetSubject(s) { hwSubjectFilter = s; render(); }
+// 本班为空时提示其他班是否还有记录，避免误以为数据丢失
+function hwOtherHint(mineLen, filtered) {
+  if (mineLen > 0 || filtered) return '';
+  const others = (state.classes || []).filter(c => c.id !== state.activeClass)
+    .map(c => ({ name: c.name, n: (state.homework || []).filter(h => hwBelongsTo(h, c.id)).length }))
+    .filter(x => x.n > 0);
+  if (!others.length) return '';
+  return `　｜　其他班还有：${others.map(x => esc(x.name) + ' ' + x.n + ' 项').join('、')}`;
+}
 function openHomeworkForm() {
   openModal('布置作业', `
     <div class="space-y-4">
       <div><label class="block text-xs text-gray-500 mb-1">科目</label><input id="hwSubject" class="w-full border rounded-lg p-2 text-sm" value="英语"></div>
       <div><label class="block text-xs text-gray-500 mb-1">作业标题</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：Unit 1 单词默写"></div>
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="block text-xs text-gray-500 mb-1">班级</label><input id="hwClass" class="w-full border rounded-lg p-2 text-sm" value="${esc(className(state.activeClass))}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">班级</label>${classSelectHTML('hwClass', state.activeClass)}</div>
         <div><label class="block text-xs text-gray-500 mb-1">截止日期</label><input id="hwDue" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
       </div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHomework()">保存</button>
@@ -2093,7 +2123,9 @@ function saveHomework() {
   const subject = document.getElementById('hwSubject').value.trim() || '未指定';
   const title = document.getElementById('hwTitle').value.trim();
   if(!title) return alert('请输入作业标题');
-  const cls = document.getElementById('hwClass').value.trim();
+  // 班级存内部 id（下拉框取值），而非显示名，避免改名后记录查不出来
+  const clsEl = document.getElementById('hwClass');
+  const cls = clsEl ? clsEl.value : state.activeClass;
   const due = document.getElementById('hwDue').value.trim() || todayLabel;
   state.homework.unshift({ id: uid(), subject, title, class: cls, due });
   save(); closeModal(); render();
@@ -7392,6 +7424,27 @@ const RESET_PASSWORD_CODE = 'teacher2024';
 function className(id) {
   const c = (state.classes || []).find(x => x.id === id);
   return c ? c.name : (id || '');
+}
+// 班级反解：记录里的 class 可能存的是内部 id、显示名，或历史遗留值。
+// 统一解析为内部 id；无法识别时返回 ''（调用方自行兜底）
+function classIdOf(raw) {
+  if (raw == null) return '';
+  const r = String(raw).trim();
+  if (!r) return '';
+  const c = (state.classes || []).find(x => x.id === r || x.name === r);
+  return c ? c.id : '';
+}
+// 作业归属判定：先归一化班级再比较，无法识别的旧数据归到班主任班
+function hwBelongsTo(h, cls) {
+  return (classIdOf(h && h.class) || state.headTeacherClass) === cls;
+}
+// 班级下拉框：值一律用内部 id，展示用 name。禁用态（任课班新增）也能正常取到 id
+function classSelectHTML(id, cur, cls, disabled) {
+  const list = state.classes || [];
+  const known = list.some(c => c.id === cur);
+  const opts = (known ? '' : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`)
+    + list.map(c => `<option value="${esc(c.id)}" ${(known ? c.id === cur : false) ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  return `<select id="${id}" ${disabled ? 'disabled' : ''} class="w-full border rounded-lg p-2 text-sm ${cls || ''}">${opts}</select>`;
 }
 // 导入时把班级列（可能是显示名或 id）统一解析为内部 id
 function resolveClass(raw, fallback) {
