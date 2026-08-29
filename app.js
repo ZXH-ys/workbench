@@ -2689,7 +2689,7 @@ function renderReport() {
       <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
     </div>
     <!-- 左右双栏：积分排行（左）+ 班级日志摘要（右） -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+    <div class="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-4 mb-4">
       <!-- 左栏：积分排行前10 -->
       <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
         <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行</div>
@@ -2699,9 +2699,9 @@ function renderReport() {
           const dimGrid = `<div class="grid grid-cols-2 gap-x-2 gap-y-0 text-[10px]">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
           return `<div class="flex items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-2">
             <div class="flex items-center gap-1.5 flex-shrink-0"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
-            <span class="text-sm text-gray-800 font-medium whitespace-nowrap min-w-0">${esc(x.name)}</span>
-            <div class="flex-1 flex justify-center px-1">${dimGrid}</div>
-            <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums flex-shrink-0">${fmtScore(convTotal)}</span>
+            <span class="text-sm text-gray-800 font-medium whitespace-nowrap">${esc(x.name)}</span>
+            <div class="flex-1 flex justify-center px-2 min-w-0">${dimGrid}</div>
+            <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums flex-shrink-0 ml-1">${fmtScore(convTotal)}</span>
           </div>`;
         }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
       </div>
