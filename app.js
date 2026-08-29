@@ -1102,7 +1102,7 @@ function renderTopBar() {
     extra = importBtn + `<button ${data[currentRoute]} class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">${labels[currentRoute]}</button>`;
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-    ${menuBtn}${classSwitch}<h1 class="text-lg font-bold text-gray-800">${titles[currentRoute] || '工作台'}</h1>${homeDateBar}${searchBox}
+    ${menuBtn}${classSwitch}${homeDateBar}${searchBox}
     <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
   </header>${lockBanner}`;
 }
@@ -2697,10 +2697,8 @@ function renderReport() {
           const convTotal = ptConvTotal(x.s.id);
           return `<div class="flex items-center justify-between py-2 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''}">
             <div class="flex items-center gap-2 min-w-0"><span class="${i < 3 ? 'text-base font-black' : 'text-xs text-gray-400'} w-5 text-center flex-shrink-0">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200 flex-shrink-0" alt=""><span class="text-sm text-gray-700 truncate">${esc(x.s.name)}</span></div>
-            <div class="flex items-center gap-3 flex-shrink-0">
-              <span class="text-xs text-gray-400 hidden sm:inline">折算</span><span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'} tabular-nums">${fmtScore(convTotal)}</span>
-              <span class="text-xs text-gray-300">|</span>
-              <span class="font-bold ${i < 3 ? 'text-pink-500 text-sm' : 'text-gray-500 text-xs'} tabular-nums">${fmtScore(x.score)}</span>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'} tabular-nums">${fmtScore(convTotal)}</span>
             </div>
           </div>`;
         }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
@@ -2757,34 +2755,16 @@ function renderReport() {
           const dates = Object.keys(groups).sort((a,b) => (ptParseDate(a)||0) - (ptParseDate(b)||0));
           const lines = dates.map(date => {
             const items = groups[date];
-            const typed = {};
-            items.forEach(l => {
+            const entryLines = items.map(l => {
               const { name, desc } = parseLogEntry(l.content);
               const t = eventTypeOf(desc);
-              (typed[t] = typed[t] || []).push({ name, desc, raw: l.content });
+              const shortDesc = desc.length > 35 ? desc.slice(0, 35) + '...' : desc;
+              return `<div class="flex items-start gap-2 py-1 px-2 rounded hover:bg-gray-100/50">
+                <span class="text-xs mt-0.5 flex-shrink-0">${typeIcon[t]||'📌'}</span>
+                <span class="text-sm text-gray-700">${name ? '<span class="font-medium text-gray-800">'+esc(name)+'</span> ' : ''}${esc(shortDesc)}</span>
+              </div>`;
             });
-            const parts = Object.entries(typed).map(([type, entries]) => {
-              const names = entries.map(e => e.name).filter(Boolean);
-              const uniqueNames = [...new Set(names)];
-              if (type === 'leave') {
-                const sampleDesc = entries[0]?.desc || '';
-                const reason = sampleDesc.replace(/^[^\u4e00-\u9fa5]*/,'').replace(/请假/,'').trim();
-                return (typeIcon[type]||'') + uniqueNames.join('、') + ' 请假' + (reason ? '（'+reason+'）' : '');
-              }
-              if (type === 'critic' || type === 'praise') {
-                const byDesc = {};
-                entries.forEach(e => {
-                  let key = e.desc.slice(0, 20);
-                  (byDesc[key] = byDesc[key] || []).push(e.name);
-                });
-                return Object.entries(byDesc).map(([descKey, ns]) => {
-                  const uniqNs = [...new Set(ns.filter(n=>n))];
-                  return (typeIcon[type]||'') + uniqNs.join('、') + ' ' + descKey;
-                }).join('；');
-              }
-              return entries.map(e => (typeIcon[type]||'') + (e.name ? e.name+' ':'') + e.desc).join('；');
-            });
-            return `<div class="py-2 border-b border-gray-200/30 last:border-0"><div class="text-xs font-semibold text-gray-500 mb-1">${fmtDate(date)}</div><div class="text-sm text-gray-700 leading-relaxed">${parts.join('　')}</div></div>`;
+            return `<div class="py-2 border-b border-gray-200/30 last:border-0"><div class="text-xs font-semibold text-gray-500 mb-1 sticky top-0 bg-gray-50">${fmtDate(date)} · ${items.length}条</div><div class="space-y-0.5">${entryLines.join('')}</div></div>`;
           });
           return `<div class="divide-y divide-gray-200/30 max-h-[360px] overflow-y-auto">${lines.join('')}</div>` + `<div class="text-xs text-gray-400 pt-1">共 ${logs.length} 条 · ${esc(className(targetCls))}</div>`;
         } else {
