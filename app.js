@@ -1925,14 +1925,15 @@ function classLogBelongsTo(log, cls) {
   if (!log) return false;
   // 1. 新数据：直接读 class 字段
   if (log.class) return log.class === cls;
-  // 2. 旧数据无 class 字段：全文匹配该班学生名（比"必须以人名开头"健壮）
-  const c = log.content || '';
+  // 2. 旧数据无 class 字段：清理前缀后，学生名必须在内容开头附近（前20字内）
+  const c = (log.content || '').trim();
   if (!c) return false;
+  const cleaned = c.replace(/^(一句话记录[：:\s]*|【[^】]+】\s*)+/g, '');
   const clsStudents = (state.students || []).filter(s => s.class === cls);
   for (const s of clsStudents) {
-    if (s.name && c.includes(s.name)) return true;
+    if (s.name && cleaned.indexOf(s.name) < 20) return true;
   }
-  // 3. 没有任何学生名：视为班主任班（通常是全班性记录，如"今天全班表现很好"）
+  // 3. 没有匹配到任何学生名：视为班主任班的全班性记录
   return cls === state.headTeacherClass;
 }
 function renderClassLog() {
@@ -2711,7 +2712,7 @@ function renderReport() {
       <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
     </div>
     <!-- 左右双栏：积分排行（左）+ 班级日志摘要（右） -->
-    <div class="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-4 mb-4">
+    <div class="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-4 mb-4">
       <!-- 左栏：积分排行前10 -->
       <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
         <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行</div>
@@ -2748,9 +2749,18 @@ function renderReport() {
           if (!d) return dstr;
           return weekdays[d.getDay()] + '（' + (d.getMonth()+1) + '月' + d.getDate() + '日）';
         };
-        // 从日志内容提取人名和事件描述（更健壮）
+        // 从日志内容提取人名和事件描述（更健壮，自动清理前缀噪音）
+        const cleanContent = (raw) => {
+          let c = (raw || '').trim();
+          // 去掉来源标记前缀，只保留实质内容
+          c = c.replace(/^(一句话记录[：:]\s*)+/g, '');
+          c = c.replace(/^【考勤】\s*/g, '');
+          c = c.replace(/^【\S+】\s*/g, '');  // 其他【xxx】标记也去掉
+          c = c.trim();
+          return c;
+        };
         const parseLogEntry = (content) => {
-          const c = content || '';
+          const c = cleanContent(content);
           const m = c.match(/^([\u4e00-\u9fa5]{2,4})\s*(?:（[^）]*）)?\s*(?:表扬|批评|提醒|记录)?\s*[：:]?\s*(.*)$/);
           if (m) return { name: m[1], desc: (m[3] || m[2] || c).trim() };
           return { name: '', desc: c };
