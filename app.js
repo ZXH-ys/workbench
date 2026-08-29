@@ -1920,17 +1920,24 @@ function copyText(text) {
 }
 
 // ===================== Class Log（按当前班级筛选，两班分离） =====================
+// 判断一条日志是否属于指定班级（公共函数，供日志页/周报/首页展览复用）
+function classLogBelongsTo(log, cls) {
+  if (!log) return false;
+  // 1. 新数据：直接读 class 字段
+  if (log.class) return log.class === cls;
+  // 2. 旧数据无 class 字段：全文匹配该班学生名（比"必须以人名开头"健壮）
+  const c = log.content || '';
+  if (!c) return false;
+  const clsStudents = (state.students || []).filter(s => s.class === cls);
+  for (const s of clsStudents) {
+    if (s.name && c.includes(s.name)) return true;
+  }
+  // 3. 没有任何学生名：视为班主任班（通常是全班性记录，如"今天全班表现很好"）
+  return cls === state.headTeacherClass;
+}
 function renderClassLog() {
   const targetCls = state.activeClass;
-  const logs = (state.classLogs || []).filter(l => {
-    if (l.class) return l.class === targetCls;
-    // 旧数据无class字段：从内容推断
-    const c = l.content || '';
-    const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
-    if (!namePart) return false;
-    const stu = state.students.find(s => s.name === namePart);
-    return stu && stu.class === targetCls;
-  });
+  const logs = (state.classLogs || []).filter(l => classLogBelongsTo(l, targetCls));
   const clsName = className(targetCls);
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
@@ -2713,8 +2720,8 @@ function renderReport() {
           const dims = POINT_DIMS.map(d => ({...d, v: ptConvDim(x.s.id, d.id)}));
           const dimGrid = `<div class="grid grid-cols-2 gap-x-2 gap-y-0 text-[10px]">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
           return `<div class="grid grid-cols-[auto_auto_1fr_auto] items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-x-2">
-            <div class="flex items-center gap-1.5"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
-            <span class="text-sm text-gray-800 font-medium">${esc(x.name)}</span>
+            <div class="flex items-center gap-1.5"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
+            <span class="text-sm text-gray-800 font-medium whitespace-nowrap">${esc(x.s.name)}</span>
             <div class="flex justify-center">${dimGrid}</div>
             <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums text-right">${fmtScore(convTotal)}</span>
           </div>`;
@@ -2732,14 +2739,7 @@ function renderReport() {
       ${(() => {
         // ===== 只取当前班级的日志（两班分离） =====
         const targetCls = state.activeClass;
-        let logs = (state.classLogs || []).filter(l => {
-          if (l.class) return l.class === targetCls;
-          const c = l.content || '';
-          const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
-          if (!namePart) return false;
-          const stu = state.students.find(s => s.name === namePart);
-          return stu && stu.class === targetCls;
-        });
+        let logs = (state.classLogs || []).filter(l => classLogBelongsTo(l, targetCls));
         if (!logs.length) return '<div class="text-sm text-gray-400 py-2">暂无日志</div>';
 
         const weekdays = ['周日','周一','周二','周三','周四','周五','周六'];
@@ -6239,15 +6239,7 @@ function homeExhibitLogGroups() {
   const clsFilter = homeExhibit.logClass;
   if (clsFilter && clsFilter !== 'all') {
     const targetCls = clsFilter === 'current' ? state.activeClass : clsFilter;
-    logs = logs.filter(l => {
-      if (l.class) return l.class === targetCls;
-      // 旧数据无class字段：从内容中的学生名推断班级
-      const c = l.content || '';
-      const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
-      if (!namePart) return false;
-      const stu = state.students.find(s => s.name === namePart);
-      return stu && stu.class === targetCls;
-    });
+    logs = logs.filter(l => classLogBelongsTo(l, targetCls));
   }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const dow = (today.getDay() + 6) % 7;
