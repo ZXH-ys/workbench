@@ -43,6 +43,36 @@ function pushSync() {
 }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+// ===== 轻量内容哈希：缓存变更检测用 =====
+// 背景：积分维度签名、成绩派生数据签名原本靠「把整份数据拼成大字符串再比对」判断是否变化。
+// 一次渲染里这些签名会被调用数百次（每个学生每次打分都要查一次），每次都构造几百 KB 的字符串，
+// 光这一项就让积分页 / 周报页卡在 200ms 以上。改成增量哈希后语义不变（内容一变签名就变），
+// 但只做整数运算，不再分配大字符串。
+// 两个不同乘子算出两组 32 位值拼在一起，碰撞概率等价于 64 位，可忽略。
+// 用普通乘法而非 Math.imul：结果等价（乘完再 ^ 会按 ToInt32 截断），
+// 也不需要额外的全局查找，在任何宿主环境下表现一致。
+let _hashA = 0, _hashB = 0;
+function hashStart() { _hashA = 5381; _hashB = 52711; }
+function hashAdd(v) {
+  let n;
+  if (typeof v === 'number') n = v | 0;
+  else if (typeof v === 'boolean') n = v ? 1 : 0;
+  else if (v === null || v === undefined) n = -1;
+  else {
+    const s = String(v);
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      _hashA = ((_hashA * 33) ^ c) | 0;
+      _hashB = ((_hashB * 65599) ^ c) | 0;
+    }
+    return;
+  }
+  _hashA = ((_hashA * 33) ^ n) | 0;
+  _hashB = ((_hashB * 65599) ^ n) | 0;
+}
+function hashEnd() { return _hashA + ':' + _hashB; }
+
 function defaultClassRecordSubjects() {
   return [
     { id:'yuwen', name:'语文', keywords:['语文'] },
@@ -594,6 +624,7 @@ function save(internal) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   _hwNameIdx = null; // 名册可能已变，让姓名索引缓存失效
+  ptDropSigMemo(); // 数据已变，积分维度的签名记忆作废
   pushSync();
   _bumpExhibitDataVer(); // 数据变更后失效展览缓存
 }
@@ -1133,7 +1164,7 @@ function render() {
     <main class="flex-1 flex flex-col h-full overflow-hidden relative">
       ${renderTopBar()}
       <div class="flex-1 overflow-auto p-6 pb-24" id="main-content">
-        ${renderPage()}
+        ${ptWithSigMemo(renderPage)}
       </div>
       ${renderFab()}
     </main>`;
@@ -2075,6 +2106,7 @@ function deleteStudent(id) {
   });
 }
 function openStudentProfile(id) {
+  ptWarmDims(); // 下面要按维度逐项展示分数，先把四个维度缓存一次性准备好
   const s = state.students.find(x=>x.id===id);
   if(!s) return;
   openModal(`${esc(s.name)} · 学生档案`, `
@@ -2088,7 +2120,7 @@ function openStudentProfile(id) {
       </div>
       <div class="grid grid-cols-4 gap-2">
         ${POINT_DIMS.map(d => { const st = dimStyle(d.id);
-          return `<div class="rounded-lg py-2 text-center ${st.bg}"><div class="text-[10px] ${st.text}">${d.icon} ${d.label}</div><div class="text-base font-bold ${st.text}">${fmtScore(ptDimScore(s.id, d.id))}</div></div>`; }).join('')}
+          return `<div class="rounded-lg py-2 text-center ${st.bg}"><div class="text-[10px] ${st.text}">${d.icon} ${d.label}</div><div class="text-base font-bold ${st.text}">${fmtScore(ptDimScoreCached(s.id, d.id))}</div></div>`; }).join('')}
       </div>
       <div class="flex gap-2">
         <button class="flex-1 bg-red-50 text-red-500 py-1.5 rounded-full text-xs hover:bg-red-100" onclick="closeModal(); openPtAdjust('${s.id}','daily',1)">＋ 加分</button>
@@ -3255,6 +3287,8 @@ function crRemoveKeyword(i,ki){
 function setReportRange(r) { reportRange = r; render(); }
 function renderReport() {
   if (reportParentMode) return renderParentReport();
+  // 下面要按学生逐人取总分和四个维度分，先把缓存一次性准备好（否则每人每次都要重算签名）
+  ptEnsureCacheAll();
   const clsStudents = state.students.filter(s => s.class === state.activeClass);
   const isMonth = reportRange === 'month';
   const dayWin = isMonth ? 30 : 7;
@@ -3270,8 +3304,8 @@ function renderReport() {
   const pendingComm = state.communications.filter(c => c.status === '待跟进').length;
   const recent = ptRecent(dayWin).filter(l => inClass.has(l.studentId));
   const recentSum = ptSum(recent);   // 本周期新增积分
-  const top10 = clsStudents.map(s => ({ s, score: ptScoreOf(s.id) })).sort((a, b) => b.score - a.score).slice(0, 10).filter(x => x.score !== 0);
-  const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
+  const top10 = clsStudents.map(s => ({ s, score: ptScoreOfCached(s.id) })).sort((a, b) => b.score - a.score).slice(0, 10).filter(x => x.score !== 0);
+  const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScoreCached(s.id, dim), 0);
   const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
   const totalSum = sportSum + dailySum + examSum + postSum;
   const reportText = `【${className(state.activeClass)} · ${isMonth ? '月报' : '周报'}】
@@ -3766,6 +3800,12 @@ function setPtMode(m) {
   ptRefreshMode(); ptRefreshCards(); ptRefreshList();
 }
 function ptScoreOf(sid) { return pointsMode === 'conv' ? ptConvTotal(sid) : ptRawTotal(sid); }
+// 同上：用于「循环外已 ptEnsureCacheAll 过」的批量场景，直接读总分缓存
+function ptScoreOfCached(sid) { return pointsMode === 'conv' ? (_ptCache.totalConv[sid] || 0) : (_ptCache.totalRaw[sid] || 0); }
+// 与上面同理，总分也有两个只读版本：ptConvTotal/ptRawTotal 内部会调 ptEnsureCacheAll，
+// 50 人逐个调用就是 50×4 次签名计算。批量场景请用这两个。
+function ptConvTotalCached(sid) { return _ptCache.totalConv[sid] || 0; }
+function ptRawTotalCached(sid) { return _ptCache.totalRaw[sid] || 0; }
 function saveHomeCalcStart() {
   const v = document.getElementById('homeCalcStart').value;
   if (!v) return alert('请选择有效的起始日期');
@@ -3813,7 +3853,10 @@ function nowStamp() {
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
-function ptStudentLogs(sid) { return state.points.logs.filter(l => l.studentId === sid); }
+function ptStudentLogs(sid) {
+  if (_ptIdx) return _ptIdx.get(sid) || [];
+  return ((state.points && state.points.logs) || []).filter(l => l && l.studentId === sid);
+}
 // ========== 积分计算缓存：按维度独立缓存，支持显式刷新，不主动全局重算 ==========
 let _ptCache = { sig: {}, raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
 
@@ -3822,26 +3865,90 @@ let _ptCache = { sig: {}, raw: {}, conv: {}, totalConv: {}, totalRaw: {} };
 function ptRosterSig() {
   const list = (state.students || []).filter(s => s && s.class === state.activeClass);
   if (!list.length) return '@';
-  return list.map(s => `${s.id}:${s.name}`).join('|');
+  hashStart();
+  hashAdd(list.length);
+  for (let i = 0; i < list.length; i++) { hashAdd(list[i].id); hashAdd(list[i].name); }
+  return hashEnd();
 }
 function ptBaseSig() { return [state.activeClass, state.headTeacherClass, state.points.calcStartDate, ptRosterSig()].join('#'); }
 function ptLogsSig(dim) {
-  return state.points.logs.filter(l => l.dim === dim).map(l => `${l.id || ''}:${l.studentId || ''}:${l.delta || 0}:${l.date || ''}`).join('|');
+  const logs = (state.points && state.points.logs) || [];
+  hashStart();
+  hashAdd(logs.length);
+  for (let i = 0; i < logs.length; i++) {
+    const l = logs[i];
+    if (!l || l.dim !== dim) continue;
+    hashAdd(l.id); hashAdd(l.studentId); hashAdd(l.delta); hashAdd(l.date);
+  }
+  return hashEnd();
 }
 function ptPositionsSig() {
   const P = state.positions || {};
-  const structure = (P.structure || []).map(p => `${p.id}:${p.pts == null ? '' : p.pts}:${p.category || ''}`).join('|');
-  const assign = Object.keys(P.assign || {}).map(k => `${k}=${(P.assign[k] || []).join(',')}`).join('|');
-  const reps = (P.representatives || []).map(r => `${r.id}:${r.pts == null ? '' : r.pts}:${r.names.join(',')}`).join('|');
-  return [structure, assign, reps].join('#');
+  hashStart();
+  const structure = P.structure || [];
+  hashAdd(structure.length);
+  for (let i = 0; i < structure.length; i++) {
+    const p = structure[i] || {};
+    hashAdd(p.id); hashAdd(p.pts == null ? -1 : p.pts); hashAdd(p.category);
+  }
+  const assign = P.assign || {};
+  const ks = Object.keys(assign);
+  hashAdd(ks.length);
+  for (let i = 0; i < ks.length; i++) {
+    hashAdd(ks[i]);
+    const arr = assign[ks[i]] || [];
+    hashAdd(arr.length);
+    for (let j = 0; j < arr.length; j++) hashAdd(arr[j]);
+  }
+  const reps = P.representatives || [];
+  hashAdd(reps.length);
+  for (let i = 0; i < reps.length; i++) {
+    const r = reps[i] || {};
+    hashAdd(r.id); hashAdd(r.pts == null ? -1 : r.pts);
+    const ns = r.names || [];
+    hashAdd(ns.length);
+    for (let j = 0; j < ns.length; j++) hashAdd(ns[j]);
+  }
+  return hashEnd();
 }
-function ptDimSig(dim) {
+// 真正的签名计算（会遍历全部日志 / 成绩记录）
+function ptDimSigNow(dim) {
   examScoreData(); // 确保 _escSig 最新
   const base = ptBaseSig();
   const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
   if (dim === 'exam') return [base, cap, _escSig].join('#');
   if (dim === 'post') return [base, cap, ptLogsSig('post'), ptPositionsSig()].join('#');
   return [base, cap, ptLogsSig(dim)].join('#');
+}
+// ===== 签名记忆（严格限定在单次渲染内）=====
+// 一次页面渲染里 ptDimSig 会被同一批不变的数据反复调用（实测积分页单页 200+ 次：
+// 50 个学生逐个查总分，每次查询都要重新哈希 1500 条日志 + 900 条成绩记录）。
+// 渲染过程本身不写数据，所以整轮渲染算一次就够，其余直接取记忆值。
+//
+// 作用域刻意收得很窄，宁可多算也不能让过期签名造成"数据改了页面不更新"：
+//   · 只在 ptWithSigMemo() 包住的那次调用期间生效，用 try/finally 保证异常时也撤销；
+//   · 实际只有 render() 渲染页面时会包一层；渲染之外的直接读取（脚本、测试、
+//     以及将来任何新代码）一律现算，不会因为记忆而读到旧值；
+//   · save() 里再兜底撤一次，防止渲染过程中途写数据导致后半程读到旧签名。
+// 另外 ptComputeDim 写完缓存后取签名用 ptDimSigNow 强制现算，
+// 避免把「改动前的旧签名」当成新数据的签名写进缓存。
+let _ptSigMemo = null;
+function ptDropSigMemo() { _ptSigMemo = null; }
+function ptWithSigMemo(fn) {
+  if (_ptSigMemo) return fn();          // 已在批次内，沿用外层记忆
+  const m = {};
+  _ptSigMemo = m;
+  try { return fn(); }
+  finally { if (_ptSigMemo === m) _ptSigMemo = null; }
+}
+function ptDimSig(dim) {
+  const m = _ptSigMemo;
+  if (!m) return ptDimSigNow(dim);
+  const hit = m[dim];
+  if (hit !== undefined) return hit;
+  const v = ptDimSigNow(dim);
+  m[dim] = v;
+  return v;
 }
 function ptAllSig() { return POINT_DIMS.map(d => _ptCache.sig[d.id] || '').join('##'); }
 
@@ -3861,16 +3968,20 @@ function ptComputeDim(dim) {
   const clsStudents = state.students.filter(s => s.class === state.activeClass);
   const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
   let mx = 0;
-  clsStudents.forEach(stu => {
-    const v = ptDimScoreRaw(stu.id, dim) || 0;
-    _ptCache.raw[dim][stu.id] = v;
-    if (v > mx) mx = v;
-  });
+  // 计算期间启用按学生的日志索引，结束后必须清掉（finally 保证异常时也清理）
+  _ptIdx = ptBuildLogIndex();
+  try {
+    clsStudents.forEach(stu => {
+      const v = ptDimScoreRaw(stu.id, dim) || 0;
+      _ptCache.raw[dim][stu.id] = v;
+      if (v > mx) mx = v;
+    });
+  } finally { _ptIdx = null; }
   clsStudents.forEach(stu => {
     const raw = _ptCache.raw[dim][stu.id] || 0;
     _ptCache.conv[dim][stu.id] = (cap <= 0 || raw < 0) ? raw : (mx > 0 ? (raw / mx) * cap : 0);
   });
-  _ptCache.sig[dim] = ptDimSig(dim);
+  _ptCache.sig[dim] = ptDimSigNow(dim);
 }
 
 // 懒加载：签名缺失或与当前数据签名不一致（如更改积分计算起始日/日志/职务/折算）时自动重算
@@ -3889,11 +4000,15 @@ function ptRefreshDim(dim) {
 
 function ptComputeAll() {
   const clsStudents = state.students.filter(s => s.class === state.activeClass);
-  clsStudents.forEach(stu => {
-    let c = 0; POINT_DIMS.forEach(d => { c += (_ptCache.conv[d.id] && _ptCache.conv[d.id][stu.id]) || 0; });
-    _ptCache.totalConv[stu.id] = c;
-    _ptCache.totalRaw[stu.id] = ptTotal(stu.id);
-  });
+  // 总分要按学生逐人取四个维度，同样在本次计算期间启用日志索引
+  _ptIdx = ptBuildLogIndex();
+  try {
+    clsStudents.forEach(stu => {
+      let c = 0; POINT_DIMS.forEach(d => { c += (_ptCache.conv[d.id] && _ptCache.conv[d.id][stu.id]) || 0; });
+      _ptCache.totalConv[stu.id] = c;
+      _ptCache.totalRaw[stu.id] = ptTotal(stu.id);
+    });
+  } finally { _ptIdx = null; }
   _ptCache.sig.all = ptAllSig();
 }
 function ptEnsureCacheAll() {
@@ -3913,6 +4028,29 @@ function ptTotal(sid) {
   return v;
 }
 function ptDimScore(sid, dim) { ptEnsureCacheDim(dim); return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
+// 只读缓存、不检查签名。用于「循环外已 ptEnsureCacheDim / ptEnsureCacheAll 过」的批量场景：
+// 渲染过程不会改数据，所以循环外确保一次 + 循环内直读，与每人各查一次签名结果完全一致，
+// 但把签名计算次数从 学生数×维度数（实测 416 次）降到个位数。
+function ptDimScoreCached(sid, dim) { return (_ptCache.raw[dim] && _ptCache.raw[dim][sid]) || 0; }
+function ptConvScoreCached(sid, dim) { return (_ptCache.conv[dim] && _ptCache.conv[dim][sid]) || 0; }
+// 一次性确保四个维度都就绪
+function ptWarmDims() { POINT_DIMS.forEach(d => ptEnsureCacheDim(d.id)); }
+
+// 积分日志按学生建索引：取分时要按 studentId 过滤，原本每取一次就全表扫一遍
+// （50 人 × 1500 条 ≈ 7.5 万次/页）。索引只在单次同步计算期间有效，用完立即置空，
+// 因此不存在「日志变了索引没更新」的风险。
+let _ptIdx = null;
+function ptBuildLogIndex() {
+  const map = new Map();
+  const logs = (state.points && state.points.logs) || [];
+  for (let i = 0; i < logs.length; i++) {
+    const l = logs[i];
+    if (!l || !l.studentId) continue;
+    const arr = map.get(l.studentId);
+    if (arr) arr.push(l); else map.set(l.studentId, [l]);
+  }
+  return map;
+}
 function ptClassSum(dim) {
   ptEnsureCacheDim(dim);
   return state.students.filter(s => s.class === state.activeClass).reduce((a, s) => a + ((_ptCache.raw[dim] && _ptCache.raw[dim][s.id]) || 0), 0);
@@ -3926,7 +4064,7 @@ function ptRanked(dim) {
   if (dim === 'all') ptEnsureCacheAll(); else ptEnsureCacheDim(dim);
   const arr = state.students.filter(s => s.class === state.activeClass).map(s => ({
     s,
-    score: dim === 'all' ? ptScoreOf(s.id) : (pointsMode === 'conv' ? ((_ptCache.conv[dim] && _ptCache.conv[dim][s.id]) || 0) : ptDimScore(s.id, dim))
+    score: dim === 'all' ? ptScoreOfCached(s.id) : (pointsMode === 'conv' ? ptConvScoreCached(s.id, dim) : ptDimScoreCached(s.id, dim))
   }));
   arr.sort((a, b) => b.score - a.score || String(a.s.name).localeCompare(String(b.s.name), 'zh'));
   // 同分并列：积分相同的学生名次并列（100/90/90/80 → 1/2/2/4），否则并列者会一个拿银牌一个拿铜牌
@@ -4053,6 +4191,10 @@ function renderPoints() {
 
 function renderPtList() {
   const dim = pointsTab;
+  // 下面要逐行显示每人的总分与四个维度分。先一次性把缓存准备好，
+  // 否则每行都会各自调一次 ptEnsureCacheAll（实测 50 行 × 5 次签名 = 250 次）。
+  ptEnsureCacheAll();
+  ptWarmDims();
   let list = ptRanked(dim);
   if (pointsQuery.trim()) {
     const q = pointsQuery.trim().toLowerCase();
@@ -4065,7 +4207,7 @@ function renderPtList() {
     const rk = x.rank || (i + 1);   // 优先用并列后的名次；搜索过滤时退回行号
     const rankShow = pointsQuery.trim() ? `<span class="text-xs text-gray-400">#${i + 1}</span>` : (medals[rk - 1] || `<span class="text-xs text-gray-400 font-medium">${rk}</span>`);
     const pills = dim === 'all'
-      ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = pointsMode === 'conv' ? ptConvDim(x.s.id, d.id) : ptDimScore(x.s.id, d.id);
+      ? POINT_DIMS.map(d => { const st = dimStyle(d.id); const v = pointsMode === 'conv' ? ptConvScoreCached(x.s.id, d.id) : ptDimScoreCached(x.s.id, d.id);
           return `<span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}" title="${d.label}">${d.icon}${fmtScore(v)}</span>`; }).join('')
       : '';
     const w = Math.round(Math.abs(x.score) / maxAbs * 100);
@@ -4863,15 +5005,49 @@ function examScoreInRange() {
 let _escCache = null, _escSig = '';
 function examScoreData() {
   const ed = examDataSafe();
-  const sig = JSON.stringify({
-    a: state.activeClass,
-    s: (state.points && state.points.calcStartDate) || '',
-    ex: ed.exams,
-    rc: ed.records,
-    st: (state.students || []).map(x => (x ? x.name + '|' + x.class : '')),
-    cols: ed.columns.map(c => c.key + c.type + (c.enabled ? '1' : '0')),
-    cfg: state.examScore
-  });
+  // 签名改为增量哈希（原来用 JSON.stringify 整份数据，一次渲染调数百次，是性能大头）。
+  // 哈希覆盖 examScoreInRange 实际读取的全部字段，语义与整份序列化等价。
+  hashStart();
+  hashAdd(state.activeClass);
+  hashAdd((state.points && state.points.calcStartDate) || '');
+  hashAdd(ed.exams.length);
+  for (let i = 0; i < ed.exams.length; i++) {
+    const e = ed.exams[i] || {};
+    hashAdd(e.id); hashAdd(e.name); hashAdd(e.date);
+  }
+  hashAdd(ed.records.length);
+  for (let i = 0; i < ed.records.length; i++) {
+    const r = ed.records[i] || {};
+    hashAdd(r.id); hashAdd(r.examId); hashAdd(r.exam); hashAdd(r.classId); hashAdd(r.class);
+    hashAdd(r.studentName); hashAdd(r.name); hashAdd(r.subject);
+    hashAdd(r.score); hashAdd(r.colType); hashAdd(r.date);
+  }
+  hashAdd(ed.classes.length);
+  for (let i = 0; i < ed.classes.length; i++) {
+    const c = ed.classes[i] || {};
+    hashAdd(c.id); hashAdd(c.name);
+    const ns = c.studentNames || [];
+    hashAdd(ns.length);
+    for (let j = 0; j < ns.length; j++) hashAdd(ns[j]);
+  }
+  hashAdd(ed.subjects.length);
+  for (let i = 0; i < ed.subjects.length; i++) {
+    const s0 = ed.subjects[i] || {};
+    hashAdd(s0.key); hashAdd(s0.name);
+  }
+  hashAdd(ed.columns.length);
+  for (let i = 0; i < ed.columns.length; i++) {
+    const c = ed.columns[i] || {};
+    hashAdd(c.key); hashAdd(c.type); hashAdd(c.enabled ? 1 : 0);
+  }
+  const st = state.students || [];
+  hashAdd(st.length);
+  for (let i = 0; i < st.length; i++) {
+    const x = st[i];
+    hashAdd(x ? x.name : ''); hashAdd(x ? x.class : '');
+  }
+  hashAdd(JSON.stringify(state.examScore == null ? '' : state.examScore));
+  const sig = hashEnd();
   if (_escSig === sig && _escCache) return _escCache;
   _escSig = sig; _escCache = examScoreInRange();
   return _escCache;
@@ -6837,7 +7013,7 @@ function openPtStudent(sid) {
       </div>
       <div class="grid grid-cols-4 gap-2">
         ${POINT_DIMS.map(d => { const st = dimStyle(d.id);
-          return `<div class="rounded-xl p-3 text-center ${st.bg}"><div class="text-[10px] ${st.text}">${d.icon} ${d.label}</div><div class="text-xl font-bold ${st.text} mt-0.5">${fmtScore(ptDimScore(sid, d.id))}</div></div>`; }).join('')}
+          return `<div class="rounded-xl p-3 text-center ${st.bg}"><div class="text-[10px] ${st.text}">${d.icon} ${d.label}</div><div class="text-xl font-bold ${st.text} mt-0.5">${fmtScore(ptDimScoreCached(sid, d.id))}</div></div>`; }).join('')}
       </div>
       <div class="flex gap-2">
         <button class="flex-1 bg-red-50 text-red-500 py-2 rounded-full text-sm hover:bg-red-100" onclick="closeModal(); openPtAdjust('${sid}','daily',1)">＋ 加分</button>
@@ -6958,9 +7134,12 @@ function homeExhibitStudents() {
       && homeExhibit._cachePool === homeExhibit.pool && homeExhibit._dataVer === _exhibitDataVer()) {
     return homeExhibit._cachedStudents;
   }
+  // 先一次性把四个维度 + 总分算好：下面 50 个学生 × 4 个维度若各自调
+  // ptConvDim/ptConvTotal，会触发 200+ 次签名计算（首页首次加载实测卡顿明显）
+  ptEnsureCacheAll();
   const arr = ptRanked(homeExhibit.dim).map(x => {
     const s = x.s;
-    return { s, rank: x.rank, total: ptConvTotal(s.id), dims: POINT_DIMS.map(d => ({ id: d.id, v: ptConvDim(s.id, d.id) })) };
+    return { s, rank: x.rank, total: ptConvTotalCached(s.id), dims: POINT_DIMS.map(d => ({ id: d.id, v: ptConvScoreCached(s.id, d.id) })) };
   });
   const result = homeExhibit.pool > 0 ? arr.slice(0, homeExhibit.pool) : arr;
   homeExhibit._cachedStudents = result;
