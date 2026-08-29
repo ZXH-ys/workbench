@@ -2696,13 +2696,12 @@ function renderReport() {
         ${top10.length ? `<div class="space-y-0.5">${top10.map((x, i) => {
           const convTotal = ptConvTotal(x.s.id);
           const dims = POINT_DIMS.map(d => ({...d, v: ptConvDim(x.s.id, d.id)}));
-          const dimGrid = `<div class="grid grid-cols-2 gap-x-3 gap-y-0 mt-0.5">${dims.map(d => `<span class="text-[11px] text-gray-500"><span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]}">${d.icon}</span><span class="tabular-nums ml-0.5">${fmtScore(d.v)}</span></span>`).join('')}</div>`;
-          return `<div class="py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''}">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 min-w-0"><span class="${i < 3 ? 'text-base font-black' : 'text-xs text-gray-400'} w-5 text-center flex-shrink-0">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200 flex-shrink-0" alt=""><span class="text-sm text-gray-700 truncate">${esc(x.name)}</span></div>
-              <span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'} tabular-nums flex-shrink-0">${fmtScore(convTotal)}</span>
-            </div>
-            ${dimGrid}
+          const dimGrid = `<div class="grid grid-cols-2 gap-x-2 gap-y-0 text-[10px]">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
+          return `<div class="flex items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-2">
+            <div class="flex items-center gap-1.5 flex-shrink-0"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
+            <span class="text-sm text-gray-800 font-medium whitespace-nowrap min-w-0">${esc(x.name)}</span>
+            <div class="flex-1 flex justify-center px-1">${dimGrid}</div>
+            <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums flex-shrink-0">${fmtScore(convTotal)}</span>
           </div>`;
         }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
       </div>
