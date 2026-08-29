@@ -1919,14 +1919,29 @@ function copyText(text) {
   navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板'), ()=>alert('复制失败，请手动选择'));
 }
 
-// ===================== Class Log =====================
+// ===================== Class Log（按当前班级筛选，两班分离） =====================
 function renderClassLog() {
+  const targetCls = state.activeClass;
+  const logs = (state.classLogs || []).filter(l => {
+    if (l.class) return l.class === targetCls;
+    // 旧数据无class字段：从内容推断
+    const c = l.content || '';
+    const namePart = c.replace(/(表扬|批评|提醒|记录|：|:).*$/, '').trim();
+    if (!namePart) return false;
+    const stu = state.students.find(s => s.name === namePart);
+    return stu && stu.class === targetCls;
+  });
+  const clsName = className(targetCls);
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
-    <div class="space-y-4">${state.classLogs.map(l => `
+    <div class="flex items-center justify-between mb-4">
+      <div class="font-bold text-gray-800">📓 ${esc(clsName)} 班级日志 <span class="text-xs text-gray-400 font-normal">（共 ${logs.length} 条）</span></div>
+      <button class="text-sm bg-primary text-white px-3 py-1.5 rounded-full hover:bg-primaryDark text-xs" onclick="openClassLogForm()">+ 写日志</button>
+    </div>
+    <div class="space-y-4">${logs.length ? logs.map(l => `
       <div class="p-4 rounded-xl bg-gray-50 border-l-4 border-primary flex justify-between items-start">
         <div><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-sm text-gray-700">${esc(l.content)}</div></div>
         <button class="text-gray-300 hover:text-red-500" onclick="deleteClassLog('${l.id}')">🗑️</button>
-      </div>`).join('')}</div>
+      </div>`).join('') : '<div class="text-sm text-gray-400 py-8 text-center">' + esc(clsName) + ' 暂无班级日志，点击上方「写日志」添加。</div>'}</div>
   </div>`;
 }
 function openClassLogForm() {
@@ -2697,11 +2712,11 @@ function renderReport() {
           const convTotal = ptConvTotal(x.s.id);
           const dims = POINT_DIMS.map(d => ({...d, v: ptConvDim(x.s.id, d.id)}));
           const dimGrid = `<div class="grid grid-cols-2 gap-x-2 gap-y-0 text-[10px]">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
-          return `<div class="flex items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-2">
-            <div class="flex items-center gap-1.5 flex-shrink-0"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
-            <span class="text-sm text-gray-800 font-medium whitespace-nowrap flex-shrink-0">${esc(x.name)}</span>
-            <div class="flex-1 flex justify-center px-2 min-w-0">${dimGrid}</div>
-            <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums flex-shrink-0 ml-1">${fmtScore(convTotal)}</span>
+          return `<div class="grid grid-cols-[auto_auto_1fr_auto] items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-x-2">
+            <div class="flex items-center gap-1.5"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
+            <span class="text-sm text-gray-800 font-medium">${esc(x.name)}</span>
+            <div class="flex justify-center">${dimGrid}</div>
+            <span class="font-bold ${i < 3 ? 'text-primary' : 'text-gray-600'} text-xs tabular-nums text-right">${fmtScore(convTotal)}</span>
           </div>`;
         }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
       </div>
