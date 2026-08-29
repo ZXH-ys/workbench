@@ -1923,18 +1923,25 @@ function copyText(text) {
 // 判断一条日志是否属于指定班级（公共函数，供日志页/周报/首页展览复用）
 function classLogBelongsTo(log, cls) {
   if (!log) return false;
-  // 1. 新数据：直接读 class 字段
+  // 1. 有明确 class 字段：严格比较，一票否决（不参与下面的推断）
   if (log.class) return log.class === cls;
-  // 2. 旧数据无 class 字段：清理前缀后，学生名必须在内容开头附近（前20字内）
+  // 2. 旧数据无 class 字段：清理前缀后取开头主体
   const c = (log.content || '').trim();
   if (!c) return false;
   const cleaned = c.replace(/^(一句话记录[：:\s]*|【[^】]+】\s*)+/g, '');
+  const head = cleaned.slice(0, 20);
+  // 2a. 反向排除：若开头明确是「别的班」的学生，直接判否
+  const otherStudents = (state.students || []).filter(s => s.class && s.class !== cls);
+  for (const s of otherStudents) {
+    if (s.name && head.indexOf(s.name) >= 0) return false;
+  }
+  // 2b. 正向匹配：开头是本班学生 → 属于本班
   const clsStudents = (state.students || []).filter(s => s.class === cls);
   for (const s of clsStudents) {
-    if (s.name && cleaned.indexOf(s.name) < 20) return true;
+    if (s.name && head.indexOf(s.name) >= 0) return true;
   }
-  // 3. 没有匹配到任何学生名：视为班主任班的全班性记录
-  return cls === state.headTeacherClass;
+  // 2c. 推断不出归属：不显示（不再默认塞给班主任班，避免两班混淆）
+  return false;
 }
 function renderClassLog() {
   const targetCls = state.activeClass;
@@ -2712,14 +2719,14 @@ function renderReport() {
       <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
     </div>
     <!-- 左右双栏：积分排行（左）+ 班级日志摘要（右） -->
-    <div class="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-4 mb-4">
+    <div class="grid grid-cols-1 lg:grid-cols-[1fr_1.25fr] gap-4 mb-4">
       <!-- 左栏：积分排行前10 -->
       <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
         <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行</div>
         ${top10.length ? `<div class="space-y-0.5">${top10.map((x, i) => {
           const convTotal = ptConvTotal(x.s.id);
           const dims = POINT_DIMS.map(d => ({...d, v: ptConvDim(x.s.id, d.id)}));
-          const dimGrid = `<div class="grid grid-cols-2 gap-x-2 gap-y-0 text-[10px]">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
+          const dimGrid = `<div class="flex items-center justify-center gap-1 text-[9px] leading-none">${dims.map(d => `<span class="${['text-emerald-600','text-amber-500','text-sky-500','text-violet-500'][POINT_DIMS.indexOf(d)]} tabular-nums">${d.icon}${fmtScore(d.v)}</span>`).join('')}</div>`;
           return `<div class="grid grid-cols-[auto_auto_1fr_auto] items-center py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} gap-x-2">
             <div class="flex items-center gap-1.5"><span class="${i < 3 ? 'text-sm font-black' : 'text-[11px] text-gray-400'} w-4.5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""></div>
             <span class="text-sm text-gray-800 font-medium whitespace-nowrap">${esc(x.s.name)}</span>
