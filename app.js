@@ -6230,7 +6230,7 @@ function renderHomePointsCard() {
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs text-gray-400">近7天 ${ptSum(week) >= 0 ? '+' : ''}${ptSum(week)} 分 / ${week.length} 条</span>
         <select id="homeDimSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetDim(this.value)">${dimOpts}</select>
-        <select id="homePoolSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(this.value)">${poolOpts}</select>
+        <select id="homePoolSel" data-lock-allow class="text-xs border rounded-lg px-2 py-1 text-gray-600 bg-white" onchange="homeExhibitSetPool(+this.value)">${poolOpts}</select>
         <button class="text-xs border border-primary text-primary px-3 py-1 rounded-full hover:bg-primary/5" data-lock-allow onclick="toggleHomeExhibitFs()">📺 全屏展览</button>
         <a class="text-xs text-primary hover:underline cursor-pointer" data-lock-allow onclick="navigate('points')">积分管理 →</a>
         <button id="homeAutoBtn" class="text-xs border border-gray-300 px-3 py-1 rounded-full hover:bg-gray-50" data-lock-allow onclick="toggleHomeExhibitAuto()">⏸️ 暂停</button>
@@ -6288,8 +6288,9 @@ function _bumpExhibitDataVer() { _exhibitDataVerVal++; homeExhibit._cachedStuden
 
 // 取当前排行列表（带缓存：预计算每人的折算分，避免渲染时重复计算）
 function homeExhibitStudents() {
-  const key = homeExhibit.dim + '|' + homeExhibit.pool;
-  if (homeExhibit._cachedStudents && homeExhibit._cacheDim === homeExhibit.dim && homeExhibit._dataVer === _exhibitDataVer()) {
+  // 注意：缓存必须同时校验 dim 和 pool，否则只切人数(前10→前20)时 dim 未变会命中旧缓存，表现为"点了没反应"
+  if (homeExhibit._cachedStudents && homeExhibit._cacheDim === homeExhibit.dim
+      && homeExhibit._cachePool === homeExhibit.pool && homeExhibit._dataVer === _exhibitDataVer()) {
     return homeExhibit._cachedStudents;
   }
   const arr = ptRanked(homeExhibit.dim).map(x => {
@@ -6473,8 +6474,21 @@ function startHomeExhibitAuto() {
 }
 function stopHomeExhibitAuto() { if (homeExhibit._timer) { clearInterval(homeExhibit._timer); homeExhibit._timer = null; } }
 
-function homeExhibitSetPool(v) { homeExhibit.pool = v; const el = document.getElementById('homePoolSel'); if (el) el.value = String(v); renderHomeExhibit(); renderHomeFs(); }
-function homeExhibitSetDim(v) { homeExhibit.dim = v; const el = document.getElementById('homeDimSel'); if (el) el.value = v; renderHomeExhibit(); renderHomeFs(); }
+// 切换人数/维度时重置分页到第1页，避免停留在越界页码
+function homeExhibitSetPool(v) {
+  homeExhibit.pool = +v;
+  homeExhibit.embedPage = 0; homeExhibit.fsRankPage = 0;
+  const el = document.getElementById('homePoolSel'); if (el) el.value = String(homeExhibit.pool);
+  const fs = document.getElementById('homeFsPool'); if (fs) fs.value = String(homeExhibit.pool);
+  renderHomeExhibit(); renderHomeFs();
+}
+function homeExhibitSetDim(v) {
+  homeExhibit.dim = v;
+  homeExhibit.embedPage = 0; homeExhibit.fsRankPage = 0;
+  const el = document.getElementById('homeDimSel'); if (el) el.value = v;
+  const fs = document.getElementById('homeFsDim'); if (fs) fs.value = v;
+  renderHomeExhibit(); renderHomeFs();
+}
 function setHomeExhibitLogClass(v) {
   homeExhibit.logClass = v;
   homeExhibit.logPage = 0;
@@ -6586,8 +6600,9 @@ function initHomeExhibit() {
   const poolSel = document.getElementById('homePoolSel');
   if (!dimSel || !poolSel) return;
   dimSel.value = homeExhibit.dim; poolSel.value = String(homeExhibit.pool);
-  dimSel.onchange = () => { homeExhibit.dim = dimSel.value; renderHomeExhibit(); };
-  poolSel.onchange = () => { homeExhibit.pool = +poolSel.value; renderHomeExhibit(); };
+  // 统一走 homeExhibitSet*，保证类型一致(pool 为数字)且内嵌/全屏两个面板互相同步
+  dimSel.onchange = () => homeExhibitSetDim(dimSel.value);
+  poolSel.onchange = () => homeExhibitSetPool(+poolSel.value);
   // 初始化日志班级选择器
   const logClsSel = document.getElementById('homeLogClsSel');
   if (logClsSel) logClsSel.value = homeExhibit.logClass;
