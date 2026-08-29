@@ -2653,13 +2653,7 @@ function renderReport() {
   const praiseCount = clsStudents.reduce((a, s) => a + (s.records || []).filter(r => r.type === 'praise').length, 0);
   const pendingComm = state.communications.filter(c => c.status === '待跟进').length;
   const recent = ptRecent(dayWin).filter(l => inClass.has(l.studentId));
-  const top3 = clsStudents.map(s => ({ s, score: ptScoreOf(s.id) })).sort((a, b) => b.score - a.score).slice(0, 3).filter(x => x.score !== 0);
-  const weekTop = (() => {
-    const m = {};
-    recent.forEach(l => { m[l.studentId] = (m[l.studentId] || 0) + l.delta; });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3)
-      .map(([sid, v]) => ({ name: ptStudentName(sid), delta: v }));
-  })();
+  const top10 = clsStudents.map(s => ({ s, score: ptScoreOf(s.id) })).sort((a, b) => b.score - a.score).slice(0, 10).filter(x => x.score !== 0);
   const dimSum = (dim) => clsStudents.reduce((a, s) => a + ptDimScore(s.id, dim), 0);
   const sportSum = dimSum('sport'), dailySum = dimSum('daily'), examSum = dimSum('exam'), postSum = dimSum('post');
   const totalSum = sportSum + dailySum + examSum + postSum;
@@ -2668,10 +2662,9 @@ function renderReport() {
 班级概况：本班共 ${totalStudents} 名学生。
 行为记录统计：${isMonth ? '本月' : '本周'}表扬 ${praiseCount} 次，批评 ${criticCount} 次。
 积分概况：全班累计 ${fmtScore(totalSum)} 分（体育打卡 ${fmtScore(sportSum)}、日常积分 ${fmtScore(dailySum)}、考试赋分 ${fmtScore(examSum)}、任职赋分 ${fmtScore(postSum)}）。
-积分排行前三：${top3.length ? top3.map((x, i) => `${i + 1}. ${x.s.name} ${fmtScore(x.score)}分`).join('，') : '暂无'}
-近${dayWin}天积分进步：${weekTop.length ? weekTop.map(x => `${x.name}(${ptSigned(x.delta)})`).join('、') : '暂无'}
+积分排行前10：${top10.length ? top10.map((x, i) => `${i + 1}. ${x.s.name} ${fmtScore(x.score)}分`).join('，') : '暂无'}
 家校沟通：待跟进 ${pendingComm} 项。
-班级日志摘要：${state.classLogs.slice(0,3).map(l=>l.date+' '+l.content).join('；') || '暂无'}
+班级日志摘要：${state.classLogs.slice(0,5).map(l=>l.date+' '+l.content).join('；') || '暂无'}
 待办重点：${state.todos.filter(t=>!t.done).slice(0,3).map(t=>t.title).join('；') || '无'}`;
 
   const rangeBtn = (r, label) => `<button class="px-3 py-1.5 rounded-full text-sm transition ${reportRange===r?'bg-primary text-white':'bg-gray-100 text-gray-600 hover:bg-primary/10'}" onclick="setReportRange('${r}')">${label}</button>`;
@@ -2696,12 +2689,16 @@ function renderReport() {
       </div>
       <span class="self-start sm:self-auto inline-block px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">${isMonth ? '🗓️ 月报' : '📅 周报'}</span>
     </div>
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-      ${statCard('👨‍👩‍👧‍👦', '学生人数', totalStudents, 'bg-blue-100')}
-      ${statCard('👍', `${isMonth?'本月':'本周'}表扬`, praiseCount, 'bg-emerald-100')}
-      ${statCard('👎', `${isMonth?'本月':'本周'}批评`, criticCount, 'bg-rose-100')}
-      ${statCard('📞', '家校待跟进', pendingComm, 'bg-amber-100')}
+    <!-- 本周速览：一行紧凑统计（替代原来4个大卡片） -->
+    <div class="flex flex-wrap items-center gap-4 mb-4 py-3 px-4 rounded-xl bg-gray-50 border border-gray-100 text-sm">
+      <span class="text-gray-500">👥 ${totalStudents} 名学生</span>
+      <span class="text-gray-300">|</span>
+      <span class="text-emerald-600 font-medium">👍 表扬 ${praiseCount}</span>
+      <span class="text-rose-500 font-medium">👎 批评 ${criticCount}</span>
+      <span class="text-gray-300">|</span>
+      <span class="text-amber-600">📞 待跟进 ${pendingComm}</span>
     </div>
+    <!-- 积分概况 -->
     <div class="rounded-2xl p-4 sm:p-5 bg-primary/5 border border-primary/10 mb-5">
       <div class="flex items-center justify-between mb-3">
         <div class="text-sm text-gray-600 font-medium">积分概况</div>
@@ -2714,31 +2711,44 @@ function renderReport() {
         ${dimBadge('📋', '任职赋分', postSum, 'bg-pink-100 text-pink-700')}
       </div>
     </div>
-    <div class="grid md:grid-cols-2 gap-4 mb-4">
-      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
-        <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行前三</div>
-        ${top3.length ? top3.map((x, i) => `<div class="flex items-center justify-between py-2 ${i < top3.length-1 ? 'border-b border-gray-200/60' : ''}">
-          <div class="flex items-center gap-2"><span class="text-lg">${medals[i]}</span><span class="text-sm text-gray-700">${esc(x.s.name)}</span></div>
-          <span class="font-bold text-primary text-sm">${fmtScore(x.score)}</span>
-        </div>`).join('') : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
-      </div>
-      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
-        <div class="text-sm font-bold text-gray-700 mb-3">📈 近${dayWin}天积分进步</div>
-        ${weekTop.length ? weekTop.map((x, i) => `<div class="flex items-center justify-between py-2 ${i < weekTop.length-1 ? 'border-b border-gray-200/60' : ''}">
-          <div class="flex items-center gap-2"><span class="text-sm text-gray-500 w-5">${i+1}</span><span class="text-sm text-gray-700">${esc(x.name)}</span></div>
-          <span class="font-bold text-emerald-600 text-sm">${ptSigned(x.delta)}</span>
-        </div>`).join('') : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
-      </div>
+    <!-- 积分排行前10（全宽，替代原来的 前三+进步 双栏） -->
+    <div class="rounded-xl p-4 bg-gray-50 border border-gray-100 mb-4">
+      <div class="text-sm font-bold text-gray-700 mb-3">🏆 积分排行前10</div>
+      ${top10.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 gap-0.5">${top10.map((x, i) => `<div class="flex items-center justify-between py-2 px-3 rounded-lg ${i < 3 ? 'bg-amber-50/60' : ''} ${i < top10.length - 1 ? 'border-b border-gray-200/40' : ''}">
+          <div class="flex items-center gap-2"><span class="${i < 3 ? 'text-base' : 'text-xs text-gray-400'} w-5 text-center">${i < 3 ? medals[i] : (i + 1)}</span><img src="${esc(x.s.avatar)}" class="w-6 h-6 rounded-full bg-gray-200" alt=""><span class="text-sm text-gray-700">${esc(x.s.name)}</span></div>
+          <span class="font-bold ${i < 3 ? 'text-primary text-sm' : 'text-gray-600 text-xs'}">${fmtScore(x.score)}</span>
+        </div>`).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无数据</div>'}
     </div>
-    <div class="grid md:grid-cols-2 gap-4">
-      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
-        <div class="text-sm font-bold text-gray-700 mb-2">📓 班级日志摘要</div>
-        <div class="text-sm text-gray-600 leading-relaxed">${state.classLogs.slice(0,3).map(l=>`<div class="py-1">• ${esc(l.date)} ${esc(l.content)}</div>`).join('') || '暂无'}</div>
+    <!-- 班级日志摘要（双模式：按日期 / 按人违纪） -->
+    <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-sm font-bold text-gray-700">📓 班级日志摘要</div>
+        <div class="flex gap-1">
+          <button class="text-xs px-2.5 py-1 rounded-full transition ${reportLogMode === 'date' ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}" onclick="reportLogMode='date';render()">📅 按日期</button>
+          <button class="text-xs px-2.5 py-1 rounded-full transition ${reportLogMode === 'person' ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}" onclick="reportLogMode='person';render()">👤 按人违纪</button>
+        </div>
       </div>
-      <div class="rounded-xl p-4 bg-gray-50 border border-gray-100">
-        <div class="text-sm font-bold text-gray-700 mb-2">📌 待办重点</div>
-        <div class="text-sm text-gray-600 leading-relaxed">${state.todos.filter(t=>!t.done).slice(0,3).map(t=>`<div class="py-1">• ${esc(t.title)}</div>`).join('') || '无'}</div>
-      </div>
+      ${reportLogMode === 'date' ? (
+        state.classLogs.length ? `<div class="space-y-1">${state.classLogs.slice(0, 8).map(l => `<div class="flex items-start gap-2 text-sm py-1.5 border-b border-gray-200/30 last:border-0"><span class="text-xs text-gray-400 whitespace-nowrap mt-0.5">${esc(l.date)}</span><span class="text-gray-700">${esc(l.content)}</span></div>`).join('')}</div>` + (state.classLogs.length > 8 ? `<div class="text-xs text-gray-400 pt-1">...共 ${state.classLogs.length} 条</div>` : '') : '<div class="text-sm text-gray-400 py-2">暂无日志</div>'
+      ) : (() => {
+        // 按人违纪模式：从日志内容提取学生名，统计每人出现次数
+        const personCounts = {};
+        (state.classLogs || []).forEach(l => {
+          // 尝试从日志内容匹配学生名（格式通常为 "姓名 具体事件"）
+          const clsStudents = state.students.filter(s => s.class === state.activeClass);
+          clsStudents.forEach(s => {
+            if (l.content && l.content.includes(s.name)) {
+              personCounts[s.id] = personCounts[s.id] || { name: s.name, avatar: s.avatar, count: 0 };
+              personCounts[s.id].count++;
+            }
+          });
+        });
+        const ranked = Object.values(personCounts).sort((a, b) => b.count - a.count);
+        return ranked.length ? `<div class="grid grid-cols-1 sm:grid-cols-2 gap-1">${ranked.map((p, i) => `<div class="flex items-center justify-between py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-rose-50/60' : ''}">
+            <div class="flex items-center gap-2"><span class="text-xs text-gray-400 w-5">${i + 1}</span><img src="${esc(p.avatar)}" class="w-5 h-5 rounded-full bg-gray-200" alt=""><span class="text-sm text-gray-700">${esc(p.name)}</span></div>
+            <span class="text-xs font-semibold ${i < 3 ? 'text-rose-500' : 'text-gray-500'}">${p.count} 次</span>
+          </div>`).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无违纪记录</div>';
+      })()}
     </div>
   </div>`;
 
@@ -2975,6 +2985,7 @@ let pointsMode = 'conv'; // 'conv' 折算分 | 'raw' 原始分
 
 // ===================== Report: 周报月报 =====================
 let reportParentMode = false; // 家长群截图模式：隐藏操作按钮、放大字号
+let reportLogMode = 'date';   // 班级日志展示模式: 'date'=按日期  'person'=按人违纪次数
 
 function setPtMode(m) {
   pointsMode = m;
@@ -6108,43 +6119,44 @@ function homeExhibitStudents() {
   return result;
 }
 
-// 排行卡（fs=false 内嵌紧凑卡；fs=true 全屏大卡片）—— 使用缓存数据，不实时计算
+// 排行卡（fs=false 内嵌卡；fs=true 全屏大卡）—— 使用缓存数据，不实时计算
 function homeExhibitCardHTML(x, i, fs) {
   const s = x.s;
   const total = x.total;   // 缓存预计算值
   const dims = x.dims;     // 缓存预计算值 [{id, v}, ...]
   const maxV = Math.max(1, ...dims.map(o => o.v));
+  // 暗色背景专用亮色（原 bg-*-400 在深底上太暗）
+  const FS_BAR = { sport:'bg-emerald-400', daily:'bg-amber-400', exam:'bg-sky-400', post:'bg-violet-400' };
   if (fs) {
-    // 全屏大卡片：适合教室投屏，2行×3列布局
-    const _dimByIdFs = id => POINT_DIMS.find(d => d.id === id) || {};
-    const bar = o => { const d = _dimByIdFs(o.id); return `<div class="flex justify-between text-sm text-white/60"><span>${d.icon} ${d.label}</span><span class="font-semibold">${fmtScore(o.v)}</span></div>
-      <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1"><div class="${dimStyle(o.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`; };
+    // 全屏大卡片：教室投屏，2×3 布局，高对比度
+    const _d = id => POINT_DIMS.find(d => d.id === id) || {};
+    const bar = o => `<div class="flex justify-between text-sm text-white/70"><span>${_d(o.id).icon} ${_d(o.id).label}</span><span class="font-bold text-white/90">${fmtScore(o.v)}</span></div>
+      <div class="h-3 bg-white/10 rounded-full overflow-hidden mt-1.5"><div class="${FS_BAR[o.id] || 'bg-white/40'} h-full rounded-full transition-all" style="width:${Math.round(o.v / maxV * 100)}%;min-width:4px;box-shadow:0 0 6px ${FS_BAR[o.id]?.replace('bg-','') || 'fff'}40"></div></div>`;
     const badgeCls = i === 0 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-white/20';
     return `<div class="bg-[var(--fsc)] border border-[var(--fsb)] rounded-2xl p-5 flex flex-col">
       <div class="flex items-center gap-3 mb-3">
         <span class="w-10 h-10 rounded-full ${badgeCls} text-white text-lg font-black flex items-center justify-center flex-shrink-0">${i + 1}</span>
         <img src="${esc(s.avatar)}" class="w-14 h-14 rounded-full bg-white/10 ring-2 ring-white/20" alt="">
-        <div class="flex-1 min-w-0">
-          <div class="text-xl font-bold text-white truncate">${esc(s.name)}</div>
-        </div>
+        <div class="flex-1 min-w-0"><div class="text-xl font-bold text-white truncate">${esc(s.name)}</div></div>
         <div class="text-right"><div class="text-3xl font-black tabular-nums ${i < 3 ? 'text-pink-400' : 'text-white'}">${fmtScore(total)}</div></div>
       </div>
       <div class="space-y-2 mt-auto">${dims.map(bar).join('')}</div>
     </div>`;
   }
-  // 内嵌紧凑卡（高度优化至 ~78px）
-  const bar = o => { const d = (POINT_DIMS.find(D => D.id === o.id) || {}); return `<div class="flex justify-between text-[8px] text-gray-400"><span>${d.icon}${d.label}</span><span>${fmtScore(o.v)}</span></div>
-    <div class="h-[3px] bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.id).bar}" style="width:${Math.round(o.v / maxV * 100)}%"></div></div>`; };
+  // 内嵌卡：全屏卡的等比缩小版（同样结构，紧凑尺寸）
+  const _de = id => POINT_DIMS.find(d => d.id === id) || {};
+  const bar = o => `<div class="flex justify-between text-[10px] text-gray-500"><span>${_de(o.id).icon}${_de(o.id).label}</span><span class="font-semibold text-gray-700">${fmtScore(o.v)}</span></div>
+    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-0.5"><div class="${dimStyle(o.id).bar} h-full rounded-full" style="width:${Math.round(o.v / maxV * 100)}%;min-width:2px"></div></div>`;
   const badgeCls = i === 0 ? 'bg-gradient-to-br from-amber-400 to-amber-500' : i === 1 ? 'bg-gradient-to-br from-gray-400 to-gray-500' : i === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' : 'bg-gray-300';
   const topCls = i === 0 ? 'ring-1.5 ring-amber-300 bg-amber-50/70' : '';
-  return `<div class="bg-white border border-gray-100 rounded-lg p-1.5 ${topCls}">
-    <div class="flex items-center gap-1 mb-0.5">
-      <span class="w-4.5 h-4.5 rounded-full ${badgeCls} text-white text-[9px] font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
-      <img src="${esc(s.avatar)}" class="w-5 h-5 rounded-full bg-gray-100" alt="">
-      <span class="text-[11px] font-semibold text-gray-800 truncate">${esc(s.name)}</span>
-      <span class="ml-auto text-xs font-extrabold text-primary">${fmtScore(total)}</span>
+  return `<div class="bg-white border border-gray-100 rounded-xl p-2.5 shadow-sm ${topCls}">
+    <div class="flex items-center gap-2 mb-1">
+      <span class="w-6 h-6 rounded-full ${badgeCls} text-white text-xs font-bold flex items-center justify-center flex-shrink-0">${i + 1}</span>
+      <img src="${esc(s.avatar)}" class="w-8 h-8 rounded-full bg-gray-100 ring-1 ring-gray-200" alt="">
+      <div class="flex-1 min-w-0"><span class="text-sm font-semibold text-gray-800">${esc(s.name)}</span></div>
+      <span class="text-base font-extrabold text-primary tabular-nums">${fmtScore(total)}</span>
     </div>
-    <div class="space-y-0.5">${dims.map(bar).join('')}</div>
+    <div class="space-y-1 pl-8">${dims.map(bar).join('')}</div>
   </div>`;
 }
 
@@ -6212,7 +6224,7 @@ function renderHomeExhibit() {
     const tp = Math.max(1, Math.ceil(list.length / per));
     if (homeExhibit.embedPage >= tp) homeExhibit.embedPage = 0;
     const page = list.slice(homeExhibit.embedPage * per, (homeExhibit.embedPage + 1) * per);
-    body.innerHTML = `<div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-1.5">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.embedPage * per + i, false)).join('')}</div>`;
+    body.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">${page.map((x, i) => homeExhibitCardHTML(x, homeExhibit.embedPage * per + i, false)).join('')}</div>`;
     nav.innerHTML = (tp > 1
       ? `<button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(-1)">‹</button><span class="text-xs text-gray-400">${homeExhibit.embedPage + 1}/${tp}</span><button class="text-xs px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-50" data-lock-allow onclick="homeEmbedPage(1)">›</button> `
       : '') + `<span class="text-xs text-gray-400">共 ${list.length} 人 · ${dimLabel(homeExhibit.dim)}</span>
@@ -6240,9 +6252,9 @@ function renderHomeExhibit() {
 // 内嵌面板每页数量（根据容器可用高度动态计算）
 function homeEmbedPerPage() {
   const body = document.getElementById('homeExhibitBody');
-  if (!body) return 10;
+  if (!body) return 8;
   const h = body.parentElement ? body.parentElement.clientHeight - 70 : 280;
-  return Math.max(6, Math.floor(h / 82)); // 压缩后每张卡约 82px
+  return Math.max(4, Math.floor(h / 92)); // 新版内嵌卡约 92px
 }
 function homeEmbedPage(d) { homeExhibit.embedPage = Math.max(0, homeExhibit.embedPage + d); renderHomeExhibit(); }
 
