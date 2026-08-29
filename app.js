@@ -2765,37 +2765,77 @@ function renderReport() {
           if (!d) return dstr;
           return weekdays[d.getDay()] + '（' + (d.getMonth()+1) + '月' + d.getDate() + '日）';
         };
-        // 从日志内容提取人名和事件描述（基于学生名单精确匹配）
+        // ===== 日志内容智能解析引擎 v2（基于真实案例训练） =====
+        // 已知原始格式案例：
+        //   "秦梦茹 请假（肚子疼）" → ✅ 标准格式
+        //   "赵吉晨数学作业未完成（赵吉晨日常积分-1）" → 名字紧贴+元数据泄露
+        //   "孙巾杰、秦梦菇、赵吉晨 数学作业未完成且上英语课说话；和上数学课打闹；本周三室内卫生不合格；（赵吉晨日常积分-1、赵吉晨日常积分-1）" → 多人多元数据
+        //   "董一鸣 室外卫生/值日不合格（班长），周四" → 职位标注+日期后缀
+        //   "【考勤】刘语 请假" → 带前缀标记
+
         const cleanContent = (raw) => {
           let c = (raw || '').trim();
-          // 去掉来源标记前缀
-          c = c.replace(/^(一句话记录[：:]\s*)+/g, '');
+          // 1. 来源标记前缀
+          c = c.replace(/^(一句话记录[：:\s]*)+/g, '');
           c = c.replace(/^【[^】]+】\s*/g, '');
-          // 去掉括号内的系统元数据：（xxx 日常积分+/-N）、（xxx +N分）、（周四室外）等位置标注保留
-          c = c.replace(/\([^()]*?(?:日常积分|考试赋分|体育打卡|任职赋分|积分)[^()]*\)/gi, '');
-          c = c.replace(/\([^()]*?[+-]?\d+\s*分?\)/g, '');
-          // 去掉首尾标点残留
-          c = c.replace(/^[，。、:：；;，\s]+/, '').replace(/[，。\s]+$/, '');
+          // 2. 括号内元数据（核心：任何包含"积分/分/加分/扣分"的括号内容全部删除）
+          c = c.replace(/\([^()]*?(?:日常积分|考试赋分|体育打卡|任职赋分|积分|加分|扣分)[^()]*\)/gi, '');
+          // 3. 纯分数括号：（-1）、（+2）、（2分）、（-1分）
+          c = c.replace(/\(\s*[+-]?\d+(\.\d+)?\s*分?\s*\)/g, '');
+          // 4. 多条分数逗号分隔：（xxx-1、yyy-1）残留处理
+          c = c.replace(/[，,]\s*[^\s，,。；;]*?[+-]?\d+(\.\d+)?\s*分?\s*/g, '');
+          // 5. 括号内的职位/角色标注：（班长）、（组长）、（课代表）
+          c = c.replace(/（(?:班长|组长|课代表|学委|体委|生活委员|纪律委员|团支书|学习委员|宣传委员)）/g, '');
+          c = c.replace(/\((?:班长|组长|课代表|学委|体委|生活委员|纪律委员|团支书|学习委员|宣传委员)\)/g, '');
+          // 6. 末尾日期后缀："，周四"、"，8月29日"
+          c = c.replace(/[,，]\s*(?:周[一二三四五六日]|星期[一二三四五六日]|[\d]+月[\d]+日)\s*$/, '');
+          // 7. 清理多余空格和标点
+          c = c.replace(/^[，。、:：；;\s]+/, '').replace(/[，。\s]+$/, '');
+          c = c.replace(/\s{2,}/g, ' ');
           return c.trim();
         };
-        // 用学生名单精确提取人名（比正则猜边界可靠得多）
+
+        // 用学生名单精确提取人名（解决"赵吉晨数"边界问题）
         const extractNamesFromText = (text) => {
           const clsStudents = state.students.filter(s => s.class === targetCls);
+          // 按名字长度降序排列（先匹配长的，避免"张三"误匹配"张三四"中的"张三"）
+          const sorted = [...clsStudents].sort((a, b) => (b.name||'').length - (a.name||'').length);
           const found = [];
           let remaining = text;
-          for (const s of clsStudents) {
-            if (remaining.includes(s.name)) {
+          for (const s of sorted) {
+            if (!s.name || !remaining.includes(s.name)) continue;
+            // 避免重复添加（如"张三、张四"中张三只算一次）
+            if (!found.includes(s.name)) {
               found.push(s.name);
-              remaining = remaining.replace(s.name, ' '.repeat(s.name.length));
             }
+            // 用占位符替换已匹配的名字（保持原长度，避免后续位置偏移错误）
+            remaining = remaining.split(s.name).join('·'.repeat(s.name.length));
           }
-          return { names: found, rest: remaining.replace(/\s+/g, '').trim() };
+          // 清理剩余内容：去掉占位符和多余字符
+          let rest = remaining.replace(/·+/g, ' ').replace(/\s+/g, ' ').trim();
+          return { names: found, rest };
         };
+
         const parseLogEntry = (content) => {
           const c = cleanContent(content);
           if (!c) return { names: [], desc: '', raw: c };
           const { names, rest } = extractNamesFromText(c);
           return { names, desc: rest || c, raw: c };
+        };
+
+        // 将一条可能包含多个事件的日志拆分成多条（按 ；/； 分割）
+        const splitMultiEvents = (text) => {
+          // 按 中文分号 或 英文分号 分割，但保留括号内的分号不被分割
+          const parts = [];
+          let depth = 0, current = '';
+          for (const ch of text) {
+            if (ch === '(' || ch === '（') depth++;
+            else if (ch === ')' || ch === '）') depth--;
+            else if ((ch === ';' || ch === '；') && depth === 0) { parts.push(current.trim()); current = ''; continue; }
+            current += ch;
+          }
+          if (current.trim()) parts.push(current.trim());
+          return parts.filter(p => p.length > 0);
         };
         // 判断事件类型
         const eventTypeOf = (desc) => {
@@ -2808,61 +2848,86 @@ function renderReport() {
         const typeIcon = { leave:'🏥', critic:'⚠️', praise:'👍', chat:'💬', other:'📌' };
 
         if (reportLogMode === 'date') {
-          // ===== 按日期模式：逐条清晰展示 =====
+          // ===== 按日期模式：逐条展示，多人多事件自动拆分 =====
           const groups = {};
           logs.forEach(l => { (groups[l.date] = groups[l.date] || []).push(l); });
           const dates = Object.keys(groups).sort((a,b) => (ptParseDate(a)||0) - (ptParseDate(b)||0));
           const lines = dates.map(date => {
             const items = groups[date];
+            let totalSubItems = 0;
             const entryLines = items.map(l => {
-              const { names, desc } = parseLogEntry(l.content);
-              const t = eventTypeOf(desc);
-              // 智能截断：保留完整人名+描述，只在超长时截断
-              const nameStr = names.length ? '<span class="font-semibold text-gray-800">'+esc(names.join('、'))+'</span>' : '';
-              const fullText = nameStr + (nameStr && desc ? ' ' : '') + esc(desc);
-              return `<div class="flex items-start gap-2 py-1.5 px-2.5 rounded-lg hover:bg-white/60 transition-colors">
-                <span class="text-xs mt-0.5 flex-shrink-0">${typeIcon[t]||'📌'}</span>
-                <span class="text-sm text-gray-700 leading-relaxed">${fullText}</span>
-              </div>`;
-            });
+              const cleaned = cleanContent(l.content);
+              // 尝试按分号拆分为多条子事件
+              const subEvents = splitMultiEvents(cleaned);
+              return subEvents.map(sub => {
+                const { names, desc } = parseLogEntry(sub || cleaned);
+                const t = eventTypeOf(desc);
+                totalSubItems++;
+                // 超长描述智能截断（保留人名完整）
+                const nameStr = names.length ? '<span class="font-semibold text-gray-800">'+esc(names.join('、'))+'</span>' : '';
+                const displayDesc = desc.length > 60 ? desc.slice(0, 60) + '…' : desc;
+                const fullText = nameStr + (nameStr && displayDesc ? ' ' : '') + esc(displayDesc);
+                return `<div class="flex items-start gap-2 py-1.5 px-2.5 rounded-lg hover:bg-white/60 transition-colors">
+                  <span class="text-xs mt-0.5 flex-shrink-0">${typeIcon[t]||'📌'}</span>
+                  <span class="text-sm text-gray-700 leading-relaxed">${fullText}</span>
+                </div>`;
+              }).join('');
+            }).join('');
             return `<div class="py-2.5 border-b border-gray-200/30 last:border-0">
               <div class="text-xs font-semibold text-gray-500 mb-1.5 sticky top-0 bg-gray-50 py-1 -mx-1 px-1">${fmtDate(date)} · ${items.length}条</div>
-              <div class="space-y-0.5">${entryLines.join('')}</div>
+              <div class="space-y-0.5">${entryLines}</div>
             </div>`;
           });
           return `<div class="max-h-[420px] overflow-y-auto">${lines.join('')}</div>` + `<div class="text-xs text-gray-400 pt-1.5">共 ${logs.length} 条 · ${esc(className(targetCls))}</div>`;
         } else {
-          // ===== 按姓名模式：每人显示具体记录 =====
+          // ===== 按姓名模式：每人显示具体记录（去重+合并相同事件） =====
           const clsStudents = state.students.filter(s => s.class === targetCls);
           const personData = {};
           logs.forEach(l => {
-            // 用全文匹配找学生（更可靠）
+            // 用全文匹配找学生
             for (const s of clsStudents) {
               if ((l.content || '').includes(s.name)) {
                 if (!personData[s.id]) personData[s.id] = { name: s.name, avatar: s.avatar, events: [] };
-                personData[s.id].events.push({ content: l.content, date: l.date });
-                break; // 一条日志只归给第一个匹配到的学生
+                const cleanedDesc = cleanContent(l.content);
+                personData[s.id].events.push({ raw: l.content, desc: cleanedDesc, date: l.date });
+                break;
               }
             }
           });
-          const ranked = Object.values(personData).sort((a, b) => b.events.length - a.events.length);
-          return ranked.length ? `<div class="space-y-2 max-h-[360px] overflow-y-auto">${ranked.map((p, i) => {
-            const recentEvents = p.events.slice(0, 3);
-            const eventLines = recentEvents.map(e => {
-              const { desc } = parseLogEntry(e.content);
-              const shortDesc = desc.length > 50 ? desc.slice(0, 50) + '...' : desc;
+          const ranked = Object.values(personData).map(p => {
+            // 去重：相同描述的事件合并，记录次数
+            const descMap = {};
+            p.events.forEach(e => {
+              const key = e.desc; // 用清理后的描述作为去重key
+              if (!descMap[key]) descMap[key] = { desc: key, count: 0, dates: [], raws: [] };
+              descMap[key].count++;
+              descMap[key].dates.push(e.date);
+              descMap[key].raws.push(e.raw);
+            });
+            // 转为数组，按次数降序
+            p.uniqueEvents = Object.values(descMap).sort((a, b) => b.count - a.count);
+            p.totalEvents = p.events.length;
+            return p;
+          }).sort((a, b) => b.totalEvents - a.totalEvents);
+
+          return ranked.length ? `<div class="space-y-2 max-h-[420px] overflow-y-auto">${ranked.map((p, i) => {
+            const showEvents = p.uniqueEvents.slice(0, 5); // 最多显示5条不同事件
+            const eventLines = showEvents.map(e => {
+              const { names, desc } = parseLogEntry(e.desc);
+              const displayDesc = desc.length > 45 ? desc.slice(0, 45) + '…' : desc;
               const t = eventTypeOf(desc);
-              return `<div class="text-xs text-gray-600 pl-4 py-0.5 border-l-2 ${t==='critic'?'border-rose-300':t==='praise'?'border-emerald-300':t==='leave'?'border-blue-300':'border-gray-200'}">${(typeIcon[t]||'·')} ${esc(shortDesc)}</div>`;
+              const countBadge = e.count > 1 ? `<span class="text-[10px] text-gray-400 ml-1 bg-gray-100 px-1 rounded">×${e.count}</span>` : '';
+              return `<div class="text-xs text-gray-600 pl-4 py-1 border-l-2 ${t==='critic'?'border-rose-300 bg-rose-50/20':t==='praise'?'border-emerald-300 bg-emerald-50/20':t==='leave'?'border-blue-300 bg-blue-50/20':'border-gray-200'} rounded-r">${(typeIcon[t]||'·')} ${esc(displayDesc)}${countBadge}</div>`;
             }).join('');
-            const moreHint = p.events.length > 3 ? `<div class="text-xs text-gray-400 pl-4">...等${p.events.length}条</div>` : '';
-            return `<div class="py-1.5 px-3 rounded-lg ${i < 3 ? 'bg-rose-50/40' : ''}">
-              <div class="flex items-center gap-2 mb-1">
-                <span class="text-xs text-gray-400 w-5 flex-shrink-0 font-medium">${i + 1}</span>
-                <img src="${esc(p.avatar)}" class="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" alt="">
-                <span class="text-sm font-medium text-gray-800">${esc(p.name)}</span>
-                <span class="text-xs text-gray-400 ml-auto">${p.events.length}条</span>
+            const moreHint = p.uniqueEvents.length > 5 ? `<div class="text-xs text-gray-400 pl-4 pt-1">...等${p.uniqueEvents.length}类事件</div>` : '';
+            return `<div class="py-2 px-3 rounded-xl ${i < 3 ? 'bg-gradient-to-r from-rose-50/60 to-transparent border border-rose-100/30' : 'hover:bg-gray-50'}">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-xs text-gray-400 w-5 flex-shrink-0 font-bold">${i + 1}</span>
+                <img src="${esc(p.avatar)}" class="w-6 h-6 rounded-full bg-gray-100 flex-shrink-0" alt="">
+                <span class="text-sm font-semibold text-gray-800">${esc(p.name)}</span>
+                <span class="text-xs text-gray-400 ml-auto font-medium">${p.totalEvents}条</span>
               </div>
-              <div>${eventLines}${moreHint}</div>
+              <div class="space-y-0.5">${eventLines}${moreHint}</div>
             </div>`;
           }).join('')}</div>` : '<div class="text-sm text-gray-400 py-2">暂无日志记录</div>';
         }
