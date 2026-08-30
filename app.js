@@ -116,6 +116,7 @@ function defaultState() {
         { id: 'positions', label: '职务与值日', icon: '📋' },
         { id: 'classRecord', label: '课堂记录', icon: '📝' },
         { id: 'behavior', label: '行为记录', icon: '📋' },
+        { id: 'handbook', label: '班级手册', icon: '📖' },
       ]},
       { section: '减负工具', items: [
         { id: 'exam', label: '成绩管理', icon: '📊' },
@@ -127,6 +128,8 @@ function defaultState() {
       { id: 'reminders', label: '待办提醒', icon: '🔔' },
     ],
     positions: defaultPositions(),
+    // ===== 班级手册：仅班主任班可见。两个模块竖排（注意事项 / 违禁事项），条目可增删改 + 上下移动 =====
+    handbook: { notes: [], bans: [] },
     // ===== 一句话记录关键词（运行时可配置，随数据持久化；缺失时回退 REC_TYPE_LABELS_WORDS / REC_TYPE_DESC）=====
     recKeywords: {
       labels: {
@@ -384,7 +387,7 @@ function defaultPositions() {
 function migrateState(s) {
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
-  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass','defaultLocked'].forEach(k => {
+  ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass','defaultLocked','handbook'].forEach(k => {
     if (s[k] == null) s[k] = ds[k];
   });
   // 导航菜单：移除已废弃项，并用默认菜单补全新增项（确保旧数据也能看到新模块）
@@ -398,6 +401,14 @@ function migrateState(s) {
   }
   // 以默认导航为基准，保留现有分组但补全/重置所有菜单项（导航不可用户自定义，直接对齐最新结构最稳）
   s.nav = JSON.parse(JSON.stringify(ds.nav));
+  // 班级手册：结构兜底（旧备份 / 手工导入可能只有一半字段，或元素缺 id/text）
+  if (!s.handbook || typeof s.handbook !== 'object') s.handbook = { notes: [], bans: [] };
+  ['notes', 'bans'].forEach(k => {
+    if (!Array.isArray(s.handbook[k])) s.handbook[k] = [];
+    s.handbook[k] = s.handbook[k].filter(x => x && typeof x === 'object').map(x => ({
+      id: x.id || uid(), text: String(x.text == null ? '' : x.text), ts: x.ts || 0,
+    }));
+  });
   // 职务与值日：补全子字段
   if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
   if (!Array.isArray(s.positions.structure) || !s.positions.structure.length) s.positions.structure = defaultPositions().structure;
@@ -637,7 +648,7 @@ function save(internal) {
 // 注意：'todosReminders' 是历史遗留的错误键名，实际字段是 todos / reminders 两个数组
 const MERGE_ARRAY_KEYS = ['students', 'scores', 'classRecords', 'classLogs', 'communications', 'homework', 'todos', 'reminders', 'templates', 'snapshots', 'classRecordSubjects'];
 // 嵌套数组：父字段是对象（不是数组），需单独下钻合并（attendance 就是被 Array.isArray 漏掉的那个）
-const MERGE_NESTED_ARRAYS = [['attendance', 'logs'], ['examData', 'records'], ['examData', 'exams'], ['points', 'logs']];
+const MERGE_NESTED_ARRAYS = [['attendance', 'logs'], ['examData', 'records'], ['examData', 'exams'], ['points', 'logs'], ['handbook', 'notes'], ['handbook', 'bans']];
 // 纯对象字段：按顶层键补齐（座次表 seatingByClass 是「班级id -> 座次」映射）
 const MERGE_OBJECT_KEYS = ['seatingByClass'];
 
@@ -1186,7 +1197,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior'];
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -1239,7 +1250,7 @@ function setActiveClass(cls) {
   selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior'];
+  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(true); render();   // internal：切换班级属于查看行为，锁定下必须允许
 }
@@ -1318,6 +1329,7 @@ function renderPage() {
     seating: renderSeating, classRecord: renderClassRecord, behavior: renderBehavior,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
+    handbook: renderHandbook,
     search: renderGlobalSearch, profile: renderStudentProfile,
   };
   return (map[currentRoute] || renderHome)();
@@ -2790,6 +2802,123 @@ function deleteReminder(id) {
   const r = state.reminders.find(x=>x.id===id);
   if(!r) return;
   doDelete(()=>state.reminders, id, r.title || '提醒');
+}
+
+// ===================== 班级手册 =====================
+// 两个模块竖着排列：班级注意事项 / 违禁事项。条目支持增、改、删、上移下移。
+// 只读模式（state.locked）下隐藏全部编辑入口，只保留查看；写入函数即便被绕过，
+// 也会被锁定拦截器拦下（saveHbItem/deleteHbItem/moveHbItem 体内均调用 save()）。
+const HB_KINDS = [
+  { key: 'notes', title: '班级注意事项', icon: '📌', ph: '如：早读 7:30 前到班，迟到需补读', dot: 'bg-amber-400' },
+  { key: 'bans',  title: '违禁事项',     icon: '🚫', ph: '如：禁止携带手机进入校园',       dot: 'bg-red-400' },
+];
+function hbBook() {
+  if (!state.handbook || typeof state.handbook !== 'object') state.handbook = { notes: [], bans: [] };
+  if (!Array.isArray(state.handbook.notes)) state.handbook.notes = [];
+  if (!Array.isArray(state.handbook.bans)) state.handbook.bans = [];
+  return state.handbook;
+}
+function hbList(kind) {
+  const b = hbBook();
+  const k = (kind === 'bans') ? 'bans' : 'notes';
+  if (!Array.isArray(b[k])) b[k] = [];
+  return b[k];
+}
+function hbMeta(kind) { return HB_KINDS.find(k => k.key === kind) || HB_KINDS[0]; }
+
+function hbCard(kind) {
+  const m = hbMeta(kind);
+  const list = hbList(kind);
+  const locked = isLocked();
+  const kk = esc(JSON.stringify(m.key));
+  const rows = list.length ? list.map((it, i) => {
+    const id = esc(JSON.stringify(it.id));
+    const ops = locked ? '' : `<div class="flex items-center gap-0.5 flex-shrink-0">
+      <button class="hb-tap text-gray-300 hover:text-primary text-sm" title="上移" ${i === 0 ? 'disabled style="opacity:.3"' : ''} onclick="moveHbItem(${kk},${id},-1)">↑</button>
+      <button class="hb-tap text-gray-300 hover:text-primary text-sm" title="下移" ${i === list.length - 1 ? 'disabled style="opacity:.3"' : ''} onclick="moveHbItem(${kk},${id},1)">↓</button>
+      <button class="hb-tap text-gray-300 hover:text-primary text-sm" title="编辑" onclick="openHbEdit(${kk},${id})">✏️</button>
+      <button class="hb-tap text-gray-300 hover:text-red-500 text-sm" title="删除" onclick="deleteHbItem(${kk},${id})">🗑️</button>
+    </div>`;
+    return `<div class="flex items-start gap-2 p-3 rounded-xl bg-gray-50">
+      <span class="mt-2 w-1.5 h-1.5 rounded-full ${m.dot} flex-shrink-0"></span>
+      <div class="flex-1 min-w-0 text-sm text-gray-800 whitespace-pre-wrap break-words">${esc(it.text)}</div>
+      ${ops}
+    </div>`;
+  }).join('') : `<div class="text-sm text-gray-400 py-6 text-center border border-dashed border-gray-200 rounded-xl">还没有内容，点下方「+ 添加一条」开始</div>`;
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-bold text-gray-800">${m.icon} ${m.title}</h3>
+      <span class="text-xs text-gray-400">${list.length} 条</span>
+    </div>
+    <div class="space-y-2">${rows}</div>
+    ${locked ? '' : `<button class="mt-4 text-sm text-primary hover:underline" onclick="openHbAdd(${kk})">+ 添加一条</button>`}
+  </div>`;
+}
+
+function renderHandbook() {
+  const locked = isLocked();
+  const cls = state.headTeacherClass || state.activeClass || '本班';
+  return `<div class="space-y-6">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div class="text-xs text-gray-400">📖 本手册属于「${esc(cls)}」，仅在班主任班显示</div>
+      ${locked ? '<div class="text-xs text-amber-600">🔒 只读模式：当前仅可查看</div>' : ''}
+    </div>
+    ${HB_KINDS.map(k => hbCard(k.key)).join('')}
+  </div>`;
+}
+
+function openHbAdd(kind) { openHbEdit(kind, null); }
+function openHbEdit(kind, id) {
+  const m = hbMeta(kind);
+  const it = id ? hbList(kind).find(x => x.id === id) : null;
+  if (id && !it) return;
+  openModal((it ? '编辑' : '添加') + m.title, `
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">内容（支持换行，回车可分段）</label>
+        <textarea id="hbText" rows="4" class="w-full border rounded-lg p-2.5 text-sm" placeholder="${esc(m.ph)}">${esc(it ? it.text : '')}</textarea>
+      </div>
+      <div class="flex gap-2">
+        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal()">取消</button>
+        <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHbItem(${esc(JSON.stringify(m.key))},${esc(JSON.stringify(id || ''))})">保存</button>
+      </div>
+    </div>`, 'md');
+  setTimeout(() => {
+    const el = document.getElementById('hbText');
+    if (el) { try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+  }, 50);
+}
+// 三个写操作都加只读前置判断：只读模式下按钮本就隐藏，这里是第二道防线，
+// 保证即便被脚本/其它路径直接调用，内存里的数据也不会被改动（save() 是第三道）。
+function saveHbItem(kind, id) {
+  if (isLocked()) return;
+  const el = document.getElementById('hbText');
+  const text = el ? String(el.value || '').trim() : '';
+  if (!text) return alert('请输入内容');
+  const list = hbList(kind);
+  if (id) {
+    const it = list.find(x => x.id === id);
+    if (it) it.text = text;
+  } else {
+    list.push({ id: uid(), text, ts: Date.now() });
+  }
+  save(); closeModal(); render();
+}
+function deleteHbItem(kind, id) {
+  if (isLocked()) return;
+  const it = hbList(kind).find(x => x.id === id);
+  if (!it) return;
+  doDelete(() => hbList(kind), id, hbMeta(kind).title + '：' + String(it.text || '').slice(0, 12));
+}
+function moveHbItem(kind, id, dir) {
+  if (isLocked()) return;
+  const list = hbList(kind);
+  const i = list.findIndex(x => x.id === id);
+  if (i < 0) return;
+  const j = i + (dir < 0 ? -1 : 1);
+  if (j < 0 || j >= list.length) return;
+  const tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+  save(); render();
 }
 
 // ===================== Duty =====================
