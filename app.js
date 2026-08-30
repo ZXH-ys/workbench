@@ -111,6 +111,7 @@ function defaultState() {
         { id: 'schedule', label: '课程表', icon: '📅' },
         { id: 'students', label: '学生管理', icon: '👨‍👩‍👧‍👦' },
         { id: 'points', label: '积分管理', icon: '🏆' },
+        { id: 'sport', label: '体育管理', icon: '🏃' },
         { id: 'classLog', label: '班级日志', icon: '📓' },
         { id: 'seating', label: '座次表', icon: '🪑' },
         { id: 'positions', label: '职务与值日', icon: '📋' },
@@ -226,6 +227,16 @@ function defaultState() {
       { id: uid(), title: '提交本月教学计划', time: '2026-08-25 17:00' },
     ],
     points: defaultPoints(),
+    // ===== 体育管理（打卡 + 早操）：基线抵扣模型 =====
+    // 默认每天自动获得「打卡分 + 早操分」，只通过一句话记录 / 体育管理页登记异常（负分日志），
+    // 体育总分 = 基线分 + 窗口内日志。按月自动重置：跨月后上月日志仍可查看但不参与计分。
+    sportModule: {
+      enabled: true,
+      startDate: '2026-09-01',   // 基线起算日（新学期干净起点；早于此的旧体育日志不参与计分）
+      checkinPts: 2,             // 每个日历天默认打卡分（含周末/节假日：节假日也要打卡）
+      exercisePts: 2,            // 每个工作日默认早操分（周末不计；法定假日/停操走 noExerciseDays）
+      noExerciseDays: [],        // 无早操日期（ISO）：法定节假日、下雨停操等，手动登记
+    },
     // ===== 成绩分析（两班对比 + 成员预设）=====
     examScore: defaultExamScore(),
     examData: {
@@ -272,7 +283,13 @@ function dimStyle(id) { return DIM_STYLE[id] || DIM_STYLE.daily; }
 function defaultPoints() {
   return {
     rules: [
-      { id: uid(), dim: 'sport', label: '早锻炼打卡', delta: 2, keywords: ['早锻炼','体育早训'] },
+      // ===== 体育异常规则（noBase：命中后不再叠加一句话记录的基础 ±1，规则分值即最终扣分）=====
+      // 基线抵扣模型：打卡+2/天、出操+2/天自动计入体育维度，只在异常时记负分对冲：
+      // 早操迟到 -3（净+1）、早操请假 -2（净+2，留痕不罚）、早操缺勤 -4（净0）、未打卡 -2（丢掉打卡分）
+      { id: uid(), dim: 'sport', label: '早操迟到', delta: -3, keywords: ['早操迟到','出操迟到'], noBase: true },
+      { id: uid(), dim: 'sport', label: '早操请假', delta: -2, keywords: ['早操请假','出操请假'], noBase: true },
+      { id: uid(), dim: 'sport', label: '早操缺勤', delta: -4, keywords: ['早操缺勤','缺操','无故缺操','未出操'], noBase: true },
+      { id: uid(), dim: 'sport', label: '体育未打卡', delta: -2, keywords: ['未打卡','没打卡','没有打卡'], noBase: true },
       { id: uid(), dim: 'sport', label: '体育课积极表现', delta: 3, keywords: ['体育课积极','体育课表现'] },
       { id: uid(), dim: 'sport', label: '课间操标准', delta: 1, keywords: ['课间操'] },
       { id: uid(), dim: 'sport', label: '无故缺席锻炼', delta: -3, keywords: ['缺席锻炼','未参加锻炼'] },
@@ -595,6 +612,40 @@ function migrateState(s) {
       }
       return g;
     });
+  }
+  // 确保「体育管理」入口存在（旧导航可能没有）
+  if (!JSON.stringify(s.nav || []).includes('"sport"')) {
+    s.nav = s.nav.map(g => {
+      if (g && g.section === '日常记录' && Array.isArray(g.items)) {
+        const pts = g.items.findIndex(i => i.id === 'points');
+        const item = { id:'sport', label:'体育管理', icon:'🏃' };
+        if (pts >= 0) g.items.splice(pts + 1, 0, item); else g.items.push(item);
+      }
+      return g;
+    });
+  }
+  // ===== 体育基线抵扣模型迁移（2026-09 起）=====
+  // 1) sportModule 配置补齐；2) 旧「早锻炼打卡+2」规则移除（基线已覆盖，保留会双发）；
+  // 3) 四条体育异常规则补齐（noBase：规则分即最终分，不再叠加基础±1）
+  if (!s.sportModule || typeof s.sportModule !== 'object') s.sportModule = {};
+  const _sm = s.sportModule;
+  if (typeof _sm.enabled !== 'boolean') _sm.enabled = true;
+  if (typeof _sm.startDate !== 'string' || !_sm.startDate) _sm.startDate = '2026-09-01';
+  if (typeof _sm.checkinPts !== 'number') _sm.checkinPts = 2;
+  if (typeof _sm.exercisePts !== 'number') _sm.exercisePts = 2;
+  if (!Array.isArray(_sm.noExerciseDays)) _sm.noExerciseDays = [];
+  if (s.points && Array.isArray(s.points.rules)) {
+    const kw = r => (r.keywords || []).join('/');
+    if (!s.points.rules.some(r => kw(r).includes('早操迟到'))) {
+      s.points.rules.unshift(
+        { id: uid(), dim: 'sport', label: '早操迟到', delta: -3, keywords: ['早操迟到','出操迟到'], noBase: true },
+        { id: uid(), dim: 'sport', label: '早操请假', delta: -2, keywords: ['早操请假','出操请假'], noBase: true },
+        { id: uid(), dim: 'sport', label: '早操缺勤', delta: -4, keywords: ['早操缺勤','缺操','无故缺操','未出操'], noBase: true },
+        { id: uid(), dim: 'sport', label: '体育未打卡', delta: -2, keywords: ['未打卡','没打卡','没有打卡'], noBase: true }
+      );
+    }
+    // 移除旧「早锻炼打卡」规则：基线模型下保留会与基线双发
+    s.points.rules = s.points.rules.filter(r => !(r.dim === 'sport' && (r.label || '').includes('早锻炼打卡')));
   }
   return s;
 }
@@ -1259,7 +1310,7 @@ function renderSidebar() {
   };
   let itemsHtml = '';
   // 9班（任课视角）仅显示部分模块，班主任专属模块（课程表/积分/日志/座次/职务值日/考勤/周报/待办）隐藏
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
+  const teacherOnly = ['schedule','points','sport','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
   const isHead = state.activeClass === state.headTeacherClass;
   state.nav.forEach(group => {
     if (group.section && group.items) {
@@ -1312,7 +1363,7 @@ function setActiveClass(cls) {
   selStudentIds = {};
   state.activeClass = cls;
   // 9班（任课视角）仅保留：首页/学生/课堂/成绩/作业，其余班主任专属模块回退到首页
-  const teacherOnly = ['schedule','points','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
+  const teacherOnly = ['schedule','points','sport','classLog','seating','positions','attendance','reminders','examscore','behavior','handbook'];
   if (cls !== state.headTeacherClass && teacherOnly.includes(currentRoute)) currentRoute = 'home';
   save(true); render();   // internal：切换班级属于查看行为，锁定下必须允许
 }
@@ -1329,7 +1380,7 @@ function renderTopBar() {
     home: '工作台首页', schedule: '课程表', students: '学生管理', classLog: '班级日志',
     seating: '座次表', classRecord: '课堂记录', behavior: '行为记录',
     homework: '作业管理', report: '周报月报', reminders: '待办提醒', points: '积分管理', exam: '成绩管理',
-    examscore: '考试赋分', positions: '职务与值日管理',
+    examscore: '考试赋分', positions: '职务与值日管理', sport: '体育管理',
   };
   const menuBtn = `<button id="menuBtn" data-lock-allow onclick="toggleSidebar()" class="mr-3 text-xl text-gray-600" title="菜单">☰</button>`;
   const themeBtn = `<button id="themeToggle" data-lock-allow onclick="toggleTheme()" class="ml-3 text-lg" title="切换深色模式">🌙</button>`;
@@ -1363,6 +1414,7 @@ function renderTopBar() {
     return `<div class="flex items-center gap-2 text-xs text-gray-500 ml-3">📅 <span class="font-medium text-gray-700">${tw} ${dl}</span>·<span class="text-gray-400">起算</span><input id="homeCalcStart" type="date" value="${esc(sd)}" class="border border-gray-200 rounded px-1 py-0.5 text-xs w-[105px]"><button class="bg-primary/90 text-white px-2 py-0.5 rounded-full text-xs hover:bg-primaryDark whitespace-nowrap" onclick="saveHomeCalcStart()">保存</button></div>`;
   })() : '';
   if (currentRoute === 'home') extra = `<button onclick="openQuickRecord()" class="text-sm text-primary border border-primary px-4 py-1.5 rounded-full hover:bg-primary/5">+ 一句话记录</button>`;
+  else if (currentRoute === 'sport') extra = `<button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openSportCfg()">⚙️ 设置</button>`;
   else if (currentRoute === 'schedule') extra = `<button data-periods class="text-sm text-gray-500 hover:text-primary mr-2">⚙️ 设置节次</button><button data-addcourse class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark">+ 添加课程</button>`;
   else if (currentRoute === 'seating') extra = `<button class="text-sm text-gray-500 border border-gray-300 px-3 py-1.5 rounded-full hover:bg-gray-50 mr-2" onclick="openSeatConfig()">⚙️ 布局</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5 mr-2" onclick="exportSeatTeacher()">👩‍🏫 教师用</button><button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="exportSeatStudent()">🎒 学生用</button>`;
   else if (['students','classLog','homework','reminders'].includes(currentRoute)) {
@@ -1391,6 +1443,7 @@ function renderPage() {
     seating: renderSeating, classRecord: renderClassRecord, behavior: renderBehavior,
     homework: renderHomework, report: renderReport, reminders: renderReminders,
     points: renderPoints, exam: renderExam, examscore: renderExamScore, attendance: renderAttendance, positions: renderPositions,
+    sport: renderSport,
     handbook: renderHandbook,
     search: renderGlobalSearch, profile: renderStudentProfile,
   };
@@ -3779,7 +3832,15 @@ function attInRange(dateStr,start,end){ const d=ptParseDate(dateStr); if(!d) ret
 function attStudentLogsInRange(sid,dim,start,end){ return (state.points.logs||[]).filter(l=>l.studentId===sid && (!dim||l.dim===dim) && attInRange(l.date,start,end) && String(l.auto||'').indexOf('attend-')!==0); }
 function attLateCount(sid,start,end){ let n=0; attStudentLogsInRange(sid,'daily',start,end).forEach(l=>{ if((l.reason||'').indexOf('迟到')>=0) n++; }); return n; }
 function attLeaveCountRange(name,start,end){ let n=0; (state.attendance.logs||[]).forEach(l=>{ if(!attInRange(l.date,start,end)) return; (l.leave||[]).forEach(x=>{ if(x.name===name) n++; }); }); const cur=state.attendance.current; if(cur&&cur.date&&attInRange(cur.date,start,end)&&cur.leave&&Object.prototype.hasOwnProperty.call(cur.leave,name)) n++; return n; }
-function attSportScoreInRange(sid,start,end){ return ptSum(attStudentLogsInRange(sid,'sport',start,end)); }
+function attSportScoreInRange(sid,start,end){
+  let v = ptSum(attStudentLogsInRange(sid,'sport',start,end));
+  // 基线抵扣模型：区间内补上基线分（封顶今天；仅班主任班）。全勤判定按月区间，
+  // 与积分窗口（本月1日起）天然一致——没记异常的学生基线即全班最高。
+  if (sportCfg().enabled && state.activeClass === state.headTeacherClass) {
+    v += sportBaselineInfo(start, end).total;
+  }
+  return v;
+}
 function attClassSportMax(start,end){ let mx=0; state.students.filter(s=>s.class===state.activeClass).forEach(s=>{ const v=attSportScoreInRange(s.id,start,end); if(v>mx) mx=v; }); return mx; }
 function attPostBad(sid,start,end){ let bad=false; (state.points.logs||[]).forEach(l=>{ if(l.studentId!==sid||!attInRange(l.date,start,end)) return; if(l.dim==='post'&&l.auto==='job'&&(l.reason||'').indexOf('履职不到位')>=0) bad=true; if(l.auto==='deduct') bad=true; }); return bad; }
 // 判断学生是否有任职（班干部/课代表/值日生等）
@@ -4031,6 +4092,72 @@ function ptIsLogEffective(log) {
 }
 function ptEffectiveLogs(logs) { return logs.filter(ptIsLogEffective); }
 
+// ===================== 体育基线抵扣模型 =====================
+// 模型：打卡 +N/天（每个日历天）+ 出操 +N/天（每个工作日，减去登记的无早操日）自动计入体育维度，
+// 异常（迟到/请假/缺勤/未打卡）通过负分日志对冲。只对班主任班生效；按月重置：
+// 计分窗口 = 本月1日 ~ 今天，且不早于 sportModule.startDate（跨月后上月日志保留可查但不计分）。
+function sportCfg() {
+  const d = (state && state.sportModule) || {};
+  return {
+    enabled: d.enabled !== false,
+    startDate: d.startDate || '2026-09-01',
+    checkinPts: typeof d.checkinPts === 'number' ? d.checkinPts : 2,
+    exercisePts: typeof d.exercisePts === 'number' ? d.exercisePts : 2,
+    noExerciseDays: Array.isArray(d.noExerciseDays) ? d.noExerciseDays : [],
+  };
+}
+// 体育计分窗口：[max(本月1日, 起始日), 今天]
+function sportWindow() {
+  const cfg = sportCfg();
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const sd = ptParseDate(cfg.startDate);
+  const s = (sd && sd > start) ? new Date(sd.getFullYear(), sd.getMonth(), sd.getDate()) : start;
+  const e = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return { start: s, end: e };
+}
+// 体育日志是否落在计分窗口内（替代全局起始日过滤：体育按月窗口自治）
+function sportLogEffective(log) {
+  const w = sportWindow();
+  const d = ptParseDate(log && log.date);
+  if (!d) return true;
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return day.getTime() >= w.start.getTime() && day.getTime() <= w.end.getTime();
+}
+// 任意区间的基线信息：checkinDays=日历天数，exerciseDays=工作日数（减 noExerciseDays），封顶到今天
+function sportBaselineInfo(start, end) {
+  const cfg = sportCfg();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const s = new Date(Math.max(start.getTime(), (ptParseDate(cfg.startDate) || new Date('2026-09-01')).getTime()));
+  const e = new Date(Math.min(end.getTime(), today.getTime()));
+  const noEx = new Set((cfg.noExerciseDays || []).map(d => String(d || '').slice(0, 10)));
+  let checkinDays = 0, exerciseDays = 0;
+  const cursor = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  while (cursor.getTime() <= e.getTime()) {
+    const iso = todayISO(cursor);
+    checkinDays++;
+    const dow = cursor.getDay(); // 0=周日 6=周六
+    if (dow >= 1 && dow <= 5 && !noEx.has(iso)) exerciseDays++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const checkinPts = checkinDays * cfg.checkinPts;
+  const exercisePts = exerciseDays * cfg.exercisePts;
+  return { checkinDays, exerciseDays, checkinPts, exercisePts, total: checkinPts + exercisePts };
+}
+// 当前计分窗口内的基线总分（仅班主任班；任课班无体育模块，不加基线）
+function sportBaselinePts() {
+  if (!sportCfg().enabled) return 0;
+  if (state.activeClass !== state.headTeacherClass) return 0;
+  const w = sportWindow();
+  return sportBaselineInfo(w.start, w.end).total;
+}
+// 基线签名成分：配置 + 日期（基线每天自动增长，签名必须随日期变化以失效缓存）
+function sportSigExtra() {
+  const cfg = sportCfg();
+  return [cfg.enabled ? 1 : 0, cfg.startDate, cfg.checkinPts, cfg.exercisePts, (cfg.noExerciseDays || []).slice().sort().join('|'), todayISO()].join('#');
+}
+
+
 function nowStamp() {
   // 精确到秒（旧版只到分钟）。积分日志一直走这个格式，ptParseDate 能直接解析。
   return nowStampSec();
@@ -4101,6 +4228,7 @@ function ptDimSigNow(dim) {
   const cap = state.convertRatios[dim] != null ? state.convertRatios[dim] : 0;
   if (dim === 'exam') return [base, cap, _escSig].join('#');
   if (dim === 'post') return [base, cap, ptLogsSig('post'), ptPositionsSig()].join('#');
+  if (dim === 'sport') return [base, cap, ptLogsSig('sport'), sportSigExtra()].join('#');
   return [base, cap, ptLogsSig(dim)].join('#');
 }
 // ===== 签名记忆（严格限定在单次渲染内）=====
@@ -4137,7 +4265,13 @@ function ptAllSig() { return POINT_DIMS.map(d => _ptCache.sig[d.id] || '').join(
 
 // 底层：单人单维度原始分（含考试赋分并入，仅班主任班）
 function ptDimScoreRaw(sid, dim) {
-  let v = ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim)));
+  let v;
+  if (dim === 'sport' && sportCfg().enabled && state.activeClass === state.headTeacherClass) {
+    // 体育维度走基线抵扣模型：基线分 + 计分窗口内的日志（按月窗口，不受全局起始日约束）
+    v = ptSum(ptStudentLogs(sid).filter(l => l.dim === 'sport' && sportLogEffective(l))) + sportBaselinePts();
+  } else {
+    v = ptSum(ptEffectiveLogs(ptStudentLogs(sid).filter(l => l.dim === dim)));
+  }
   if (dim === 'exam' && state.activeClass === state.headTeacherClass) {
     const s = state.students.find(x => x.id === sid);
     if (s) v += examScoreStudentTotal(s.name);
@@ -4747,6 +4881,252 @@ function viewSnapshot(id) {
     </div>`, 'lg');
 }
 function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !== id); save(); openPtHistory(); }
+
+// ===================== 体育管理（打卡 + 早操 · 基线抵扣模型）=====================
+// 模型：每天自动获得「打卡 +2 + 出操 +2」基线分（计入体育维度），只登记异常负分对冲：
+//   早操迟到 -3（当天净+1）· 早操请假 -2（净+2，留痕不罚）· 早操缺勤 -4（净0）· 未打卡 -2（丢打卡分）
+// 计分窗口按月：本月1日 ~ 今天（不早于起始日），跨月自动重置，上月日志保留可查但不计分。
+const SPORT_EVENTS = {
+  noclock: { label: '未打卡',  delta: -2, icon: '🌙', hint: '昨天晚上没有完成体育打卡（丢掉当天打卡分）', defDate: 'yesterday', recType: 'critic' },
+  late:    { label: '早操迟到', delta: -3, icon: '⏰', hint: '早操迟到（当天净 +1）', defDate: 'today', recType: 'critic' },
+  leave:   { label: '早操请假', delta: -2, icon: '🏥', hint: '早操请假（不奖不罚，留痕；不写入当天考勤）', defDate: 'today', recType: 'leave' },
+  absent:  { label: '早操缺勤', delta: -4, icon: '❌', hint: '无故缺勤（当天净 0）', defDate: 'today', recType: 'critic' },
+};
+function sportEvtOf(reason) {
+  for (const k in SPORT_EVENTS) { if (String(reason || '').includes(SPORT_EVENTS[k].label)) return k; }
+  return '';
+}
+function renderSport() {
+  const cfg = sportCfg();
+  const w = sportWindow();
+  const bl = sportBaselineInfo(w.start, w.end);
+  const cls = state.students.filter(s => s.class === state.activeClass);
+  const clsIds = new Set(cls.map(s => s.id));
+  // 本月窗口内的体育日志（异常为主，正向加分也会显示）
+  const logs = (state.points.logs || []).filter(l => l && l.dim === 'sport' && clsIds.has(l.studentId) && sportLogEffective(l));
+  const anom = logs.filter(l => (l.delta || 0) < 0);
+  const anomSum = ptSum(anom);
+  const posSum = ptSum(logs.filter(l => (l.delta || 0) > 0));
+  // 按学生聚合异常次数
+  const anomByStu = {};
+  anom.forEach(l => { anomByStu[l.studentId] = (anomByStu[l.studentId] || 0) + 1; });
+  const anomStus = Object.keys(anomByStu).map(sid => ({
+    s: cls.find(x => x.id === sid),
+    n: anomByStu[sid],
+  })).filter(x => x.s).sort((a, b) => b.n - a.n);
+  const cleanN = cls.length - anomStus.length;
+  const monthLabel = `${w.start.getMonth() + 1}月`;
+  const yday = new Date(); yday.setDate(yday.getDate() - 1);
+
+  const stat = (icon, label, value, sub, cls2) => `
+    <div class="bg-card rounded-2xl shadow-sm p-4 card-hover">
+      <div class="flex items-center gap-2 text-xs text-gray-500">${icon} ${label}</div>
+      <div class="text-2xl font-bold mt-1 ${cls2 || 'text-gray-800'}">${value}</div>
+      <div class="text-[11px] text-gray-400 mt-0.5">${sub}</div>
+    </div>`;
+
+  const inputCard = (kind) => {
+    const ev = SPORT_EVENTS[kind];
+    const defDate = ev.defDate === 'yesterday' ? todayISO(yday) : todayISO();
+    return `<div class="bg-card rounded-2xl shadow-sm p-4">
+      <div class="flex items-center justify-between mb-1">
+        <div class="font-bold text-gray-700 text-sm">${ev.icon} 登记${ev.label}</div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full ${ev.delta < 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}">${ev.delta} 分</span>
+      </div>
+      <p class="text-[11px] text-gray-400 mb-2">${ev.hint}</p>
+      <textarea id="spNames_${kind}" rows="2" class="w-full border rounded-lg p-2 text-sm" placeholder="学生姓名，用逗号/顿号/空格/换行分隔，可一次多人"></textarea>
+      <div class="flex items-center gap-2 mt-2">
+        <label class="text-xs text-gray-500">日期</label>
+        <input id="spDate_${kind}" type="date" value="${defDate}" class="border rounded px-2 py-1 text-xs">
+        <button class="ml-auto bg-primary text-white text-sm px-4 py-1.5 rounded-full hover:bg-primaryDark" onclick="sportQuickSave('${kind}')">记录</button>
+      </div>
+    </div>`;
+  };
+
+  const logRows = logs.slice(0, 60).map(l => {
+    const evt = sportEvtOf(l.reason);
+    const ev = evt ? SPORT_EVENTS[evt] : null;
+    return `<div class="flex items-center gap-2 px-3 py-1.5 rounded-lg ${l.delta < 0 ? 'bg-red-50/60' : 'bg-emerald-50/60'} text-sm">
+      <span class="text-xs text-gray-400 w-[118px] shrink-0">${esc(String(l.date || '').slice(0, 10))}</span>
+      <span class="font-medium w-16 shrink-0 truncate">${esc(l.studentName || ptStudentName(l.studentId))}</span>
+      <span class="flex-1 truncate text-gray-600">${ev ? ev.icon + ' ' + ev.label : esc(l.reason || '')}</span>
+      <span class="font-bold ${ptDeltaCls(l.delta)} w-12 text-right">${ptSigned(l.delta)}</span>
+      <button class="text-gray-300 hover:text-red-500 text-xs" onclick="sportDelLog('${l.id}')" title="撤销这条">✕</button>
+    </div>`;
+  }).join('') || `<div class="text-sm text-gray-400 py-6 text-center">本月窗口内还没有体育记录 —— 全班默认全勤，基线分照常累计。</div>`;
+
+  const anomChips = anomStus.length ? anomStus.map(x =>
+    `<span class="px-2.5 py-1 rounded-full bg-red-50 text-red-500 text-xs">${esc(x.s.name)} ×${x.n}</span>`).join('') :
+    `<span class="text-xs text-emerald-600">🎉 本月全班无异常</span>`;
+
+  const noExList = (cfg.noExerciseDays || []).slice().sort().map((d, i) =>
+    `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs">${esc(String(d).slice(0, 10))}
+      <button class="text-gray-300 hover:text-red-500" onclick="sportDelNoEx(${i})">✕</button></span>`).join('')
+    || `<span class="text-xs text-gray-400">暂无（法定节假日/停操日在此登记，当天不计早操基线）</span>`;
+
+  return `<div class="space-y-4">
+    <div class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 rounded-2xl p-4 text-sm text-gray-600 leading-relaxed">
+      <b class="text-emerald-700">🏃 基线抵扣模型</b>：每天自动计入 <b>打卡 +${cfg.checkinPts}（每个日历天，含周末节假日）</b> + <b>出操 +${cfg.exercisePts}（每个工作日）</b>，
+      无需逐日记录；只登记异常（负分对冲）。${monthLabel}窗口：${todayISO(w.start)} ~ 今天 · 起始日 ${esc(cfg.startDate)}。
+      <span class="text-gray-400">跨月自动重置，上月记录保留可查但不计分。也可继续用首页「一句话记录」输入「张三、李四早操迟到」等。</span>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      ${stat('📅', '本月基线分', '+' + fmtScore(bl.total), `打卡 ${bl.checkinDays}天×${cfg.checkinPts} + 出操 ${bl.exerciseDays}天×${cfg.exercisePts}`, 'text-emerald-600')}
+      ${stat('⚠️', '本月异常扣分', fmtScore(anomSum), `共 ${anom.length} 条`, anomSum < 0 ? 'text-red-500' : 'text-gray-800')}
+      ${stat('👍', '本月额外加分', '+' + fmtScore(posSum), '体育课表现等正向记录', 'text-amber-600')}
+      ${stat('🏅', '本月暂无异常', cleanN + '/' + cls.length, '体育全勤判定标准不变', cleanN === cls.length ? 'text-emerald-600' : 'text-gray-800')}
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      ${inputCard('noclock')}
+      <div class="bg-card rounded-2xl shadow-sm p-4">
+        <div class="font-bold text-gray-700 text-sm mb-1">🌅 早操异常登记</div>
+        <p class="text-[11px] text-gray-400 mb-2">选择异常类型，一次粘贴多人名单。</p>
+        <div class="flex flex-wrap gap-2 mb-2">
+          ${['late','leave','absent'].map((k, i) => {
+            const ev = SPORT_EVENTS[k];
+            return `<label class="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+              <input type="radio" name="spEvt" value="${k}" ${i === 0 ? 'checked' : ''} class="accent-primary">
+              ${ev.icon} ${ev.label} <span class="text-xs ${ptDeltaCls(ev.delta)}">${ev.delta}</span>
+            </label>`;
+          }).join('')}
+        </div>
+        <textarea id="spNames_ex" rows="2" class="w-full border rounded-lg p-2 text-sm" placeholder="学生姓名，用逗号/顿号/空格/换行分隔，可一次多人"></textarea>
+        <div class="flex items-center gap-2 mt-2">
+          <label class="text-xs text-gray-500">日期</label>
+          <input id="spDate_ex" type="date" value="${todayISO()}" class="border rounded px-2 py-1 text-xs">
+          <button class="ml-auto bg-primary text-white text-sm px-4 py-1.5 rounded-full hover:bg-primaryDark" onclick="sportQuickSave('ex')">记录</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-card rounded-2xl shadow-sm p-4">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-gray-700 text-sm">📋 本月体育记录（前 60 条）</div>
+        <button class="text-xs text-primary hover:underline" onclick="openPtLogs()">在积分日志中管理</button>
+      </div>
+      <div class="space-y-1 max-h-72 overflow-y-auto">${logRows}</div>
+    </div>
+
+    <div class="bg-card rounded-2xl shadow-sm p-4 space-y-3">
+      <div class="font-bold text-gray-700 text-sm">🚫 无早操日（不计出操基线）</div>
+      <div class="flex flex-wrap gap-2 items-center">
+        ${noExList}
+        <button class="text-xs text-primary border border-primary px-2.5 py-1 rounded-full hover:bg-primary/5" onclick="openSportCfg()">+ 登记日期</button>
+      </div>
+      <div class="text-xs text-gray-500 pt-1 border-t">
+        本月有异常的学生：${anomChips}
+      </div>
+    </div>
+  </div>`;
+}
+// 体育管理页快捷登记：按类型写体育维度负分日志 + 班级日志汇总（不写学生行为档案，避免与一句话记录重复）
+function sportQuickSave(kind) {
+  const isEx = kind === 'ex';
+  if (isEx) {
+    const sel = document.querySelector('input[name="spEvt"]:checked');
+    kind = sel ? sel.value : 'late';
+  }
+  const ev = SPORT_EVENTS[kind];
+  if (!ev) return;
+  const namesEl = document.getElementById('spNames_' + (isEx ? 'ex' : kind));
+  const dateEl = document.getElementById('spDate_' + (isEx ? 'ex' : kind));
+  const names = String((namesEl && namesEl.value) || '').split(/[,，、;；\s\n]+/).map(x => x.trim()).filter(Boolean);
+  const dateStr = (dateEl && dateEl.value) || todayISO();
+  if (!names.length) return alert('请输入学生姓名（可一次多人，用逗号或空格分隔）');
+  const cls = state.students.filter(s => s.class === state.activeClass);
+  const matched = [], unmatched = [];
+  names.forEach(n => {
+    const stu = cls.find(s => s.name === n);
+    if (!stu) { unmatched.push(n); return; }
+    matched.push(stu);
+  });
+  if (!matched.length) return alert('未匹配到学生：' + unmatched.join('、') + '（请检查姓名与「学生管理」一致）');
+  const batchId = uid();
+  const stamp = dateStr + ' ' + new Date().toTimeString().slice(0, 8);
+  matched.forEach(stu => ptWriteLog(stu.id, 'sport', ev.delta, `体育·${ev.label}`, batchId, 'sportmod', stamp));
+  state.classLogs.unshift({ id: uid(), date: nowStamp(), ts: Date.now(), content: `体育管理：${matched.map(s => s.name).join('、')} ${ev.label}（${ev.delta}分/人）` });
+  save(); render();
+  let msg = `已记录：${matched.map(s => s.name).join('、')} ${ev.label}（${ev.delta} 分/人）`;
+  if (unmatched.length) msg += `\n未匹配（跳过）：${unmatched.join('、')}`;
+  alert(msg);
+}
+function sportDelLog(id) {
+  const l = (state.points.logs || []).find(x => x.id === id);
+  if (!l) return;
+  if (!confirm(`撤销这条记录？\n${l.studentName} ${l.reason} ${ptSigned(l.delta)}`)) return;
+  state.points.logs = state.points.logs.filter(x => x.id !== id);
+  save(); render();
+  toast('已撤销');
+}
+// 体育模块设置：起始日 / 每日分值 / 无早操日
+function openSportCfg() {
+  const cfg = sportCfg();
+  const noExRows = (cfg.noExerciseDays || []).slice().sort().map((d, i) =>
+    `<div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 text-sm">
+      <span class="flex-1">${esc(String(d).slice(0, 10))}</span>
+      <button class="text-gray-300 hover:text-red-500 text-xs" onclick="sportDelNoEx(${i})">✕ 删除</button>
+    </div>`).join('') || '<div class="text-xs text-gray-400">暂无登记</div>';
+  openModal('体育模块设置', `
+    <div class="space-y-4">
+      <div class="p-3 rounded-xl bg-emerald-50 border border-emerald-100 text-xs text-emerald-700 leading-relaxed">
+        基线抵扣模型：体育总分 = 基线分（自动累计）+ 窗口内异常日志。按月自动重置。
+        调整分值后，异常日志的固定分值（迟到-3/请假-2/缺勤-4/未打卡-2）不会自动变化，如需同步请在「积分管理 ⚙️ 规则」中修改。
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">基线起算日</label>
+          <input id="spCfgStart" type="date" value="${esc(cfg.startDate)}" class="w-full border rounded-lg p-2 text-sm"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">打卡分/天（含周末）</label>
+          <input id="spCfgCheckin" type="number" step="0.5" min="0" value="${cfg.checkinPts}" class="w-full border rounded-lg p-2 text-sm"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">出操分/工作日</label>
+          <input id="spCfgExercise" type="number" step="0.5" min="0" value="${cfg.exercisePts}" class="w-full border rounded-lg p-2 text-sm"></div>
+      </div>
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs text-gray-500">无早操日（法定节假日 / 停操，当天不计出操基线）</label>
+          <button class="text-xs text-primary border border-primary px-2.5 py-1 rounded-full hover:bg-primary/5" onclick="sportAddNoEx()">+ 登记日期</button>
+        </div>
+        <div class="space-y-1 max-h-40 overflow-y-auto">${noExRows}</div>
+      </div>
+      <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveSportCfg()">保存设置</button>
+    </div>`, 'lg');
+}
+function sportAddNoEx() {
+  const v = prompt('登记无早操日（格式 2026-10-01，可一次多个，用逗号分隔）：', todayISO());
+  if (!v) return;
+  const days = v.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean).map(x => {
+    const d = ptParseDate(x);
+    return d ? todayISO(d) : null;
+  }).filter(Boolean);
+  if (!days.length) return alert('日期格式无法识别，请用 2026-10-01 这样的格式');
+  const set = new Set((state.sportModule && state.sportModule.noExerciseDays) || []);
+  days.forEach(d => set.add(d));
+  state.sportModule = Object.assign({}, state.sportModule, { noExerciseDays: Array.from(set) });
+  save(); openSportCfg();
+}
+function sportDelNoEx(i) {
+  if (!state.sportModule || !Array.isArray(state.sportModule.noExerciseDays)) return;
+  const sorted = state.sportModule.noExerciseDays.slice().sort();
+  const target = sorted[i];
+  state.sportModule.noExerciseDays = state.sportModule.noExerciseDays.filter(d => d !== target);
+  save(); render(); openSportCfg();
+}
+function saveSportCfg() {
+  const start = document.getElementById('spCfgStart').value;
+  const checkin = parseFloat(document.getElementById('spCfgCheckin').value);
+  const exercise = parseFloat(document.getElementById('spCfgExercise').value);
+  if (!start) return alert('请选择基线起算日');
+  if (isNaN(checkin) || checkin < 0 || isNaN(exercise) || exercise < 0) return alert('分值需为不小于 0 的数字');
+  state.sportModule = Object.assign({}, state.sportModule, {
+    startDate: start,
+    checkinPts: checkin,
+    exercisePts: exercise,
+    noExerciseDays: (state.sportModule && state.sportModule.noExerciseDays) || [],
+  });
+  save(); closeModal(); render();
+  toast('体育模块设置已保存');
+}
 
 
 
@@ -7726,7 +8106,7 @@ const QR_SKIP_CHARS = new Set(['帮','被','把','让','给','向','往','从','
 const QR_STOP_CHARS = new Set(['不','没','未','别','无','很','太','挺','都','也','又','再','还','就','才','已','正','在','等','这','那','几','多','少','有','但','而','且','或','各','每','半']);
 
 // 日期表达式（用于识别"今天/本周三/周一…"等，并解析为星期几）
-const QR_DATE_WORDS = ['今天','今日','昨天','昨日','明天','明日',
+const QR_DATE_WORDS = ['今天','今日','昨天','昨日','昨晚','昨夜','明天','明日',
   '本周一','本周二','本周三','本周四','本周五','本周六','本周日',
   '下周','这周','本周',
   '星期一','星期二','星期三','星期四','星期五','星期六','星期日','星期天',
@@ -7778,6 +8158,7 @@ function isDutyClause(c) {
 function qrDayExpr(text) {
   if (/今天|今日/.test(text)) return '今天';
   if (/明天|明日/.test(text)) return '明天';
+  if (/昨晚|昨夜/.test(text)) return '昨晚';
   if (/昨天|昨日/.test(text)) return '昨天';
   const m = text.match(/本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]/);
   return m ? m[0] : null;
@@ -7793,7 +8174,7 @@ function qrResolveDate(text) {
   const fmt = x => todayISO(x);
   if (/今天|今日/.test(text)) return fmt(d);
   if (/明天|明日/.test(text)) return fmt(addDays(1));
-  if (/昨天|昨日/.test(text)) return fmt(addDays(-1));
+  if (/昨晚|昨夜|昨天|昨日/.test(text)) return fmt(addDays(-1));
   if (/前天/.test(text)) return fmt(addDays(-2));
   const wmap = { '一': 0, '二': 1, '三': 2, '四': 3, '五': 4, '六': 5, '日': 6, '天': 6 };
   const m = text.match(/[周礼拜]([一二三四五六日天])/);
@@ -8168,6 +8549,18 @@ function recognizeClause(text, matched) {
       }
     }
   });
+  // 体育语境互斥：句中含体育语境词（早操/出操/打卡等）且已命中体育规则时，
+  // 抑制其它维度的通用规则（如日常维度的「迟到-2」），避免「早操迟到」被双扣。
+  if (rules.length > 1 && /早操|出操|课间操|跑操|体育|打卡/.test(text)) {
+    const sportRules = rules.filter(r => r.rule.dim === 'sport');
+    if (sportRules.length && sportRules.length < rules.length) {
+      for (let i = matched.length - 1; i >= 0; i--) {
+        if (matched[i].kind === 'rule' && matched[i].dim !== 'sport') matched.splice(i, 1);
+      }
+      rules.length = 0;
+      sportRules.forEach(r => rules.push(r));
+    }
+  }
   // 识别记录类型
   let recType = '';
   for (const t of ['critic', 'praise', 'chat', 'leave']) {
@@ -8224,6 +8617,9 @@ function recognizeClause(text, matched) {
   if (/严重|加重|屡教不改|多次违纪/.test(text)) {
     pointDelta = pointDelta < 0 ? -Math.abs(pointDelta) * 2 : Math.abs(pointDelta) * 2;
   }
+  // noBase 规则（体育异常四条）：规则分值即最终分，不再叠加一句话记录的基础 ±1，
+  // 否则「早操迟到」会写成 -1(基础) + -3(规则) = -4，破坏基线抵扣模型的分值设计
+  if (rules.some(r => r.rule.noBase)) pointDelta = 0;
   return { text, content, subjects, homework: !!homeworkHit, homeworkKeyword: homeworkHit, rules, recType, dim, pointDelta, enabled: true };
 }
 
@@ -8570,7 +8966,10 @@ function qrSave() {
       // 学生行为记录 / 请假（仅班主任班；课堂行为只进课堂记录，不重复进行为档案）
       if (recType === 'leave') {
         if (isHead) {
-          addLeave(s.name, content || '请假', true);
+          // 早操/出操请假不写入当天考勤（≠全天请假），只在体育维度留痕扣分，
+          // 避免污染「考勤全勤=本周请假0」的判定
+          const isSportLeave = dim === 'sport' || /早操|出操|课间操|跑操/.test(content || '');
+          if (!isSportLeave) addLeave(s.name, content || '请假', true);
           const recId = uid();
           s.records.unshift({ id: recId, type: 'leave', date: recDate, ts, content: content || '请假' });
           logBehaviorToClassLog(recId, s.name, 'leave', content || '请假', recDate);
