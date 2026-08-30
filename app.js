@@ -7983,6 +7983,7 @@ function parseQuickRecord(text) {
     while (i < allHits.length) {
       let j = i;
       let prefix = ''; // 「A 事件片段 和 B」里的事件片段，需要拼回 B 后面那段的前面
+      let firstOnlyText = ''; // 「A 完成了自己的事，上课和 B 说话」里 A 单独的事件，不共享给 B
       while (j + 1 < allHits.length) {
         const between = text.slice(allHits[j].pos + allHits[j].len, allHits[j + 1].pos);
         if (BETWEEN_CONN.test(between)) { j++; continue; }
@@ -7990,7 +7991,26 @@ function parseQuickRecord(text) {
         // 两人是共同做了这件事，应共享「前缀 + B 之后的描述」，所以吞并后立刻停止，
         // 避免把后面「，孙阳也在说话」这类新分句也连坐进来。
         const m = between.match(QR_SHARED_ACT_RE);
-        if (m && m[1]) { prefix = m[1]; j++; break; }
+        if (m && m[1] && QR_EVENT_HEADS.indexOf(m[1]) >= 0) { prefix = m[1]; j++; break; }
+        // 「袁希诺政治作业未完成，上课和孙阳说话」：A 先有一条独立记录，
+        // 接着「事件头 + 并列词」引出 B 共同做这件事。
+        // 把并列词前面的事件头拆出来作为共享前缀，前面剩余部分只归 A。
+        // 连接词（且/又/还…）分隔的多个子句中，只有最后一段可能是共享事件头。
+        const parts = between.split(QR_CONNECTORS).map(s => s.trim()).filter(Boolean);
+        const last = parts.length ? parts[parts.length - 1] : '';
+        const tailMatch = last.match(QR_SHARED_ACT_RE) || last.match(/(?:^|[，,、；;。:：\s]+)([^\s，,、；;。:：!！?？]{1,8})(和|与|跟|同|一起|一块|一块儿)$/);
+        if (tailMatch) {
+          const maybeHead = tailMatch[1];
+          if (QR_EVENT_HEADS.indexOf(maybeHead) >= 0) {
+            prefix = maybeHead;
+            parts.pop();
+            const leftover = last.slice(0, last.length - tailMatch[0].length).replace(/[，,、；;。:：\s]+$/g, '');
+            if (leftover) parts.push(leftover);
+            firstOnlyText = parts.join('，').replace(/^[，,、；;。:：\s]+|[，,、；;。:：\s]+$/g, '');
+            j++;
+            break;
+          }
+        }
         break;
       }
       const groupStart = allHits[j].pos + allHits[j].len;
@@ -8000,10 +8020,14 @@ function parseQuickRecord(text) {
       if (prefix) sharedText = prefix + sharedText;
       const segDate = qrResolveDate(before + sharedText) || null;
       for (let k = i; k <= j; k++) {
+        let segText = sharedText;
+        if (k === i && firstOnlyText) {
+          segText = firstOnlyText + (sharedText ? '，' + sharedText : '');
+        }
         if (allHits[k].unknown) {
-          rawSegments.push({ student: null, unknownName: allHits[k].name, text: sharedText, date: segDate });
+          rawSegments.push({ student: null, unknownName: allHits[k].name, text: segText, date: segDate });
         } else {
-          rawSegments.push({ student: allHits[k], text: sharedText, date: segDate });
+          rawSegments.push({ student: allHits[k], text: segText, date: segDate });
         }
       }
       prevEnd = groupEnd;
@@ -8172,6 +8196,8 @@ function recognizeClause(text, matched) {
   // 类型标签词用于识别类型，但不再从内容中删除（如「未完成」「迟到」等事实词需要保留）
   let content = text;
   REC_LEADIN.forEach(kw => { if (content.includes(kw)) content = content.split(kw).join(''); });
+  // 剔除句首多余的承接连词（如「也/还在」），避免第二分句生成「也在说话」这类内容
+  content = content.replace(/^(也在|还在|又在|也|还|又)\s*/, '').trim();
   content = content.replace(/\s{2,}/g, ' ').replace(/[，。、；：,.]+$/g, '').replace(/^[，。、；：,.]+/g, '').trim();
   if (!content) content = text;
   // 维度
