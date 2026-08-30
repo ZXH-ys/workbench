@@ -511,6 +511,8 @@ function migrateState(s) {
   if (!Array.isArray(s.attendance.members)) s.attendance.members = [];
   if (!Array.isArray(s.attendance.logs)) s.attendance.logs = [];
   if (s.attendance.current && typeof s.attendance.current !== 'object') s.attendance.current = null;
+  // 请假时刻（精确到秒）：与 leave 平行存放，不动 leave 的 {姓名:原因} 结构，避免影响所有既有读取逻辑
+  if (s.attendance.current && (!s.attendance.current.leaveTs || typeof s.attendance.current.leaveTs !== 'object')) s.attendance.current.leaveTs = {};
   s.attendance.members.forEach(m => { if (!m || typeof m !== 'object') return; if (!Array.isArray(m.weeklyHome)) m.weeklyHome = []; if (typeof m.name !== 'string') m.name = ''; });
   // 将旧考勤 roster 的固定回家周期合并进「学生管理」（attendance.members 不再作为名册来源）
   if (Array.isArray(s.attendance.members)) {
@@ -875,7 +877,7 @@ function attMembers(){
 function attStudentByName(name){ return (state.students||[]).find(s=>s.name===name); }
 function attRecomputeHome(){
   const a=state.attendance; if(!a) return;
-  if(!a.current) a.current={date:attDateKey(new Date()),home:{},leave:{}};
+  if(!a.current) a.current={date:attDateKey(new Date()),home:{},leave:{},leaveTs:{}};
   a.current.home = attDeriveHome();
 }
 function attDeriveHome(){
@@ -884,7 +886,7 @@ function attDeriveHome(){
   return home;
 }
 function attStats(){
-  const cur=((state.attendance||{}).current)||{home:{},leave:{}};
+  const cur=((state.attendance||{}).current)||{home:{},leave:{},leaveTs:{}};
   const total=attMembers().length;
   const homeKeys=Object.keys(cur.home||{}), leaveKeys=Object.keys(cur.leave||{});
   const absent=new Set([...homeKeys,...leaveKeys]);
@@ -892,9 +894,13 @@ function attStats(){
            rate:total?Math.round((total-absent.size)/total*1000)/10:0 };
 }
 function attBuildLog(cur){
-  return { id:uid(), date:cur.date, dateLabel:cur.date, total:attStats().total,
+  return { id:uid(), date:cur.date, dateLabel:cur.date, ts:nowTs(), total:attStats().total,
     home:Object.keys(cur.home||{}),
-    leave:Object.entries(cur.leave||{}).map(([name,reason])=>({name,reason:reason===true?'':reason})),
+    // 快照里把请假的精确时刻一并存档（旧快照没有 leaveTs，time 为空，展示时不伪造）
+    leave:Object.entries(cur.leave||{}).map(([name,reason])=>{
+      const ts=(cur.leaveTs||{})[name]||0;
+      return { name, reason:reason===true?'':reason, ts, time: ts ? nowStampSec(new Date(ts)) : (cur.date||'') };
+    }),
     present:attStats().present, rate:attStats().rate };
 }
 function archiveCurrentAttendance(cur){
@@ -902,17 +908,20 @@ function archiveCurrentAttendance(cur){
   a.logs.unshift(attBuildLog(cur));
   Object.entries(cur.leave||{}).forEach(([name,reason])=>{
     const r=reason===true?'':reason;
-    state.classLogs.unshift({ id:uid(), date:cur.date, content:`【考勤】${name} 请假${r?('（'+r+'）'):''}` });
+    const ts=(cur.leaveTs||{})[name]||0;
+    // 归档日 = 请假发生那天；时刻能追溯就补上，没有就只留日期
+    const d=ts ? nowStampSec(new Date(ts)) : (cur.date||'');
+    state.classLogs.unshift({ id:uid(), date:d, ts:ts||nowTs(), content:`【考勤】${name} 请假${r?('（'+r+'）'):''}` });
   });
 }
 // 第二天打开（首次加载）时：归档前一天快照、清空请假、固定回家按周期保留
 function autoArchiveAttendance(){
   const a=state.attendance; if(!a) return;
   const today=attDateKey(new Date());
-  if(!a.current){ a.current={ date:today, home:attDeriveHome(), leave:{} }; return; }
+  if(!a.current){ a.current={ date:today, home:attDeriveHome(), leave:{}, leaveTs:{} }; return; }
   if(a.current.date !== today){
     archiveCurrentAttendance(a.current);            // 自动保存前一天考勤到历史
-    a.current={ date:today, home:attDeriveHome(), leave:{} }; // 固定回家由周期重新派生（保留），请假清空
+    a.current={ date:today, home:attDeriveHome(), leave:{}, leaveTs:{} }; // 固定回家由周期重新派生（保留），请假清空
     save();
   }
 }
@@ -937,6 +946,59 @@ const todayLabel = (now.getMonth() + 1) + '月' + now.getDate() + '日';
 function formatDate(d) {
   const days = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
   return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 ${days[d.getDay()]}`;
+}
+// ===================== 时间精度（2026-08-30 起：记录精确到秒） =====================
+// 约定：
+//   date —— 事件归档时间，字符串。新记录写作「YYYY-MM-DD HH:mm:ss」；
+//           若用户明确选了/说了另一天（昨天、周三、手选日期），只写「YYYY-MM-DD」。
+//   ts   —— 该条记录**实际录入**的毫秒时间戳（Date.now()），永远有值。
+//   两者分离，才能分清「事情哪天发生」和「这条什么时候记的」。
+//   旧数据只有「8月30日」这类日期、没有 ts，展示时不显示时间（不伪造）。
+const _p2 = n => String(n).padStart(2, '0');
+function nowTs() { return Date.now(); }
+// 「YYYY-MM-DD HH:mm:ss」（本地时区，精确到秒）
+function nowStampSec(d) {
+  const x = d || new Date();
+  return `${x.getFullYear()}-${_p2(x.getMonth() + 1)}-${_p2(x.getDate())} ${_p2(x.getHours())}:${_p2(x.getMinutes())}:${_p2(x.getSeconds())}`;
+}
+// 「YYYY-MM-DD」（本地时区）
+function todayISO(d) {
+  const x = d || new Date();
+  return `${x.getFullYear()}-${_p2(x.getMonth() + 1)}-${_p2(x.getDate())}`;
+}
+// 取出时间部分：'2026-08-30 21:10:03' -> '21:10:03'；无时间返回 ''
+function recTimePart(s) {
+  const m = String(s || '').match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}:\d{2}(?::\d{2})?)/);
+  return m ? m[1] : '';
+}
+// 取出日期部分：'2026-08-30 21:10:03' -> '2026-08-30'
+function recDatePart(s) {
+  const m = String(s || '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : String(s || '');
+}
+// 展示用：新格式 -> 「8月30日 21:10:03」；旧格式（8月30日 / 2026-08-30）原样加日期
+function recDateLabel(s) {
+  const raw = String(s == null ? '' : s).trim();
+  if (!raw) return '';
+  const t = recTimePart(raw);
+  const iso = recDatePart(raw);
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const day = m ? (+m[2]) + '月' + (+m[3]) + '日' : raw;
+  return t ? `${day} ${t}` : day;
+}
+// <input type="datetime-local" step="1"> 需要的初值：'YYYY-MM-DDTHH:mm:ss'
+function dtLocalValue(d) {
+  const x = d || new Date();
+  return `${todayISO(x)}T${_p2(x.getHours())}:${_p2(x.getMinutes())}:${_p2(x.getSeconds())}`;
+}
+// 解析 datetime-local / 手输值 -> 'YYYY-MM-DD HH:mm:ss'（前端补 0 秒）；无法解析返回 ''
+function parseDtLocal(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6] || '00'}`;
+  const d = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return d ? d[0] : s; // 只有日期，或旧格式原样返回
 }
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -1362,15 +1424,15 @@ function renderGlobalSearch() {
   const rows = [];
   // 各数据源统一走空值兜底：任何一处结构损坏都不该让整个搜索页白屏
   (state.classRecords || []).filter(r => r && (!nameSet.size || (r.studentName && nameSet.has(r.studentName))) && kwMatch((r.subject || '') + ' ' + (r.content || ''))).forEach(r => {
-    rows.push({ mod: '课堂', tag: '#EEEDFE', tagc: '#534AB7', name: r.studentName || '', subj: r.subject || '', content: r.content || '', date: r.date || '', go: "navigate('classRecord')" });
+    rows.push({ mod: '课堂', tag: '#EEEDFE', tagc: '#534AB7', name: r.studentName || '', subj: r.subject || '', content: r.content || '', date: recDateLabel(r.date), go: "navigate('classRecord')" });
   });
   // 作业按姓名匹配（旧代码拿 class 去比对姓名，导致按姓名搜不到）
   (state.homework || []).filter(h => h && (!nameSet.size || (hwStudentName(h) && nameSet.has(hwStudentName(h)))) && kwMatch((h.subject || '') + ' ' + (h.title || '') + ' ' + (hwStudentName(h) || ''))).forEach(h => {
-    rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: hwStudentName(h) || '', subj: h.subject || '', content: (h.title || '') + (h.status ? ('（' + h.status + '）') : ''), date: hwNormDate(h.date || h.due) || '', go: "navigate('homework')" });
+    rows.push({ mod: '作业', tag: '#E1F5EE', tagc: '#0F6E56', name: hwStudentName(h) || '', subj: h.subject || '', content: (h.title || '') + (h.status ? ('（' + h.status + '）') : ''), date: recDateLabel(h.date || h.due), go: "navigate('homework')" });
   });
   (state.students || []).filter(s => s && (!nameSet.size || nameSet.has(s.name))).forEach(s => {
     (s.records || []).filter(r => r && kwMatch(r.content || '')).forEach(r => {
-      rows.push({ mod: '行为', tag: '#FAECE7', tagc: '#993C1D', name: s.name, subj: recordTypeLabel(r.type), content: r.content || '', date: r.date || '', go: "openProfile('" + s.id + "')" });
+      rows.push({ mod: '行为', tag: '#FAECE7', tagc: '#993C1D', name: s.name, subj: recordTypeLabel(r.type), content: r.content || '', date: recDateLabel(r.date), go: "openProfile('" + s.id + "')" });
     });
   });
   const _ed = state.examData || {};
@@ -1454,7 +1516,7 @@ function renderStudentProfile() {
   const subjTabs = scoreCols.map(c => `<button class="px-3 py-1.5 rounded-full text-xs font-medium ${profileSubject === c.key ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}" onclick="setProfileSubject('${c.key}')">${esc(c.key)}</button>`).join('');
   const trend = profileTrend(s);
   const crs = state.classRecords.filter(r => r.studentId === s.id).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const crHtml = crs.length ? crs.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无课堂记录</div>';
+  const crHtml = crs.length ? crs.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(recDateLabel(r.date))}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无课堂记录</div>';
   // 作业区块优先读「作业完成情况台账」（有准确状态与历史），无台账记录时再回退到课堂记录
   const hwRecs = (state.homework || [])
     .filter(h => (h.studentId && h.studentId === s.id) || (!h.studentId && h.studentName && h.studentName === s.name) || (hwStudentName(h) === s.name))
@@ -1468,7 +1530,7 @@ function renderStudentProfile() {
     : (function () {
         const hwKw = /未完成|没交|未做|不交|作业|背诵|默写/;
         const hws = crs.filter(r => hwKw.test(r.content || ''));
-        return hws.length ? hws.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(r.date)}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无作业相关记录</div>';
+        return hws.length ? hws.slice(0, 12).map(r => `<div class="p-3 rounded-xl bg-gray-50 mb-2"><div class="flex items-center gap-2 mb-1 flex-wrap"><span class="text-xs px-2 py-0.5 rounded bg-teal-50 text-teal-600 font-medium">${esc(r.subject || '其他')}</span><span class="text-xs text-gray-400">${esc(recDateLabel(r.date))}</span></div><div class="text-sm text-gray-700">${esc(r.content)}</div></div>`).join('') : '<div class="text-gray-400 text-sm">暂无作业相关记录</div>';
       })();
   const beh = { critic: (s.records || []).filter(r => r.type === 'critic').length, praise: (s.records || []).filter(r => r.type === 'praise').length, chat: (s.records || []).filter(r => r.type === 'chat').length, leave: (s.records || []).filter(r => r.type === 'leave').length };
   return `
@@ -1598,7 +1660,7 @@ function renderHomeHead() {
         <button class="text-xs text-primary hover:underline" onclick="navigate('attendance')">考勤管理</button>
       </div>
       ${(() => {
-        const st = attStats(); const cur = ((state.attendance||{}).current) || {home:{},leave:{}};
+        const st = attStats(); const cur = ((state.attendance||{}).current) || {home:{},leave:{},leaveTs:{}};
         const leave = Object.entries(cur.leave||{});
         return `<div class="text-sm text-gray-600 mb-2">应到 ${st.total} · 实到 ${st.present} · 回家 ${st.home} · 请假 ${st.leave}</div>
           <div class="flex flex-wrap items-center gap-1.5">
@@ -1657,7 +1719,7 @@ function renderHomeTeacher() {
       <div class="space-y-3">
         ${records.length ? records.map(r => `
           <div class="p-3 rounded-xl bg-gray-50 text-sm">
-            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(r.studentName || '')}</span></div>
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(r.studentName || '')}${recTimePart(r.date) ? ' · ' + esc(recTimePart(r.date)) : ''}</span></div>
             <div class="text-gray-600 text-xs">${esc(r.content || '').slice(0, 80)}${(r.content || '').length > 80 ? '…' : ''}</div>
           </div>`).join('') : `<div class="text-sm text-gray-400">今日还没有课堂记录，用右上角「一句话记录」快速添加。</div>`}
       </div>
@@ -1673,7 +1735,7 @@ function renderHomeTeacher() {
           return `<div class="p-3 rounded-xl ${undone ? 'bg-red-50/60' : 'bg-gray-50'} text-sm">
             <div class="flex justify-between mb-1">
               <span class="font-medium text-gray-800">${esc(hwStudentName(h) || '未指定')} · ${esc(h.subject || '未指定')}</span>
-              <span class="text-xs px-2 py-0.5 rounded-full ${undone ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(h.status || '已完成')}</span>
+              <span class="flex items-center gap-1.5 flex-shrink-0">${recTimePart(h.date) ? `<span class="text-[10px] text-gray-400">${esc(recTimePart(h.date))}</span>` : ''}<span class="text-xs px-2 py-0.5 rounded-full ${undone ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}">${esc(h.status || '已完成')}</span></span>
             </div>
             ${h.title ? `<div class="text-gray-600 text-xs">${esc(h.title).slice(0, 60)}${(h.title || '').length > 60 ? '…' : ''}</div>` : ''}
           </div>`;
@@ -1701,7 +1763,7 @@ function renderHomeTeacher() {
       <div class="space-y-3">
         ${recentRecords.length ? recentRecords.map(r => `
           <div class="p-3 rounded-xl bg-gray-50 text-sm">
-            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(r.date || '')}</span></div>
+            <div class="flex justify-between mb-1"><span class="font-medium text-gray-800">${esc(r.subject || '课堂')}</span><span class="text-xs text-gray-400">${esc(recDateLabel(r.date))}</span></div>
             <div class="text-gray-600 text-xs">${esc(r.content || '').slice(0, 80)}${(r.content || '').length > 80 ? '…' : ''}</div>
           </div>`).join('') : `<div class="text-sm text-gray-400">还没有课堂记录。</div>`}
       </div>
@@ -2125,7 +2187,7 @@ function openStudentProfile(id) {
           <div class="flex gap-3 p-3 rounded-xl bg-gray-50">
             <div class="mt-0.5 text-lg">${recordTypeEmoji(r.type)}</div>
             <div class="flex-1"><div class="text-sm text-gray-700">${esc(r.content)}</div>
-            <div class="flex items-center gap-2 mt-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span><span class="text-[10px] text-gray-400">${esc(r.date)}</span></div></div>
+            <div class="flex items-center gap-2 mt-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span><span class="text-[10px] text-gray-400">${esc(recDateLabel(r.date))}</span></div></div>
             <button class="text-gray-300 hover:text-red-500" onclick="deleteRecord('${s.id}','${r.id}')">🗑️</button>
           </div>`).join('') : '<div class="text-sm text-gray-400">暂无行为记录</div>'}
       </div>
@@ -2148,7 +2210,7 @@ function openRecordForm(id) {
           <button type="button" class="rec-type-btn flex-1 py-2 rounded-lg border text-sm" data-type="leave" onclick="pickRecordType(this)">请假</button>
         </div>
       </div>
-      <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="recDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">日期时间（精确到秒）</label><input id="recDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm" value="${dtLocalValue()}"></div>
       <div><label class="block text-xs text-gray-500 mb-1">模板（可选，点击套用）</label>
         <select id="recTmpl" class="w-full border rounded-lg p-2 text-sm" onchange="applyRecTmpl(this.value)">
           <option value="">— 不使用模板 —</option>${tplOpts}
@@ -2181,16 +2243,16 @@ function logBehaviorToClassLog(recId, name, type, content, date) {
   if (!state.classLogs) state.classLogs = [];
   // 按姓名回查学生取其班级（原实现引用了此处并不存在的 s，一旦调用即 ReferenceError）
   const stu = (state.students || []).find(x => x.name === name);
-  state.classLogs.unshift({ id: uid(), date: date || todayLabel, content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId, class: (stu && stu.class) || state.activeClass });
+  state.classLogs.unshift({ id: uid(), date: date || nowStampSec(), ts: nowTs(), content: `${name} ${recordTypeLabel(type)}：${content}`, behaviorId: recId, class: (stu && stu.class) || state.activeClass });
 }
 function saveRecord(id) {
   const content = document.getElementById('recContent').value.trim();
-  const date = document.getElementById('recDate').value.trim() || todayLabel;
+  const date = parseDtLocal(document.getElementById('recDate').value) || nowStampSec();
   if(!content) return alert('请输入记录内容');
   lastRecordContent = content;
   const s = state.students.find(x=>x.id===id);
   const recId = uid();
-  s.records.unshift({ id: recId, type: recordType, date, content });
+  s.records.unshift({ id: recId, type: recordType, date, ts: nowTs(), content });
   logBehaviorToClassLog(recId, s.name, recordType, content, date);
   save(); closeModal();
   // 若在行为记录页添加，直接刷新该页（避免弹到学生档案导致列表不更新）
@@ -2292,7 +2354,7 @@ function renderClassLog() {
     </div>
     <div class="space-y-4">${logs.length ? logs.map(l => `
       <div class="p-4 rounded-xl bg-gray-50 border-l-4 border-primary flex justify-between items-start">
-        <div><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-sm text-gray-700">${esc(l.content)}</div></div>
+        <div><div class="text-xs text-gray-400 mb-1">${esc(recDateLabel(l.date))}</div><div class="text-sm text-gray-700">${esc(l.content)}</div></div>
         <button class="text-gray-300 hover:text-red-500" onclick="deleteClassLog('${l.id}')">🗑️</button>
       </div>`).join('') : '<div class="text-sm text-gray-400 py-8 text-center">' + esc(clsName) + ' 暂无班级日志，点击上方「写日志」添加。</div>'}</div>
   </div>`;
@@ -2300,16 +2362,16 @@ function renderClassLog() {
 function openClassLogForm() {
   openModal('写班级日志', `
     <div class="space-y-4">
-      <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="logDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">日期时间（精确到秒）</label><input id="logDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm" value="${dtLocalValue()}"></div>
       <div><label class="block text-xs text-gray-500 mb-1">内容</label><textarea id="logContent" rows="4" class="w-full border rounded-lg p-2 text-sm" placeholder="记录今天的班级情况…"></textarea></div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveClassLog()">保存</button>
     </div>`);
 }
 function saveClassLog() {
   const content = document.getElementById('logContent').value.trim();
-  const date = document.getElementById('logDate').value.trim() || todayLabel;
+  const date = parseDtLocal(document.getElementById('logDate').value) || nowStampSec();
   if(!content) return alert('请输入日志内容');
-  state.classLogs.unshift({ id: uid(), date, content, class: state.activeClass });
+  state.classLogs.unshift({ id: uid(), date, ts: nowTs(), content, class: state.activeClass });
   save(); closeModal(); render();
 }
 function deleteClassLog(id) {
@@ -2323,7 +2385,7 @@ function renderCommunication() {
   return `<div class="bg-white rounded-2xl p-6 shadow-sm">
     <div class="space-y-4">${state.communications.map(c => `
       <div class="p-4 rounded-xl bg-gray-50 flex items-start justify-between">
-        <div class="flex-1"><div class="font-bold text-gray-800 text-sm">${esc(c.student)} · ${esc(c.parent)}</div><div class="text-xs text-gray-500 mt-1">${esc(c.content)}</div></div>
+        <div class="flex-1"><div class="font-bold text-gray-800 text-sm">${esc(c.student)} · ${esc(c.parent)}${c.date ? `<span class="text-[10px] text-gray-400 font-normal ml-2">${esc(recDateLabel(c.date))}</span>` : ''}</div><div class="text-xs text-gray-500 mt-1">${esc(c.content)}</div></div>
         <div class="flex items-center gap-2 ml-3">
           <select class="text-xs border rounded px-2 py-1" onchange="setCommStatus('${c.id}', this.value)">
             <option value="待跟进" ${c.status==='待跟进'?'selected':''}>待跟进</option>
@@ -2340,7 +2402,10 @@ function openCommForm() {
       <div><label class="block text-xs text-gray-500 mb-1">学生</label><input id="commStudent" class="w-full border rounded-lg p-2 text-sm" placeholder="学生姓名"></div>
       <div><label class="block text-xs text-gray-500 mb-1">家长称呼</label><input id="commParent" class="w-full border rounded-lg p-2 text-sm" placeholder="如：张明轩妈妈"></div>
       <div><label class="block text-xs text-gray-500 mb-1">沟通内容</label><textarea id="commContent" rows="3" class="w-full border rounded-lg p-2 text-sm"></textarea></div>
-      <div><label class="block text-xs text-gray-500 mb-1">状态</label><select id="commStatus" class="w-full border rounded-lg p-2 text-sm"><option>待跟进</option><option>已沟通</option></select></div>
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="block text-xs text-gray-500 mb-1">沟通时间（精确到秒）</label><input id="commDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm" value="${dtLocalValue()}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">状态</label><select id="commStatus" class="w-full border rounded-lg p-2 text-sm"><option>待跟进</option><option>已沟通</option></select></div>
+      </div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveComm()">保存</button>
     </div>`);
 }
@@ -2350,7 +2415,10 @@ function saveComm() {
   const parent = document.getElementById('commParent').value.trim() || (student + '家长');
   const content = document.getElementById('commContent').value.trim();
   const status = document.getElementById('commStatus').value;
-  state.communications.unshift({ id: uid(), student, parent, content, status });
+  const dEl = document.getElementById('commDate');
+  // 沟通时间精确到秒：date 是沟通发生的时刻，ts 是这条记录的录入时刻
+  const date = parseDtLocal(dEl ? dEl.value : '') || nowStampSec();
+  state.communications.unshift({ id: uid(), student, parent, content, status, date, ts: nowTs() });
   save(); closeModal(); render();
 }
 function setCommStatus(id, status) {
@@ -2393,10 +2461,14 @@ function hwNormDate(raw){
   }
   return s0;
 }
-// ISO -> 「M月D日」展示；无法解析时原样返回
+// ISO -> 「M月D日」展示；带秒的新格式展示为「M月D日 HH:mm:ss」；无法解析时原样返回
 function hwDateLabel(iso){
-  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return m ? (+m[2]) + '月' + (+m[3]) + '日' : (iso || '未设置');
+  const raw = String(iso || '').trim();
+  if (!raw) return '未设置';
+  if (recTimePart(raw)) return recDateLabel(raw);
+  const d = hwNormDate(raw);
+  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? (+m[2]) + '月' + (+m[3]) + '日' : raw;
 }
 // 展示用姓名：优先 studentName；为空时尝试从 title 全文中提取已知学生姓名
 // （迁移/写入时若丢失姓名，旧 title 如「张三英语作业没交」「政治作业不合格 张三」仍可反解）
@@ -2637,7 +2709,7 @@ function openHomeworkForm() {
       </div>
       <div class="grid grid-cols-2 gap-4">
         <div><label class="block text-xs text-gray-500 mb-1">班级</label>${classSelectHTML('hwClass', cls)}</div>
-        <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="hwDate" type="date" class="w-full border rounded-lg p-2 text-sm" value="${attDateKey(new Date())}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">日期时间（精确到秒）</label><input id="hwDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm" value="${dtLocalValue()}"></div>
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">备注（可留空）</label><input id="hwTitle" class="w-full border rounded-lg p-2 text-sm" placeholder="如：数学练习册 P12 未交"></div>
       <button class="w-full bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="saveHomework()">保存</button>
@@ -2652,11 +2724,12 @@ function saveHomework() {
   // 班级存内部 id（下拉框取值），而非显示名，避免改名后记录查不出来
   const clsEl = document.getElementById('hwClass');
   const cls = clsEl ? clsEl.value : state.activeClass;
-  // 日期统一存 ISO，避免与首页「今日」判定所用格式不一致导致永远匹配不上
-  const date = hwNormDate(document.getElementById('hwDate').value) || attDateKey(new Date());
+  // 日期统一存 ISO（可带 HH:mm:ss），避免与首页「今日」判定所用格式不一致导致永远匹配不上。
+  // 筛选一律走 hwNormDate 取日期部分，带时间不影响。
+  const date = parseDtLocal(document.getElementById('hwDate').value) || nowStampSec();
   const title = (document.getElementById('hwTitle').value || '').trim();
   const stu = (state.students || []).find(s => s.name === studentName && s.class === cls);
-  state.homework.unshift({ id: uid(), studentId: stu ? stu.id : '', studentName, subject, title, status, class: cls, date });
+  state.homework.unshift({ id: uid(), studentId: stu ? stu.id : '', studentName, subject, title, status, class: cls, date, ts: nowTs() });
   save(); closeModal(); render();
 }
 function deleteHomework(id) {
@@ -3203,7 +3276,7 @@ function crListHtml() {
       <div class="flex items-center gap-2 mb-1 flex-wrap">
         <span class="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium">${esc(r.subject || '其他')}</span>
         ${r.studentName ? `<span class="text-xs font-medium text-gray-700">${esc(r.studentName)}</span>` : ''}
-        <span class="text-xs text-gray-400">${esc(r.date)}</span>
+        <span class="text-xs text-gray-400">${esc(recDateLabel(r.date))}</span>
         ${r.auto ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-600">快速记录</span>' : ''}
       </div>
       <div class="text-sm text-gray-700">${esc(r.content)}</div>
@@ -3240,7 +3313,7 @@ function openClassRecordForm() {
   openModal('添加课堂记录', `
     <div class="space-y-4">
       <div class="grid grid-cols-2 gap-4">
-        <div><label class="block text-xs text-gray-500 mb-1">日期</label><input id="crDate" class="w-full border rounded-lg p-2 text-sm" value="${todayLabel}"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">日期时间（精确到秒）</label><input id="crDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm" value="${dtLocalValue()}"></div>
         <div><label class="block text-xs text-gray-500 mb-1">科目</label><select id="crSubject" class="w-full border rounded-lg p-2 text-sm">${subjOptions}</select></div>
       </div>
       <div><label class="block text-xs text-gray-500 mb-1">学生</label><select id="crStudent" class="w-full border rounded-lg p-2 text-sm"><option value="">请选择学生</option>${stuOptions}</select></div>
@@ -3260,7 +3333,8 @@ function saveClassRecord() {
   const s = sid ? state.students.find(x=>x.id===sid) : null;
   state.classRecords.unshift({
     id: uid(),
-    date: document.getElementById('crDate').value.trim()||todayLabel,
+    date: parseDtLocal(document.getElementById('crDate').value) || nowStampSec(),
+    ts: nowTs(),
     subject: document.getElementById('crSubject').value.trim()||'—',
     studentId: s ? s.id : null,
     studentName: s ? s.name : '',
@@ -3311,7 +3385,7 @@ function behListHtml() {
       <div class="flex items-center gap-2 mb-1 flex-wrap">
         <span class="text-xs font-medium text-gray-700">${esc(r.name)}</span>
         <span class="text-[10px] px-1.5 py-0.5 rounded ${recordTypeClass(r.type)}">${recordTypeLabel(r.type)}</span>
-        <span class="text-xs text-gray-400">${esc(r.date || '')}</span>
+        <span class="text-xs text-gray-400">${esc(recDateLabel(r.date))}</span>
       </div>
       <div class="text-sm text-gray-700">${esc(r.content || '')}</div>
     </div>
@@ -3958,8 +4032,8 @@ function ptIsLogEffective(log) {
 function ptEffectiveLogs(logs) { return logs.filter(ptIsLogEffective); }
 
 function nowStamp() {
-  const d = new Date(); const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  // 精确到秒（旧版只到分钟）。积分日志一直走这个格式，ptParseDate 能直接解析。
+  return nowStampSec();
 }
 function ptSum(logs) { return logs.reduce((a, b) => a + (+b.delta || 0), 0); }
 function ptStudentLogs(sid) {
@@ -5178,7 +5252,7 @@ function getStudentProgress(studentName, examId, subject) {
 // ===================== 考勤管理：页面与交互 =====================
 let attMode = null;   // 'home' | 'leave' | null
 function attChipClass(name){
-  const cur=((state.attendance||{}).current)||{home:{},leave:{}};
+  const cur=((state.attendance||{}).current)||{home:{},leave:{},leaveTs:{}};
   const h=Object.prototype.hasOwnProperty.call(cur.home,name), l=Object.prototype.hasOwnProperty.call(cur.leave,name);
   if(h&&l) return 'both'; if(h) return 'home'; if(l) return 'leave'; return '';
 }
@@ -5187,7 +5261,7 @@ function setAttMode(mode){
   render();
 }
 function markAttMember(name){
-  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{},leaveTs:{}};
   const day=attDayName(new Date()); const s=attStudentByName(name);
   if(attMode==='home'){
     if(!s) return;
@@ -5196,8 +5270,9 @@ function markAttMember(name){
     if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
     attRecomputeHome();
   } else if(attMode==='leave'){
-    if(Object.prototype.hasOwnProperty.call(a.current.leave, name)) delete a.current.leave[name];
-    else a.current.leave[name]=true;
+    if(!a.current.leaveTs || typeof a.current.leaveTs!=='object') a.current.leaveTs={};
+    if(Object.prototype.hasOwnProperty.call(a.current.leave, name)){ delete a.current.leave[name]; delete a.current.leaveTs[name]; }
+    else { a.current.leave[name]=true; a.current.leaveTs[name]=nowTs(); }
   } else return;
   save(); render();
 }
@@ -5210,11 +5285,14 @@ function toggleAttDay(name, day){
 }
 function addLeave(name, reason, skipClassLog){
   name=(name||'').trim(); if(!name) return false;
-  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{}};
+  const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{},leaveTs:{}};
+  if(!a.current.leaveTs || typeof a.current.leaveTs!=='object') a.current.leaveTs={};
   a.current.leave[name]=reason||true;
+  const lvTs=nowTs();                       // 请假登记时刻（精确到秒）
+  a.current.leaveTs[name]=lvTs;
   if(!skipClassLog){
-    const dk=attDateKey(new Date());
-    state.classLogs.unshift({ id:uid(), date:dk, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+    // 班级日志里也记到秒：date 用完整时间戳，ts 是实际录入时刻
+    state.classLogs.unshift({ id:uid(), date:nowStampSec(new Date(lvTs)), ts:lvTs, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
   }
   save(); return true;
 }
@@ -5231,7 +5309,9 @@ function submitAddLeave(){
   addLeave(n,r); closeModal(); render();
 }
 function removeLeave(name){
-  delete state.attendance.current.leave[name]; save(); render();
+  delete state.attendance.current.leave[name];
+  if(state.attendance.current.leaveTs) delete state.attendance.current.leaveTs[name];
+  save(); render();
 }
 function saveTodayAtt(){
   const a=state.attendance, cur=a.current; if(!cur) return;
@@ -5260,10 +5340,11 @@ function renderAttendance() {
   if (!cur.date) cur.date = attDateKey(new Date());
   if (!cur.home || typeof cur.home !== 'object') cur.home = attDeriveHome() || {};
   if (!cur.leave || typeof cur.leave !== 'object') cur.leave = {};
+  if (!cur.leaveTs || typeof cur.leaveTs !== 'object') cur.leaveTs = {};
   if (!Array.isArray(a.logs)) a.logs = [];
   const st=attStats();
   const homeNames=Object.keys(cur.home), leaveNames=Object.keys(cur.leave);
-  const leaveList=Object.entries(cur.leave).map(([n,r])=>({name:n,reason:r===true?'':r}));
+  const leaveList=Object.entries(cur.leave).map(([n,r])=>({name:n,reason:r===true?'':r,ts:cur.leaveTs[n]||0}));
   // 姓名可能来自导入/手动录入，必须转义后再拼接进 HTML（否则 <img onerror=...> 会被执行）
   const conclusion = `应到 ${st.total} 人，实到 ${st.present} 人。固定回家 ${st.home} 人（${esc(homeNames.join('、'))||'无'}），请假 ${st.leave} 人（${esc(leaveNames.join('、'))||'无'}）。`;
 
@@ -5280,7 +5361,8 @@ function renderAttendance() {
     <td class="py-2"><div class="flex gap-1">${ATT_WEEK.map(d=>`<span class="day-check ${ (m.weeklyHome||[]).includes(d)?'selected':'' }" onclick="toggleAttDay(${esc(JSON.stringify(m.name))},'${d}')">${d}</span>`).join('')}</div></td>
     <td class="py-2">${(m.weeklyHome||[]).includes(todayDay)?'✅':''}</td></tr>`).join('') || '<tr><td colspan="3" class="text-gray-400 py-3">今日无固定回家成员</td></tr>';
 
-  const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${attDateKey(new Date())} ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave(${esc(JSON.stringify(l.name))})">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
+  // 请假时间取「登记那一刻」（精确到秒）；旧数据没有 leaveTs 就只显示日期，不伪造时间
+  const leaveRows = leaveList.map(l=>`<tr><td>${esc(l.name)}</td><td>${esc(l.ts ? nowStampSec(new Date(l.ts)) : attDateKey(new Date()))}</td><td>${esc(l.reason)||'—'}</td><td><button class="text-xs text-red-500" onclick="removeLeave(${esc(JSON.stringify(l.name))})">删除</button></td></tr>`).join('') || '<tr><td colspan="4" class="text-gray-400">今日暂无请假</td></tr>';
 
   const historyRows = a.logs.filter(l=>l&&l.dateLabel).slice(0,12).map(l=>`<tr><td>${esc(l.dateLabel)}</td><td>${l.total}</td><td>${l.present}</td><td>${(l.home||[]).length}</td><td>${(l.leave||[]).length}</td><td>${l.rate}%</td><td><span class="text-xs text-blue-600 cursor-pointer">查看</span></td></tr>`).join('') || '<tr><td colspan="7" class="text-gray-400">暂无历史记录，点击「保存今日考勤」生成首条</td></tr>';
 
@@ -7057,7 +7139,7 @@ function renderPtLogList() {
         <div class="text-sm text-gray-800 truncate">${esc(l.studentName || ptStudentName(l.studentId))} · ${esc(l.reason)}</div>
         <div class="flex items-center gap-2 mt-1">
           <span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}">${dimLabel(l.dim)}</span>
-          <span class="text-[10px] text-gray-400">${esc(l.date)}</span>
+          <span class="text-[10px] text-gray-400">${esc(recDateLabel(l.date))}</span>
           ${l.batchId ? `<button class="text-[10px] text-primary hover:underline" onclick="undoPtBatch('${l.batchId}')">批量·撤销整批</button>` : ''}
         </div>
       </div>
@@ -7136,7 +7218,7 @@ function openPtStudent(sid) {
             return `<div class="flex items-center gap-2 p-2.5 rounded-xl bg-gray-50 text-sm">
               <span>${dimIcon(l.dim)}</span>
               <div class="flex-1 min-w-0"><div class="truncate text-gray-700">${esc(l.reason)}</div>
-              <div class="flex gap-2 mt-0.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}">${dimLabel(l.dim)}</span><span class="text-[10px] text-gray-400">${esc(l.date)}</span></div></div>
+              <div class="flex gap-2 mt-0.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.text}">${dimLabel(l.dim)}</span><span class="text-[10px] text-gray-400">${esc(recDateLabel(l.date))}</span></div></div>
               <span class="font-bold ${ptDeltaCls(l.delta)}">${ptSigned(l.delta)}</span>
               <button class="text-gray-300 hover:text-red-500 text-xs" onclick="undoPtLogFromStudent('${l.id}','${sid}')">撤销</button>
             </div>`; }).join('') : '<div class="text-sm text-gray-400">暂无积分记录</div>'}
@@ -7335,7 +7417,7 @@ function homeExhibitLogCardHTML(l) {
   const warn = /(迟到|违纪|扣分|警告|⚠️|退步|未完成|未交|打架|顶撞|没交)/.test(c);
   const good = /(表扬|获奖|🏆|👍|流动红旗|全勤|主动|进步|好人好事|拾金不昧)/.test(c);
   const border = warn ? 'border-l-4 border-amber-400' : good ? 'border-l-4 border-emerald-400' : 'border-l-4 border-slate-300';
-  return `<div class="bg-white rounded-xl p-3 ${border} text-sm"><div class="text-xs text-gray-400 mb-1">${esc(l.date)}</div><div class="text-gray-700 leading-relaxed">${esc(c)}</div></div>`;
+  return `<div class="bg-white rounded-xl p-3 ${border} text-sm"><div class="text-xs text-gray-400 mb-1">${esc(recDateLabel(l.date))}</div><div class="text-gray-700 leading-relaxed">${esc(c)}</div></div>`;
 }
 
 function renderHomeRank() {
@@ -7666,13 +7748,15 @@ function qrDayExpr(text) {
   const m = text.match(/本周[一二三四五六日天]|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]/);
   return m ? m[0] : null;
 }
-// 把日期表达式解析为具体日期（格式与记录系统一致：X月X日）
+// 把日期表达式解析为具体日期。
+// 2026-08-30 起统一返回 ISO「YYYY-MM-DD」（旧版返回「X月X日」，无法承载秒级精度）。
+// 只归档到「哪一天」；具体时刻由 qrSave 在「就是今天」时补上 HH:mm:ss。
 function qrResolveDate(text) {
   if (!text) return null;
   const base = new Date();
   const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
   const addDays = n => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-  const fmt = x => (x.getMonth() + 1) + '月' + x.getDate() + '日';
+  const fmt = x => todayISO(x);
   if (/今天|今日/.test(text)) return fmt(d);
   if (/明天|明日/.test(text)) return fmt(addDays(1));
   if (/昨天|昨日/.test(text)) return fmt(addDays(-1));
@@ -7990,11 +8074,13 @@ let qrAutoTimer = null;   // 边打边识别的防抖定时器
 let qrLastText = '';      // 上次已识别的输入内容，内容没变就不重复识别（免得覆盖用户手改的卡片）
 let qrSessionCount = 0;   // 本次弹窗内累计记录条数
 let qrLastSummary = '';   // 上一次保存的明细，显示在顶部状态条
+let qrDateEdited = false; // 用户是否手动改过「日期时间」（补录）：改过就跨次重绘与连续记录保留，没改过每条都取"此刻"
 function openQuickRecord() {
   // 重新打开弹窗 = 新的一次记录会话，计数清零（连续记录只在同一次弹窗内累计）
   qrSessionCount = 0; qrLastSummary = ''; qrLastText = '';
   clearTimeout(qrAutoTimer);
   qrDraft = null; qrDeductDraft = null;
+  qrDateEdited = false;   // 新会话：日期时间回到「此刻」
   const tip = '输入一句话即可自动识别多名学生、多个事件。例如：\n「张明轩参加体育早训，提出表扬；秦梦茹月考满分，提出表扬；王浩然迟到批评」\n系统会按学生拆分为多条记录，并自动识别科目、作业、积分规则、类型等。停止输入约 0.4 秒即自动识别。';
   openModal('一句话记录', `
     <div class="space-y-3">
@@ -8081,6 +8167,14 @@ function qrRecognize() {
   qrRenderDraft();
 }
 
+// 日期时间的取值：用户没手动改过就永远取"此刻"（连续记录时每条都是各自真实的录入时刻）；
+// 改过（补录）就保留他选的那个时刻，边打边识别重绘结果区也不会被重置。
+function qrDateValue() {
+  if (!qrDateEdited) return dtLocalValue();
+  const el = document.getElementById('qrDate');
+  return (el && el.value) ? el.value : dtLocalValue();
+}
+
 function qrRenderDraft() {
   const resultEl = document.getElementById('qrResult');
   if (!resultEl) return;
@@ -8138,7 +8232,7 @@ function qrRenderDraft() {
     ${unknownTip}
     ${unmatchedTip}
     <div class="grid grid-cols-1 ${use2Col ? 'md:grid-cols-2' : ''} gap-3">${list}</div>
-    <div><div class="text-xs text-gray-500 mb-1">日期</div><input id="qrDate" class="w-full border rounded-lg p-2 text-sm qr-tap" value="${todayLabel}"></div>
+    <div><div class="text-xs ${qrDateEdited ? 'text-amber-600' : 'text-gray-500'} mb-1">日期时间${qrDateEdited ? ' · 补录模式（后续每条都用这个时刻）' : '（默认此刻，精确到秒；改它可补录其它时刻）'}</div><input id="qrDate" type="datetime-local" step="1" class="w-full border rounded-lg p-2 text-sm qr-tap" onchange="qrDateEdited=true" value="${qrDateValue()}"></div>
     <div class="flex gap-2 pt-1">
       <button class="qr-tap flex-1 bg-primary text-white py-3 rounded-full text-sm font-medium hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
       <button class="qr-tap px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal()">取消</button>
@@ -8280,7 +8374,20 @@ function qrSetPoint(si, ii, value) {
 
 // 一句话记录：按学生×分项自动写入学生记录、课堂记录、积分、作业、请假
 function qrSave() {
-  const date = document.getElementById('qrDate').value.trim() || todayLabel;
+  // 精确到秒：日期框是 datetime-local，解析后形如「2026-08-30 21:10:03」
+  const _qrDateEl = document.getElementById('qrDate');
+  const date = parseDtLocal(_qrDateEl ? _qrDateEl.value : '') || nowStampSec();
+  const ts = nowTs();                 // 实际录入时刻（毫秒），与 date 分离
+  const todayIso = todayISO();
+  // 归档时间的取值优先级：手动改过日期框 > 文本识别出的日期 > 此刻。
+  // 识别到日期词时：若是「今天」就带完整时刻；若是其它某天，只归档到那一天（无法知道当时几点）
+  const segStamp = (segDate) => {
+    if (qrDateEdited) return date;    // 用户手选了时刻，以手选为准
+    if (!segDate) return date;
+    const day = hwNormDate(segDate);
+    if (!day) return date;
+    return day === todayIso ? date : day;
+  };
   if (!qrDraft || !qrDraft.segments.length) return alert('请先识别内容');
   const unknownSegs = qrDraft.segments.filter(seg => seg.unknownName);
   if (unknownSegs.length) {
@@ -8293,7 +8400,7 @@ function qrSave() {
     if (!seg.student) return;
     const s = state.students.find(x => x.id === seg.student.id);
     if (!s) return;
-    const recDate = seg.date || date; // 真实日期归档：优先用识别出的日期（今天/本周三/昨天…）
+    const recDate = segStamp(seg.date); // 真实日期归档：优先用识别出的日期（今天/本周三/昨天…）
     seg.items.forEach(item => {
       if (!item.enabled) return;
       const { recType, subjects, rules, homework, content, dim, pointDelta } = item;
@@ -8305,14 +8412,14 @@ function qrSave() {
         if (isHead) {
           addLeave(s.name, content || '请假', true);
           const recId = uid();
-          s.records.unshift({ id: recId, type: 'leave', date: recDate, content: content || '请假' });
+          s.records.unshift({ id: recId, type: 'leave', date: recDate, ts, content: content || '请假' });
           logBehaviorToClassLog(recId, s.name, 'leave', content || '请假', recDate);
           nLeave++;
         }
       } else if (recType) {
         if (isHead && !isClassroom) {
           const recId = uid();
-          s.records.unshift({ id: recId, type: recType, date: recDate, content });
+          s.records.unshift({ id: recId, type: recType, date: recDate, ts, content });
           logBehaviorToClassLog(recId, s.name, recType, content, recDate);
           nRecord++;
         }
@@ -8331,7 +8438,7 @@ function qrSave() {
       });
       // 课堂记录（所有班都记，按学生所属班级归档）
       subjects.forEach(sub => {
-        state.classRecords.unshift({ id: uid(), date: recDate, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
+        state.classRecords.unshift({ id: uid(), date: recDate, ts, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
         nClass++;
       });
       // 作业管理（作业完成情况台账）：记「是否完成」，并保留学生姓名以便按人检索
@@ -8341,7 +8448,8 @@ function qrSave() {
         state.homework.unshift({
           id: uid(), studentId: s.id, studentName: s.name, subject: hwSubject,
           title: content || '', status: undone ? '未完成' : '已完成',
-          class: stuClass, date: hwNormDate(recDate) || attDateKey(new Date()),
+          // date 可带 HH:mm:ss（hwNormDate 取日期部分做筛选，不受影响）
+          class: stuClass, date: recDate || attDateKey(new Date()), ts,
         });
         nHomework++;
       }
@@ -8352,7 +8460,7 @@ function qrSave() {
   if (!wroteBehavior && (nClass > 0 || nHomework > 0 || nPoint > 0)) {
     let logContent = `一句话记录：${qrDraft.raw}`;
     if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
-    state.classLogs.unshift({ id: uid(), date, content: logContent });
+    state.classLogs.unshift({ id: uid(), date, ts, content: logContent });
   }
   lastRecordContent = qrDraft.raw;
   const totalSaved = nRecord + nLeave + nPoint + nClass + nHomework;
