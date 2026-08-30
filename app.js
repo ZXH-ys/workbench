@@ -1126,30 +1126,6 @@ function doImportScores() {
   alert('成功导入 ' + n + ' 条成绩到「' + className(targetClass) + '」');
 }
 
-// ===================== 首次使用引导 =====================
-let onboarded = localStorage.getItem('ct_onboarded');
-function maybeOnboard() {
-  if (onboarded) return;
-  openModal('欢迎使用班主任工作台 👋', `
-    <div class="space-y-4">
-      <p class="text-sm text-gray-600 leading-relaxed">这是一个班主任工作台，数据主要保存在你的浏览器里（刷新不丢），登录后还会云端同步、支持多设备。跟着下面几步，几分钟就能用起来：</p>
-      <ol class="list-decimal pl-5 space-y-2 text-sm text-gray-700">
-        <li>先点下方「清空示例并开始」，或在「设置 → 清理数据」按需清理示例，换成你的真实班级</li>
-        <li>「学生管理 → 新建学生 / 批量导入」录入全班</li>
-        <li>「课程表 → 设置节次 / 添加课程」排好课</li>
-        <li>「积分管理 → ⚙️规则 / 🎖️职务」按你们班标准配置</li>
-        <li>日常用右下角 ✏️ 快速记录，数据随时「导出」备份</li>
-      </ol>
-      <div class="flex gap-3 pt-2">
-        <button class="flex-1 border py-2 rounded-full hover:bg-gray-50" onclick="closeModal(); clearAllData(); finishOnboard()">清空示例并开始</button>
-        <button class="flex-1 bg-primary text-white py-2 rounded-full hover:bg-primaryDark" onclick="finishOnboard()">我先看看</button>
-      </div>
-    </div>`, 'md');
-}
-function finishOnboard() { onboarded = '1'; localStorage.setItem('ct_onboarded', '1'); closeModal(); }
-
-
-
 // ===================== Render =====================
 let lastRenderRoute = null;
 function render() {
@@ -8653,7 +8629,7 @@ const LOCK_ALLOW_FNS = new Set([
   'doLogout','showLogin','applyDefaultLock','initLockGuard','isWriteAction','lockAutoWriteFns',
   'doUnlockPrompt','unlockApp','lockApp','setLockPass','toggleDefaultLock','applyLockFromPanel',
   'exportData','doExport','copyReport','printReport','exportSeatTeacher','exportSeatStudent',
-  'maybeOnboard','finishOnboard','applyCloudState','load','defaultState','migrateState',
+  'applyCloudState','load','defaultState','migrateState',
   'gsSetQuery','gsOpen','crSetSearch','behSetSearch','hwSetSearch','ptFilter',
 ]);
 let _lockAutoFns = null;
@@ -9863,7 +9839,6 @@ function showLogin() {
 function enterOffline() {
   localStorage.setItem('ct_offline', '1');
   render();
-  maybeOnboard();
 }
 
 function doLogin() {
@@ -9886,8 +9861,7 @@ function doLogin() {
           applyDefaultLock();
         }
         render();
-        maybeOnboard();
-      }).catch(() => { render(); maybeOnboard(); });
+      }).catch(() => { render(); });
     })
     .catch(e => { err.textContent = e.message; });
 }
@@ -9909,20 +9883,14 @@ function applyDefaultLock() {
   if (state && state.defaultLocked && state.lockPass) state.locked = true;
 }
 
-// 注意：maybeOnboard 已在「首次使用引导」小节定义（含欢迎弹窗），此处不要重复定义。
-// 这里曾有一份同名定义覆盖掉它，且内部调用了一个根本不存在的引导函数，
-// 每次加载完就抛 ReferenceError，导致首次登录的欢迎引导彻底失效。
-
 // 优先：已登录 -> 拉云端数据；未登录 -> 登录页
 if (AUTH_TOKEN) {
   apiGet('/api/data').then(res => {
     applyCloudState(res && res.state); // 内部含本地未同步记录的补回逻辑
     render();
-    maybeOnboard();
-  }).catch(() => { render(); maybeOnboard(); });
+  }).catch(() => { render(); });
 } else if (localStorage.getItem('ct_offline') === '1') {
   render();
-  maybeOnboard();
 } else {
   showLogin();
 }
