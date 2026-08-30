@@ -139,7 +139,7 @@ function defaultState() {
         leave:  ['请假','病假','事假','请假条','缺席'],
       },
       desc: {
-        critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位'],
+        critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位','讲话','讲小话','打闹','捣乱','起哄','接话','插话','吃东西','看课外书','随意走动','离开座位','下座位','不听讲','不听课'],
         praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒','拾金不昧','诚实守信','团结同学','热爱劳动','文明守纪','乐于助人'],
         chat:   ['心理疏导','聊天','聊到','聊了','情绪低落'],
         leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
@@ -7664,14 +7664,21 @@ const REC_TYPE_LABELS_WORDS = {
 };
 // 仅用于识别的描述性短语（不剔除，保证正文完整）
 const REC_TYPE_DESC = {
-  critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位'],
+  critic: ['顶撞','玩手机','走神','睡觉','抄袭','作弊','吵架','打架','旷课','追逐打闹','马虎','带零食','不整齐','吃零食','喧哗','传纸条','小动作','辱骂','破坏公物','不服从管理','擅自离开座位',
+           '讲话','讲小话','打闹','捣乱','起哄','接话','插话','吃东西','看课外书','随意走动','离开座位','下座位','不听讲','不听课'],
   praise: ['主动帮助同学','帮助同学','助人为乐','表现好','值日认真','作业优秀','一等奖','二等奖','三等奖','积极发言','主动','认真','勤奋','贴心','懂事','优秀','进步','棒','拾金不昧','诚实守信','团结同学','热爱劳动','文明守纪','乐于助人'],
   chat:   ['心理疏导','聊天','聊到','聊了','情绪低落'],
   leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
 };
 // 运行时可配置的关键词读取（优先 state.recKeywords，缺失回退硬编码默认）
 function getRecLabels(t) { return (state.recKeywords && state.recKeywords.labels && Array.isArray(state.recKeywords.labels[t])) ? state.recKeywords.labels[t] : (REC_TYPE_LABELS_WORDS[t] || []); }
-function getRecDesc(t) { return (state.recKeywords && state.recKeywords.desc && Array.isArray(state.recKeywords.desc[t])) ? state.recKeywords.desc[t] : (REC_TYPE_DESC[t] || []); }
+// 内置描述词与用户自定义词取并集：这样以后新增的内置词对已保存的老数据也立即生效，
+// 用户自己在设置里加的词依然保留（不会互相覆盖）。
+function getRecDesc(t) {
+  const mine = (state.recKeywords && state.recKeywords.desc && Array.isArray(state.recKeywords.desc[t])) ? state.recKeywords.desc[t] : [];
+  const builtin = REC_TYPE_DESC[t] || [];
+  return [...new Set(mine.concat(builtin))];
+}
 // 识别/剔除用的「引出词」（如「提出表扬」的「提出」）
 const REC_LEADIN = ['提出','给予','予以','进行','做了','被'];
 const REC_TYPE_LABELS = { critic:'批评', praise:'表扬', chat:'谈心', leave:'请假' };
@@ -7690,6 +7697,33 @@ const QR_CONNECTORS = /(?:且|并且|又|还|同时|接着|随后|另外|此外|
 // 两名学生之间的「间隔文本」必须整体只是分隔符 / 单个连接词，才能判定为并列（避免把含"且"的事件描述误判为连接）
 const BETWEEN_CONN = /^(?:[，,、\s]*)(?:且|并且|又|还|同时|接着|随后|另外|此外|以及|然后|再|最后|和|与|跟|同)?(?:[，,、\s]*)$/;
 const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
+// 事件开头词：给「未知姓名」划右边界，避免把事件首字吞进名字。
+// 例：没有它时「周浩然上课说话」会被取成姓名「周浩然上」+ 内容「课说话」。
+const QR_EVENT_HEADS = ['上课','下课','课堂','课间','讲话','聊天','打闹','追逐','捣乱','起哄','顶嘴','接话','插话','迟到','早退','旷课',
+  '睡觉','走神','发呆','玩手机','传纸条','吃东西','喝水','随意走动','离开座位','下位',
+  '作业','背诵','默写','预习','复习','考试','测验','卷子','练习','抄写','考了','考完','写完','背完',
+  '值日','打扫','卫生','帮助','帮忙','补习','辅导','还给','归还',
+  '批评','表扬','谈心','谈话','请假','完成','没完成','未完成','没交','不交',
+  '举手','发言','回答','认真','主动','积极','安静','优秀','进步','满分','获奖','突出',
+  '一起','一块','一块儿'];
+// 姓名黑名单（集体词 / 虚词首字）：这些不是人名，别当成学生提取
+const QR_NOT_NAME = ['全班','全体','大家','同学们','同学','部分','几名','多名','有些','有的','某位','一位','该生','本人','两人','三人','四人','所有人',
+  '很','太','挺','都','也','又','再','还','就','才','已','正','在','被','把','让','给','帮','向','往','从','对','为','因','所','但','而','且','或','等','这','那','几','多','少','有','无','不','没','未','别','各','每','半','和','与','跟','同'];
+// 「A + 事件片段 + 并列词 + B + 事件片段」：如「袁希诺上课和孙阳说话」→ 两人共享「上课说话」
+const QR_SHARED_ACT_RE = /^([^\s，,、；;。:：!！?？]{0,8})(和|与|跟|同|一起|一块|一块儿)$/;
+// 「A + 承接动词 + B + 事件」：如「袁希诺帮孙阳补习数学」→ A 记「帮孙阳补习数学」，B 不再单列
+const QR_BRIDGE_VERBS = ['帮','帮着','帮忙','替','给','带','带着','陪','陪着','教','教着','送','约','叫','让','拉','喊','找','扶','背','接','领','领着','照顾','辅导','补习','护送'];
+// 纯类型标签短语（去掉引出词后只剩类型词）：只是修饰前一条记录，不该单独占一条
+const QR_LABEL_ONLY = ['表扬','夸奖','批评','谈心','谈话','沟通','家访','约谈','请假','病假','事假','警告','处分','记过'];
+// 量词 / 时间单位等：提示「未命中关键词」时要排除，否则会出现「分钟」「次」这类噪音
+const QR_NOISE_FRAGS = ['分钟','小时','秒钟','点钟','次','遍','道题','节课','年级','学期','月份','左右','大概','上午','下午','晚上','早上','中午'];
+// 单字虚词：一律不能作为姓名起点，但处理方式分两类。
+// 绝不把它们当成「关键词跳过」——跳过会让扫描器落进词中间：
+// 「李雷不服从管理」跳过「不」后会把「服从管理」当成未注册学生，李雷的记录内容只剩「不」。
+//   跳过类（动词/介词）：后面往往还跟着真姓名，跳过继续找（李思雨帮王小明补习数学 → 王小明）
+//   停止类（否定/程度/副词）：直接停止扫描（李雷不服从管理 → 不产生任何姓名）
+const QR_SKIP_CHARS = new Set(['帮','被','把','让','给','向','往','从','对','为','因','和','与','跟','同']);
+const QR_STOP_CHARS = new Set(['不','没','未','别','无','很','太','挺','都','也','又','再','还','就','才','已','正','在','等','这','那','几','多','少','有','但','而','且','或','各','每','半']);
 
 // 日期表达式（用于识别"今天/本周三/周一…"等，并解析为星期几）
 const QR_DATE_WORDS = ['今天','今日','昨天','昨日','明天','明日',
@@ -7782,7 +7816,7 @@ function hasNegBefore(text, kw) {
   return /[不没未别无]$/.test(text.slice(Math.max(0, i - 2), i));
 }
 // 正向情感词（需排除否定形式）
-const QR_POS_WORDS = ['完成', '满分', '优秀', '帮助', '主动', '认真', '进步', '棒', '突出', '得奖'];
+const QR_POS_WORDS = ['完成', '满分', '优秀', '帮助', '主动', '认真', '进步', '棒', '突出', '得奖', '帮', '帮忙', '补习', '辅导'];
 function hasPos(text) {
   for (const w of QR_POS_WORDS) { if (text.includes(w) && !hasNegBefore(text, w)) return true; }
   return false;
@@ -7796,14 +7830,33 @@ function extractUnknownNames(text, knownHits) {
    '作业','布置作业','交作业','写作业','完成作业','背诵','默写','练习','抄写','预习','复习','试卷','卷子','学案','同步','练习册','课后题',
    '批评','表扬','谈心','请假','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话',
    '今天','明天','昨天','上午','下午','课间','课堂','学校','老师','同学','班主任','家长','孩子','提出','给予','予以','进行','做了','被'].forEach(k => keywordSet.add(k));
+  QR_EVENT_HEADS.forEach(k => keywordSet.add(k));   // 事件开头词：给姓名划右边界，防止吞字
+  // 集体词 / 量词只收两字以上：单字虚词（不/都/很…）另有专门的起止判断（QR_STOP_CHARS / QR_SKIP_CHARS），
+  // 不能进这张表当关键词跳过，否则会把扫描器带进词中间。
+  QR_NOT_NAME.filter(k => k.length >= 2).forEach(k => keywordSet.add(k));
+  QR_NOISE_FRAGS.filter(k => k.length >= 2).forEach(k => keywordSet.add(k));
+  // 记录类型标签词（批评/罚站/说话/表扬…）同样是事件词，不能当姓名（否则「罚站」会被当成人名）
+  ['critic', 'praise', 'chat', 'leave'].forEach(t => (REC_TYPE_LABELS_WORDS[t] || []).forEach(k => keywordSet.add(k)));
+  const allKwList = [...keywordSet].filter(Boolean).sort((a, b) => b.length - a.length);
   const isNoise = (word) => keywordSet.has(word) || QR_CONNECTORS.test(word);
   const knownRanges = knownHits.map(h => ({ start: h.pos, end: h.pos + h.len }));
   const isKnownAt = (pos, len) => knownRanges.some(r => r.start === pos && r.end === pos + len);
   const isKnownOverlap = (pos, len) => knownRanges.some(r => pos < r.end && pos + len > r.start);
+  // 当前位置是否正好是一个事件/关键词的开头；返回该词（用于把游标推过事件，继续向后找姓名）
+  const headWordAt = (p) => { for (const kw of allKwList) { if (text.startsWith(kw, p)) return kw; } return ''; };
+
+  // 「名词性关键词」（科目 / 作业 / 日期 / 事件名词…）前面紧邻的中文不是姓名。
+  // 没有这条，「…且数学课走神」会把「课走神」当成学生名。
+  const funcSet = new Set(QR_NOT_NAME.concat(QR_BRIDGE_VERBS).concat(REC_LEADIN));
+  const nounishWords = allKwList.filter(w => w.length >= 2 && !funcSet.has(w));
+  (state.homeworkKeywords || []).forEach(k => nounishWords.push(k));
+  (state.classRecordSubjects || []).forEach(s => (s.keywords || []).forEach(k => nounishWords.push(k)));
+  nounishWords.sort((a, b) => b.length - a.length);
+  const isNounishBefore = (p) => nounishWords.some(w => p >= w.length && text.startsWith(w, p - w.length));
 
   const names = [];
   const startsWithNoise = (str) => {
-    for (const kw of keywordSet) { if (str.startsWith(kw)) return true; }
+    for (const kw of allKwList) { if (str.startsWith(kw)) return true; }
     return false;
   };
   const clauses = text.split(/([；。;])/);
@@ -7816,6 +7869,13 @@ function extractUnknownNames(text, knownHits) {
       // 跳过占位符(\u0003)与非中文字符（qrClaimMask 把日期/卫生词替换成 \u0003，避免被当成姓名起点）
       while (pos < text.length && !/^[\u4e00-\u9fa5]$/.test(text[pos])) pos++;
       if (pos >= offset + clause.length) break;
+      // 当前位置正好是一个事件/虚词开头 → 这里不可能是姓名起点，整个词跳过去再找
+      // （没有这一步，「袁希诺上课玩手机」会把「玩手」当成未知名，剩下「机」当内容）
+      const headKw = headWordAt(pos);
+      if (headKw) { pos += headKw.length; continue; }
+      // 否定 / 程度 / 副词单字：这里不可能是姓名起点，而且**不能跳过**
+      // （跳过「不」就会把「不服从管理」里的「服从管理」当成学生名）
+      if (QR_STOP_CHARS.has(text[pos])) break;
       // 从当前位置尝试2-4字中文，选择「后面紧跟关键词」的最长合法长度
       let name = '', namePos = pos, nextPos = pos;
       for (let len = 2; len <= 4 && pos + len <= text.length; len++) {
@@ -7832,18 +7892,35 @@ function extractUnknownNames(text, knownHits) {
         nextPos = pos + len;
       }
       if (!name) break;
-      // 若与已知学生重叠：完全 known 则继续向后，否则停止
+      // 若与已知学生重叠：完全 known 就跨过去继续向后；只重叠一部分则跳到该已知学生末尾再判断
       if (isKnownOverlap(namePos, name.length)) {
         if (isKnownAt(namePos, name.length)) {
           pos = nextPos;
-          if (!/[，,、]/.test(text[pos]) && !/^[和与会跟同且又还]$/.test(text[pos])) break;
-          if (/^[和与会跟同且又还]$/.test(text[pos])) pos++;
-          else pos++;
+          const hw = headWordAt(pos);
+          // 后面既不是分隔符、也不是并列词、也不是事件/虚词开头 → 说明姓名序列到此结束
+          if (!/[，,、]/.test(text[pos]) && !/^[和与会跟同且又还]$/.test(text[pos]) && !hw) {
+            // 单字动词/介词（帮/给/被…）后面可能还有真正的姓名，跳过这一个字继续找
+            if (QR_SKIP_CHARS.has(text[pos])) { pos += 1; continue; }
+            break;
+          }
+          pos += hw ? hw.length : 1;
           continue;
         }
-        break;
+        // 旧逻辑在这里直接 break，导致「李思雨帮王小明补习数学」句首是名册学生时，
+        // 后面的王小明（不在名册）被整句丢弃。改为跳到已知学生末尾，仅当那里正好是
+        // 事件/虚词开头才继续扫描（这样「张明轩拾金不昧」仍不会把「拾金不昧」当姓名）。
+        const ov = knownRanges.filter(r => namePos < r.end && namePos + name.length > r.start)
+                              .sort((a, b) => b.end - a.end)[0];
+        const npos = ov ? ov.end : nextPos;
+        const hw2 = headWordAt(npos);
+        // 单字动词/介词同理：跳过它后面可能还有真姓名（李思雨帮王小明补习数学）
+        const step = hw2 ? hw2.length : (QR_SKIP_CHARS.has(text[npos]) ? 1 : 0);
+        if (!step) break;
+        pos = npos + step;
+        continue;
       }
       if (isNoise(name)) break;
+      if (isNounishBefore(namePos)) break;
       names.push({ pos: namePos, len: name.length, name });
       pos = nextPos;
       // 姓名之间可用 顿号/逗号 或 连接词(和/与/跟/同/且/又/还) 连续
@@ -7905,18 +7982,22 @@ function parseQuickRecord(text) {
     let prevEnd = 0; // 上一组结束位置，用于把学生名「前面」的日期词（如「昨天李雷…」）也纳入解析
     while (i < allHits.length) {
       let j = i;
+      let prefix = ''; // 「A 事件片段 和 B」里的事件片段，需要拼回 B 后面那段的前面
       while (j + 1 < allHits.length) {
         const between = text.slice(allHits[j].pos + allHits[j].len, allHits[j + 1].pos);
-        if (BETWEEN_CONN.test(between)) {
-          j++;
-        } else {
-          break;
-        }
+        if (BETWEEN_CONN.test(between)) { j++; continue; }
+        // 「袁希诺上课和孙阳说话」：两名学生之间夹了事件片段 + 并列词。
+        // 两人是共同做了这件事，应共享「前缀 + B 之后的描述」，所以吞并后立刻停止，
+        // 避免把后面「，孙阳也在说话」这类新分句也连坐进来。
+        const m = between.match(QR_SHARED_ACT_RE);
+        if (m && m[1]) { prefix = m[1]; j++; break; }
+        break;
       }
       const groupStart = allHits[j].pos + allHits[j].len;
       const groupEnd = j + 1 < allHits.length ? allHits[j + 1].pos : text.length;
       const before = text.slice(prevEnd, allHits[i].pos); // 本组首个学生之前的上下文（含前置日期词）
       let sharedText = text.slice(groupStart, groupEnd).trim().replace(/^[，,、；;。.:：!！?？\s]+/, '');
+      if (prefix) sharedText = prefix + sharedText;
       const segDate = qrResolveDate(before + sharedText) || null;
       for (let k = i; k <= j; k++) {
         if (allHits[k].unknown) {
@@ -7927,6 +8008,18 @@ function parseQuickRecord(text) {
       }
       prevEnd = groupEnd;
       i = j + 1;
+    }
+    // 3b) 「A + 承接动词 + B + 事件」合并：A 只剩一个孤零零的动词（如「帮」）没有意义，
+    //     应扩展为「帮孙阳补习数学」，并让 B 不再单独成段。
+    for (let k = 0; k + 1 < rawSegments.length;) {
+      const a = rawSegments[k], b = rawSegments[k + 1];
+      const who = b.student ? b.student.name : (b.unknownName || '');
+      if (QR_BRIDGE_VERBS.indexOf(a.text) >= 0 && who && b.text && b.text.length >= 2) {
+        a.text = a.text + who + b.text;
+        rawSegments.splice(k + 1, 1);
+        continue;
+      }
+      k++;
     }
   }
   // 4) 每个学生片段再按连接词/标点拆分为多个记录项
@@ -7943,7 +8036,18 @@ function parseQuickRecord(text) {
       });
     });
     if (!clauses.length && (!isDutyClause(seg.text) || hasKnownStudent)) clauses.push(seg.text);
-    clauses.forEach(clause => {
+    // 4b) 合并「分值短语」与「纯类型标签短语」：它们只是修饰前一条，不该单独占一条记录
+    //     「袁希诺作业优秀，加2分」      → 一条「作业优秀，加2分」+2 分（原来是两条，第二条内容只有「加2分」）
+    //     「张明轩参加体育早训，提出表扬」→ 一条「参加体育早训，提出表扬」表扬（原来第二条内容只有「表扬」）
+    const finalClauses = [];
+    clauses.forEach(c => {
+      const stripped = REC_LEADIN.reduce((s, kw) => s.split(kw).join(''), c).replace(/[\s，。、；：,.]/g, '').trim();
+      const isScore = /^[加扣减]?\s*\d+(?:\.\d+)?\s*分$/.test(stripped);
+      const isLabel = !!stripped && QR_LABEL_ONLY.indexOf(stripped) >= 0;
+      if ((isScore || isLabel) && finalClauses.length) { finalClauses[finalClauses.length - 1] += '，' + c; return; }
+      finalClauses.push(c);
+    });
+    (finalClauses.length ? finalClauses : clauses).forEach(clause => {
       const item = recognizeClause(clause, matched);
       if (item) segment.items.push(item);
     });
@@ -7961,16 +8065,43 @@ function parseQuickRecord(text) {
       idx = text.indexOf(m.value, idx + 1);
     }
   });
+  // 5b) 把所有「已识别的东西」（学生名 + 科目/作业/规则/类型关键词 + 日期词 + 职务卫生词 + 量词）
+  //     在原文里标成区间，只在这些区间的**补集**里找未命中词。
+  //     旧做法是用 2~4 字滑窗全表扫，窗口会和词边界错位，于是「迟到10分钟」提示「分钟」、
+  //     「上课捣乱」提示「课捣乱」、「王小明帮助同学」提示「助同学」——全是噪音。
+  const kwScan = [];
+  ['critic', 'praise', 'chat', 'leave'].forEach(t => { getRecLabels(t).forEach(k => kwScan.push(k)); getRecDesc(t).forEach(k => kwScan.push(k)); });
+  Object.keys(QR_DIM_KWS).forEach(d => QR_DIM_KWS[d].forEach(k => kwScan.push(k)));
+  QR_EVENT_HEADS.forEach(k => kwScan.push(k));
+  QR_NOT_NAME.forEach(k => kwScan.push(k));
+  QR_NOISE_FRAGS.forEach(k => kwScan.push(k));
+  REC_LEADIN.forEach(k => kwScan.push(k));   // 引出词（提出/给予/予以…）不算未命中
+  QR_DATE_WORDS.forEach(k => kwScan.push(k));
+  [...qrDutyKeywordSet()].forEach(k => kwScan.push(k));
+  (state.homeworkKeywords || []).forEach(k => kwScan.push(k));
+  (state.classRecordSubjects || []).forEach(s => (s.keywords || []).forEach(k => kwScan.push(k)));
+  [...new Set(kwScan)].filter(Boolean).forEach(w => {
+    let idx = text.indexOf(w);
+    while (idx !== -1) { matchedRanges.push({ start: idx, end: idx + w.length }); idx = text.indexOf(w, idx + 1); }
+  });
+  matchedRanges.sort((a, b) => a.start - b.start);
+  const covered = [];
+  matchedRanges.forEach(r => {
+    const last = covered[covered.length - 1];
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);
+    else covered.push({ start: r.start, end: r.end });
+  });
   const unmatched = [];
-  const wordRe = /[\u4e00-\u9fa5]{2,4}/g;
-  let wm;
-  while ((wm = wordRe.exec(text)) !== null) {
-    const start = wm.index, end = start + wm[0].length;
-    if (matchedRanges.some(r => start < r.end && end > r.start)) continue;
-    if (QR_DATE_WORDS.some(d => wm[0].includes(d)) || [...qrDutyKeywordSet()].some(d => wm[0].includes(d))) continue;
-    if (/^(今天|明天|昨天|上午|下午|晚上|课间|课堂|学校|老师|同学|班主任|家长|孩子|一个|一下|一次|没有|还有|以及|因为|所以|但是|然后|接着|随后|另外|此外|最后|第一|第二|第三|可以|需要|已经|正在|还是|这样|那里|这里|我们|你们|他们|她们|它们)$/.test(wm[0])) continue;
-    unmatched.push(wm[0]);
-  }
+  const STOP_WORDS = /^(今天|明天|昨天|上午|下午|晚上|课间|课堂|学校|老师|同学|班主任|家长|孩子|一个|一下|一次|没有|还有|以及|因为|所以|但是|然后|接着|随后|另外|此外|最后|第一|第二|第三|可以|需要|已经|正在|还是|这样|那里|这里|我们|你们|他们|她们|它们)$/;
+  const collectGap = (s) => {
+    (String(s).match(/[\u4e00-\u9fa5]{2,4}/g) || []).forEach(w => { if (!STOP_WORDS.test(w)) unmatched.push(w); });
+  };
+  let gapFrom = 0;
+  covered.forEach(r => {
+    if (r.start > gapFrom) collectGap(text.slice(gapFrom, r.start));
+    gapFrom = Math.max(gapFrom, r.end);
+  });
+  if (gapFrom < text.length) collectGap(text.slice(gapFrom));
   result.unmatchedWords = [...new Set(unmatched)].slice(0, 6);
   return result;
 }
@@ -8022,7 +8153,8 @@ function recognizeClause(text, matched) {
     if (hitKw) { recType = t; matched.push({ kind: 'type', value: hitKw, type: t }); break; }
   }
   // 具体分值「加N分 / 扣N分」直接决定类型与正负
-  const mNum = text.match(/([加扣])\s*(\d+(?:\.\d+)?)\s*分|(\d+(?:\.\d+)?)\s*分/);
+  // 「分」后面不能是「钟」，否则「迟到10分钟」会被当成扣 10 分
+  const mNum = text.match(/([加扣])\s*(\d+(?:\.\d+)?)\s*分(?!钟)|(\d+(?:\.\d+)?)\s*分(?!钟)/);
   if (mNum) {
     if (mNum[1] === '加') recType = 'praise';
     else if (mNum[1] === '扣') recType = 'critic';
@@ -8034,6 +8166,8 @@ function recognizeClause(text, matched) {
     else if (/请假|病假|事假/.test(text)) recType = 'leave';
     else recType = 'chat';
   }
+  // 「上课聊天」「课堂上讲话」是课堂违纪，但「聊天」先命中谈心词表，这里纠正为批评
+  if (recType === 'chat' && /^(上课|课堂上|课堂|课间|自习)/.test(text) && !/(老师|班主任|心理|疏导|办公室|家长)/.test(text)) recType = 'critic';
   // 清洗内容：保留完整事件描述，仅剔除引出词与首尾多余标点
   // 类型标签词用于识别类型，但不再从内容中删除（如「未完成」「迟到」等事实词需要保留）
   let content = text;
