@@ -146,6 +146,8 @@ function defaultState() {
         leave:  ['肚子疼','不舒服','生病','家中有事','事假'],
       }
     },
+    // ===== 一句话记录纠偏记忆：用户手动修正过的识别结果，下次同样输入直接命中 =====
+    qrCorrections: [],
     classRecordSubjects: defaultClassRecordSubjects(),
     homeworkKeywords: defaultHomeworkKeywords(),
     schedule: {
@@ -521,6 +523,7 @@ function migrateState(s) {
     if (!Array.isArray(s.recKeywords.labels[t])) s.recKeywords.labels[t] = (REC_TYPE_LABELS_WORDS[t] || []).slice();
     if (!Array.isArray(s.recKeywords.desc[t])) s.recKeywords.desc[t] = (REC_TYPE_DESC[t] || []).slice();
   });
+  if (!Array.isArray(s.qrCorrections)) s.qrCorrections = [];
   if (!s.positions || typeof s.positions !== 'object') s.positions = defaultPositions();
   if (!s.positions.dutyRota || typeof s.positions.dutyRota !== 'object') s.positions.dutyRota = { startDate:'', stepDays:1, spanDays:30, scope:'all', schedule:[] };
   // 考勤管理
@@ -8079,6 +8082,18 @@ const BETWEEN_CONN = /^(?:[，,、\s]*)(?:且|并且|又|还|同时|接着|随�
 const QR_CLAUSE_SPLIT = /[，；。,;!！?？\n]+/;
 // 事件开头词：给「未知姓名」划右边界，避免把事件首字吞进名字。
 // 例：没有它时「周浩然上课说话」会被取成姓名「周浩然上」+ 内容「课说话」。
+// 动态生成「上X课」类事件头，避免「孙阳上数学课和高语昕说话」把「上数学课」当成未知姓名，
+// 也让两名学生共享课堂动作时能被正确识别。
+function qrEventHeads() {
+  const heads = new Set(QR_EVENT_HEADS);
+  (state.classRecordSubjects || []).forEach(sub => {
+    if (!sub.name) return;
+    heads.add('上' + sub.name + '课');
+    heads.add(sub.name + '课');
+    heads.add('在' + sub.name + '课');
+  });
+  return [...heads];
+}
 const QR_EVENT_HEADS = ['上课','下课','课堂','课间','讲话','聊天','打闹','追逐','捣乱','起哄','顶嘴','接话','插话','迟到','早退','旷课',
   '睡觉','走神','发呆','玩手机','传纸条','吃东西','喝水','随意走动','离开座位','下位',
   '作业','背诵','默写','预习','复习','考试','测验','卷子','练习','抄写','考了','考完','写完','背完',
@@ -8212,6 +8227,7 @@ function extractUnknownNames(text, knownHits) {
    '批评','表扬','谈心','请假','迟到','早退','打架','顶撞','不交','没交','未完成','没完成','犯错','扣分','警告','处分','玩手机','走神','睡觉','抄袭','作弊','说话',
    '今天','明天','昨天','上午','下午','课间','课堂','学校','老师','同学','班主任','家长','孩子','提出','给予','予以','进行','做了','被'].forEach(k => keywordSet.add(k));
   QR_EVENT_HEADS.forEach(k => keywordSet.add(k));   // 事件开头词：给姓名划右边界，防止吞字
+  qrEventHeads().forEach(k => { if (k && !QR_EVENT_HEADS.includes(k)) keywordSet.add(k); }); // 动态「上X课」等
   // 集体词 / 量词只收两字以上：单字虚词（不/都/很…）另有专门的起止判断（QR_STOP_CHARS / QR_SKIP_CHARS），
   // 不能进这张表当关键词跳过，否则会把扫描器带进词中间。
   QR_NOT_NAME.filter(k => k.length >= 2).forEach(k => keywordSet.add(k));
@@ -8220,6 +8236,11 @@ function extractUnknownNames(text, knownHits) {
   ['critic', 'praise', 'chat', 'leave'].forEach(t => (REC_TYPE_LABELS_WORDS[t] || []).forEach(k => keywordSet.add(k)));
   const allKwList = [...keywordSet].filter(Boolean).sort((a, b) => b.length - a.length);
   const isNoise = (word) => keywordSet.has(word) || QR_CONNECTORS.test(word);
+  // 候选姓名中间夹了科目/作业/事件关键词，说明它不是姓名（如「上数学课」「英语作业」）
+  const containsNoNameKw = (word) => {
+    for (const kw of allKwList) { if (kw.length >= 2 && word.includes(kw)) return true; }
+    return false;
+  };
   const knownRanges = knownHits.map(h => ({ start: h.pos, end: h.pos + h.len }));
   const isKnownAt = (pos, len) => knownRanges.some(r => r.start === pos && r.end === pos + len);
   const isKnownOverlap = (pos, len) => knownRanges.some(r => pos < r.end && pos + len > r.start);
@@ -8301,6 +8322,7 @@ function extractUnknownNames(text, knownHits) {
         continue;
       }
       if (isNoise(name)) break;
+      if (containsNoNameKw(name)) break; // 「上数学课」「英语作业」等不是姓名
       if (isNounishBefore(namePos)) break;
       names.push({ pos: namePos, len: name.length, name });
       pos = nextPos;
@@ -8372,7 +8394,7 @@ function parseQuickRecord(text) {
         // 两人是共同做了这件事，应共享「前缀 + B 之后的描述」，所以吞并后立刻停止，
         // 避免把后面「，孙阳也在说话」这类新分句也连坐进来。
         const m = between.match(QR_SHARED_ACT_RE);
-        if (m && m[1] && QR_EVENT_HEADS.indexOf(m[1]) >= 0) { prefix = m[1]; j++; break; }
+        if (m && m[1] && qrEventHeads().includes(m[1])) { prefix = m[1]; j++; break; }
         // 「袁希诺政治作业未完成，上课和孙阳说话」：A 先有一条独立记录，
         // 接着「事件头 + 并列词」引出 B 共同做这件事。
         // 把并列词前面的事件头拆出来作为共享前缀，前面剩余部分只归 A。
@@ -8382,7 +8404,7 @@ function parseQuickRecord(text) {
         const tailMatch = last.match(QR_SHARED_ACT_RE) || last.match(/(?:^|[，,、；;。:：\s]+)([^\s，,、；;。:：!！?？]{1,8})(和|与|跟|同|一起|一块|一块儿)$/);
         if (tailMatch) {
           const maybeHead = tailMatch[1];
-          if (QR_EVENT_HEADS.indexOf(maybeHead) >= 0) {
+          if (qrEventHeads().includes(maybeHead)) {
             prefix = maybeHead;
             parts.pop();
             const leftover = last.slice(0, last.length - tailMatch[0].length).replace(/[，,、；;。:：\s]+$/g, '');
@@ -8623,6 +8645,87 @@ function recognizeClause(text, matched) {
   return { text, content, subjects, homework: !!homeworkHit, homeworkKeyword: homeworkHit, rules, recType, dim, pointDelta, enabled: true };
 }
 
+// ===== 一句话记录 · 纠偏记忆 =====
+// 用户手动修正过的识别结果会被记下来；下次输入完全相同时，直接复用修正结果。
+function qrSerializeSegments(segs) {
+  return (segs || []).map(seg => ({
+    studentId: seg.student ? seg.student.id : null,
+    studentName: seg.student ? seg.student.name : '',
+    unknownName: seg.unknownName || '',
+    date: seg.date || null,
+    items: (seg.items || []).map(it => ({
+      text: it.text,
+      content: it.content,
+      subjectIds: (it.subjects || []).map(s => s.id),
+      homework: it.homework,
+      homeworkKeyword: it.homeworkKeyword || '',
+      ruleIds: (it.rules || []).map(r => r.rule.id),
+      recType: it.recType,
+      dim: it.dim,
+      pointDelta: it.pointDelta,
+      enabled: it.enabled !== false
+    }))
+  }));
+}
+function qrDeserializeSegments(recipe) {
+  return (recipe || []).map(seg => {
+    let stu = null;
+    if (seg.studentId) stu = state.students.find(s => s.id === seg.studentId) || null;
+    if (!stu && seg.studentName) stu = state.students.find(s => s.name === seg.studentName) || null;
+    return {
+      student: stu,
+      unknownName: (!stu && seg.unknownName) ? seg.unknownName : '',
+      date: seg.date || null,
+      items: (seg.items || []).map(it => {
+        const subjects = (it.subjectIds || []).map(id => (state.classRecordSubjects || []).find(s => s.id === id)).filter(Boolean);
+        const rules = (it.ruleIds || []).map(id => {
+          const rule = (state.points.rules || []).find(r => r.id === id);
+          return rule ? { rule, keyword: rule.keywords ? rule.keywords[0] : '' } : null;
+        }).filter(Boolean);
+        return { text: it.text, content: it.content, subjects, homework: !!it.homework, homeworkKeyword: it.homeworkKeyword || '', rules, recType: it.recType, dim: it.dim, pointDelta: it.pointDelta, enabled: it.enabled !== false };
+      }).filter(it => it.recType)
+    };
+  }).filter(seg => seg.student || seg.unknownName || (seg.items && seg.items.length));
+}
+function qrApplyCorrections(text) {
+  if (!text || !state.qrCorrections || !state.qrCorrections.length) return null;
+  const c = state.qrCorrections.find(x => x.enabled !== false && x.raw === text);
+  if (!c) return null;
+  const segs = qrDeserializeSegments(c.segments);
+  if (!segs.length) return null;
+  return { raw: text, segments: segs, matched: [], unmatchedWords: [] };
+}
+function qrSaveCorrection(raw) {
+  if (!qrDraft || !qrDraft.segments || !qrDraft.segments.length) return toast('当前没有可保存的修正内容');
+  if (!Array.isArray(state.qrCorrections)) state.qrCorrections = [];
+  const idx = state.qrCorrections.findIndex(c => c.raw === raw);
+  const entry = { id: uid(), enabled: true, raw, segments: qrSerializeSegments(qrDraft.segments), createdAt: new Date().toISOString() };
+  if (idx >= 0) state.qrCorrections[idx] = entry;
+  else state.qrCorrections.push(entry);
+  save();
+  toast('已记住本次修正，同样输入下次会直接命中');
+}
+function qrDeleteCorrection(id) {
+  if (!Array.isArray(state.qrCorrections)) return;
+  state.qrCorrections = state.qrCorrections.filter(c => c.id !== id);
+  save();
+  renderQrCorrections();
+}
+function qrToggleCorrection(id) {
+  if (!Array.isArray(state.qrCorrections)) return;
+  const c = state.qrCorrections.find(x => x.id === id);
+  if (c) { c.enabled = c.enabled === false ? true : false; save(); renderQrCorrections(); }
+}
+function qrCorrectionSummary(c) {
+  const segs = c.segments || [];
+  const parts = segs.map(seg => {
+    const name = seg.studentName || seg.unknownName || '未识别';
+    const types = (seg.items || []).map(it => REC_TYPE_LABELS[it.recType] || it.recType).filter(Boolean);
+    return name + (types.length ? '(' + [...new Set(types)].join('/') + ')' : '');
+  });
+  return parts.join('、') || '（无内容）';
+}
+
 let qrDraft = null; // 当前确认草稿
 let qrDeductDraft = null; // 一句话记录：待确认的关联扣分草稿
 // —— 连续记录模式（手机端课间一口气记好几个学生）——
@@ -8710,7 +8813,7 @@ function qrRecognize() {
   const el = document.getElementById('qrText');
   const text = el ? (el.value || '') : '';
   if (!text.trim()) { qrDraft = null; qrDeductDraft = null; qrRenderDraft(); return; }
-  qrDraft = parseQuickRecord(text);
+  qrDraft = qrApplyCorrections(text) || parseQuickRecord(text);
   // 关联扣分识别（沿职务树向上追责）
   qrDeductDraft = null;
   let dedNodeId = null;
@@ -8793,6 +8896,7 @@ function qrRenderDraft() {
       <button class="qr-tap flex-1 bg-primary text-white py-3 rounded-full text-sm font-medium hover:bg-primaryDark" onclick="qrSave()">✅ 一键记录</button>
       <button class="qr-tap px-4 border border-gray-300 rounded-full text-sm hover:bg-gray-50" onclick="closeModal()">取消</button>
     </div>
+    ${(qrDraft && qrDraft.raw) ? `<div class="pt-1"><button class="qr-tap w-full text-xs border border-violet-200 text-violet-600 bg-violet-50 hover:bg-violet-100 py-2 rounded-full" onclick="qrSaveCorrection(${JSON.stringify(qrDraft.raw).replace(/"/g, '&quot;')})">🧠 记住本次修正（下次同样输入直接命中）</button></div>` : ''}
   </div>`;
   const noteBody = noSegments ? `<div class="space-y-3">
     <div class="text-sm text-gray-500">未识别到具体学生，但已匹配到职务 / 卫生事件，请在上方「关联扣分」中确认即可。</div>
@@ -9230,6 +9334,9 @@ function openSettings() {
       <button class="p-4 rounded-xl border border-emerald-200 text-emerald-600 hover:bg-emerald-50 flex flex-col items-center gap-2" onclick="closeModal(); openRecKeywordEditor()">
         <span class="text-2xl">🔤</span><span>关键词管理</span>
       </button>
+      <button class="p-4 rounded-xl border border-violet-200 text-violet-600 hover:bg-violet-50 flex flex-col items-center gap-2" onclick="closeModal(); openQrCorrections()">
+        <span class="text-2xl">🧠</span><span>识别纠偏</span>
+      </button>
     </div>
     <p class="text-[11px] text-gray-400 mt-4 text-center">修改密码需先验证固定口令，忘记口令请导出数据后重置应用</p>`, 'md');
 }
@@ -9259,6 +9366,34 @@ function saveRecKeywords(){
     state.recKeywords.desc[t]=arr.slice();
   });
   save(); closeModal(); toast('关键词已更新');
+}
+
+// ===== 一句话记录 · 纠偏管理 =====
+function openQrCorrections() {
+  openModal('识别纠偏', `<div id="qrCorrectionsBody">${renderQrCorrectionsBody()}</div>`, 'lg');
+}
+function renderQrCorrectionsBody() {
+  const list = (state.qrCorrections || []).slice().reverse();
+  if (!list.length) return `<div class="text-sm text-gray-500 text-center py-8">暂无纠偏记录。在「一句话记录」中手动修改识别结果后，点击「记住本次修正」即可添加。</div>`;
+  return `<div class="space-y-3">
+    <div class="text-xs text-gray-500">共 ${list.length} 条。关闭/删除不想要的，保留常用的；同样输入下次会优先命中。</div>
+    ${list.map((c, i) => `
+      <div class="rounded-xl border ${c.enabled === false ? 'border-gray-200 bg-gray-50 opacity-70' : 'border-violet-200 bg-violet-50/40'} p-3 space-y-2">
+        <div class="flex items-start gap-2">
+          <input type="checkbox" ${c.enabled !== false ? 'checked' : ''} onchange="qrToggleCorrection('${c.id}')" class="mt-1 w-4 h-4 text-primary rounded">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-medium text-gray-800 truncate">${esc(c.raw)}</div>
+            <div class="text-xs text-violet-600 mt-0.5">${esc(qrCorrectionSummary(c))}</div>
+          </div>
+          <button class="text-xs text-red-500 hover:underline shrink-0" onclick="qrDeleteCorrection('${c.id}')">删除</button>
+        </div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+function renderQrCorrections() {
+  const body = document.getElementById('qrCorrectionsBody');
+  if (body) body.innerHTML = renderQrCorrectionsBody();
 }
 
 // ===================== 只读锁定（大屏展示防误改） =====================
