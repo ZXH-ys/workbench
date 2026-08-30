@@ -2845,12 +2845,12 @@ function hbCard(kind) {
       ${ops}
     </div>`;
   }).join('') : `<div class="text-sm text-gray-400 py-6 text-center border border-dashed border-gray-200 rounded-xl">还没有内容，点下方「+ 添加一条」开始</div>`;
-  return `<div class="bg-white rounded-2xl p-6 shadow-sm">
+  return `<div class="bg-white rounded-2xl p-6 shadow-sm h-full flex flex-col">
     <div class="flex items-center justify-between mb-3">
       <h3 class="font-bold text-gray-800">${m.icon} ${m.title}</h3>
       <span class="text-xs text-gray-400">${list.length} 条</span>
     </div>
-    <div class="space-y-2">${rows}</div>
+    <div class="space-y-2 flex-1">${rows}</div>
     ${locked ? '' : `<button class="mt-4 text-sm text-primary hover:underline" onclick="openHbAdd(${kk})">+ 添加一条</button>`}
   </div>`;
 }
@@ -2858,12 +2858,14 @@ function hbCard(kind) {
 function renderHandbook() {
   const locked = isLocked();
   const cls = state.headTeacherClass || state.activeClass || '本班';
-  return `<div class="space-y-6">
+  return `<div class="space-y-4">
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div class="text-xs text-gray-400">📖 本手册属于「${esc(cls)}」，仅在班主任班显示</div>
       ${locked ? '<div class="text-xs text-amber-600">🔒 只读模式：当前仅可查看</div>' : ''}
     </div>
-    ${HB_KINDS.map(k => hbCard(k.key)).join('')}
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+      ${HB_KINDS.map(k => hbCard(k.key)).join('')}
+    </div>
   </div>`;
 }
 
