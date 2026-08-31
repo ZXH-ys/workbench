@@ -865,10 +865,13 @@ function mergeMissing(local, cloud) {
 }
 // 拉取云端数据后的统一入口：判断是否需要把本地未同步的记录补回云端
 function applyCloudState(cloudRaw) {
-  if (!cloudRaw) { applyDefaultLock(); return; }
+  // 锁定态是本机显示偏好，不参与云端同步：先记下本机当前是否锁定，合并后再还原，
+  // 避免「同步数据把别的设备的锁定/解锁状态带到本机」，也避免同步时把已解锁设备重新锁死。
+  const localLocked = isLocked();
+  if (!cloudRaw) { return; }
   let cloud;
   try { cloud = migrateState(cloudRaw); } catch (e) { cloud = null; }
-  if (!cloud) { applyDefaultLock(); return; }
+  if (!cloud) { return; }
   const lt = state && state._savedAt ? state._savedAt : 0;
   const ct = cloud._savedAt ? cloud._savedAt : 0;
   // 仅当「本地保存时间明显晚于云端」时才合并 —— 说明本地有改动没推上去。
@@ -879,11 +882,11 @@ function applyCloudState(cloudRaw) {
     added = mergeMissing(state, cloud);
   }
   state = cloud;
+  state.locked = localLocked; // 还原本机锁定态（不被云端覆盖）
   if (added > 0) {
     save(true); // internal：恢复数据属于系统行为，锁定状态下也要写回
     setTimeout(() => { try { toast(`已恢复 ${added} 条未同步到云端的记录`); } catch (e) {} }, 600);
   }
-  applyDefaultLock();
 }
 
 // ===================== 成绩分析（数学单科 + 班级预设）=====================
@@ -10862,6 +10865,7 @@ function showLogin() {
           <label data-lock-allow class="flex items-center gap-2 text-xs text-gray-500 select-none"><input id="login-remember" type="checkbox" checked class="w-4 h-4 text-primary rounded" /> 记住本设备（下次自动登录，无需再输密码）</label>
           <button data-lock-allow onclick="doLogin()" class="w-full bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition">登录</button>
           <button data-lock-allow onclick="enterOffline()" class="w-full text-gray-500 py-2 rounded-lg text-sm hover:bg-gray-50 transition">📴 本地离线使用（数据仅存本机，不上云）</button>
+          <button data-lock-allow onclick="GUEST_MODE=!AUTH_TOKEN; render()" class="w-full text-gray-400 py-1.5 rounded-lg text-xs hover:bg-gray-50 transition">← 返回工作台（只读浏览）</button>
           <p id="login-err" class="text-xs text-red-500 text-center h-4"></p>
         </div>
         <p class="text-[11px] text-gray-300 text-center">默认账号 admin / admin123，登录后可在数据管理修改密码</p>
@@ -10872,6 +10876,7 @@ function showLogin() {
 }
 
 function enterOffline() {
+  GUEST_MODE = true; // 本地离线即访客只读模式
   localStorage.setItem('ct_offline', '1');
   render();
 }
@@ -10929,18 +10934,17 @@ function doLogout() {
 }
 
 function applyDefaultLock() {
-  // 不再在打开时强制只读：自动锁定会让用户一进应用就被锁住、无法使用（智慧黑板场景尤其明显）。
-  // 改为：仅当「手动上锁」(lockManuallySet) 才保持锁定；否则打开即可用。手动锁会持久化，刷新不丢。
-  if (!state || state.lockManuallySet) return;
-  state.locked = false;
+  // 打开即进入只读锁定（满足「刷新/打开自动进入只读锁定」）。
+  // defaultLocked 默认 true（见 defaultState，且锁定面板有「每次打开自动进入只读锁定」开关），
+  // 取消勾选则打开即可用。锁定态为各设备本地偏好，不会因云端同步被别的设备覆盖。
+  if (!state) return;
+  state.locked = (state.defaultLocked !== false);
 }
 function startCloudSync() {
   setSyncBadge('同步中…', false);
   apiGet('/api/data', 30000).then(res => {
     if (res && res.state) {
-      applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑
-      // 已登录设备视为本人操作：解除只读锁定（云端若存过 locked 也一并清除），避免重启/同步后被重新锁死
-      if (AUTH_TOKEN && state) { state.locked = false; state.lockManuallySet = false; save(true); }
+      applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑（并保留本机锁定态）
       render();
       startSyncTimer(); // 登录态下启动定时拉取，让多设备在数秒内自动同步
     } else {
@@ -10993,40 +10997,23 @@ document.addEventListener('visibilitychange', function () {
 // 启动：恢复首页/积分展示页的展示设置（显示人数、翻页速度、维度、自动轮换等），再渲染
 loadHomeExhibit();
 
-// 启动：有本机缓存则直接打开（大屏/本机模式，免登录、可用），仅在全新设备才需登录
-if (localStorage.getItem(STORAGE_KEY)) {
-  // 关键修复（白屏）：本地已加载的 state 立即渲染，云端在后台同步，用户永远先看到界面。
-  GUEST_MODE = !AUTH_TOKEN;
-  applyDefaultLock(); // 解析锁定态：未手动上锁则打开即可用，不再强制只读
-  render();
-  if (AUTH_TOKEN) {
-    startCloudSync();
-  } else if (getRememberedLogin()) {
-    // 已勾选「记住本设备」：静默自动登录，成功后切到完整同步模式，无需再输密码
-    setSyncBadge('自动登录中…', false);
-    tryRememberLogin().then(ok => {
-      if (ok) { GUEST_MODE = false; startCloudSync(); }
-      else { GUEST_MODE = true; setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true); }
-    });
-  } else {
-    setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true);
-  }
-} else if (AUTH_TOKEN) {
-  applyDefaultLock();
-  render();
-  startCloudSync();
-} else if (localStorage.getItem('ct_offline') === '1') {
-  applyDefaultLock();
-  render();
+// 启动：始终先打开工作台（只读锁定）。登录 / 解锁仅按需触发，避免大屏卡在登录界面。
+GUEST_MODE = !AUTH_TOKEN;
+applyDefaultLock();   // 打开即进入只读锁定
+render();
+if (AUTH_TOKEN) {
+  startCloudSync();   // 已登录：拉云端并启动实时同步
 } else if (getRememberedLogin()) {
-  // 全新设备但记住了账号：直接静默登录进完整模式
+  // 已勾选「记住本设备」：静默自动登录，成功后切到完整同步模式
   setSyncBadge('自动登录中…', false);
   tryRememberLogin().then(ok => {
-    if (ok) { GUEST_MODE = false; applyDefaultLock(); render(); startCloudSync(); }
-    else { showLogin(); }
+    if (ok) { GUEST_MODE = false; startCloudSync(); }
+    else { GUEST_MODE = true; setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true); render(); }
   });
 } else {
-  showLogin();
+  // 无登录态、无「记住本设备」：作为大屏/访客只读展示，不再自动弹出登录框
+  GUEST_MODE = true;
+  setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true);
 }
 
 // 只读锁定拦截（仅注册一次）
