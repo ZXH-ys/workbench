@@ -1,7 +1,33 @@
 // ===================== Storage =====================
 const STORAGE_KEY = 'ct_workbench_v1';
 const AUTH_KEY = 'ct_auth_token';
+const REMEMBER_KEY = 'ct_remember_login'; // 记住本设备：存账号密码，实现「直接登录 / 记住密码」
 const CLOUD_BACKUP_KEY = 'ct_cloud_backup_v1'; // 合并前留一份云端原始数据，出问题可回滚
+
+// 读取「记住本设备」里保存的账号密码（用于静默自动登录）
+function getRememberedLogin() {
+  try {
+    const raw = localStorage.getItem(REMEMBER_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (o && typeof o.user === 'string' && typeof o.pass === 'string') return o;
+  } catch (e) {}
+  return null;
+}
+// 静默自动登录：用记住的账号密码向后端换 token，成功返回 true。失败静默回退（不报错、不弹登录页）
+function tryRememberLogin() {
+  const cred = getRememberedLogin();
+  if (!cred) return Promise.resolve(false);
+  return fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: cred.user, password: cred.pass }) })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('remembered-login-failed')))
+    .then(d => {
+      AUTH_TOKEN = d.token;
+      GUEST_MODE = false;
+      localStorage.setItem(AUTH_KEY, d.token);
+      return true;
+    })
+    .catch(() => false);
+}
 let AUTH_TOKEN = (typeof localStorage !== 'undefined') ? localStorage.getItem(AUTH_KEY) : '';
 let GUEST_MODE = false; // 大屏访客模式：免登录直接展示本机缓存（只读）
 
@@ -10773,6 +10799,7 @@ function showLogin() {
         <div class="space-y-3">
           <input id="login-user" placeholder="账号" value="admin" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
           <input id="login-pass" type="password" placeholder="密码" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
+          <label class="flex items-center gap-2 text-xs text-gray-500 select-none"><input id="login-remember" type="checkbox" checked class="w-4 h-4 text-primary rounded" /> 记住本设备（下次自动登录，无需再输密码）</label>
           <button onclick="doLogin()" class="w-full bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition">登录</button>
           <button onclick="enterOffline()" class="w-full text-gray-500 py-2 rounded-lg text-sm hover:bg-gray-50 transition">📴 本地离线使用（数据仅存本机，不上云）</button>
           <p id="login-err" class="text-xs text-red-500 text-center h-4"></p>
@@ -10793,6 +10820,13 @@ function doLogin() {
   localStorage.removeItem('ct_offline');
   const u = document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value;
+  const chk = document.getElementById('login-remember');
+  // 「记住本设备」：勾选则存账号密码，下次静默自动登录；不勾则清除，退出后需重新输入
+  if (chk && chk.checked) {
+    try { localStorage.setItem(REMEMBER_KEY, JSON.stringify({ user: u, pass: p })); } catch (e) {}
+  } else {
+    localStorage.removeItem(REMEMBER_KEY);
+  }
   const err = document.getElementById('login-err');
   err.textContent = '登录中…';
   fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) })
@@ -10825,6 +10859,7 @@ function doLogout() {
   } catch (e) { /* 首页未渲染过时会抛错，忽略即可 */ }
   AUTH_TOKEN = '';
   localStorage.removeItem(AUTH_KEY);
+  localStorage.removeItem(REMEMBER_KEY); // 退出登录同时清除「记住本设备」，需重新输入密码
   showLogin();
 }
 
@@ -10844,7 +10879,12 @@ function startCloudSync() {
       setSyncBadge('⚠️ 未同步（仅本机）', true);
     }
   }).catch(() => {
-    setSyncBadge('⚠️ 未同步（仅本机）', true);
+    // token 可能已过期（30 天），若本机「记住了登录」则静默续登后重试一次，实现长期免输入
+    if (getRememberedLogin()) {
+      tryRememberLogin().then(ok => { if (ok) startCloudSync(); else setSyncBadge('⚠️ 未同步（仅本机）', true); });
+    } else {
+      setSyncBadge('⚠️ 未同步（仅本机）', true);
+    }
   });
 }
 
@@ -10854,8 +10894,18 @@ if (localStorage.getItem(STORAGE_KEY)) {
   GUEST_MODE = !AUTH_TOKEN;
   applyDefaultLock(); // 解析锁定态：未手动上锁则打开即可用，不再强制只读
   render();
-  if (AUTH_TOKEN) startCloudSync();
-  else setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true);
+  if (AUTH_TOKEN) {
+    startCloudSync();
+  } else if (getRememberedLogin()) {
+    // 已勾选「记住本设备」：静默自动登录，成功后切到完整同步模式，无需再输密码
+    setSyncBadge('自动登录中…', false);
+    tryRememberLogin().then(ok => {
+      if (ok) { GUEST_MODE = false; startCloudSync(); }
+      else { GUEST_MODE = true; setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true); }
+    });
+  } else {
+    setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true);
+  }
 } else if (AUTH_TOKEN) {
   applyDefaultLock();
   render();
@@ -10863,6 +10913,13 @@ if (localStorage.getItem(STORAGE_KEY)) {
 } else if (localStorage.getItem('ct_offline') === '1') {
   applyDefaultLock();
   render();
+} else if (getRememberedLogin()) {
+  // 全新设备但记住了账号：直接静默登录进完整模式
+  setSyncBadge('自动登录中…', false);
+  tryRememberLogin().then(ok => {
+    if (ok) { GUEST_MODE = false; applyDefaultLock(); render(); startCloudSync(); }
+    else { showLogin(); }
+  });
 } else {
   showLogin();
 }
