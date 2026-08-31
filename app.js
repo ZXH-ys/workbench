@@ -2,6 +2,7 @@
 const STORAGE_KEY = 'ct_workbench_v1';
 const AUTH_KEY = 'ct_auth_token';
 const REMEMBER_KEY = 'ct_remember_login'; // 记住本设备：存账号密码，实现「直接登录 / 记住密码」
+const HOME_EXHIBIT_KEY = 'ct_home_exhibit'; // 首页/积分展示页的展示设置，按设备持久化（大屏与笔记本可各自不同）
 const CLOUD_BACKUP_KEY = 'ct_cloud_backup_v1'; // 合并前留一份云端原始数据，出问题可回滚
 
 // 读取「记住本设备」里保存的账号密码（用于静默自动登录）
@@ -7675,12 +7676,31 @@ let homeExhibit = {
   _dataVer: 0, _cacheDim: '', _cachePool: 0, _cacheLogCls: '',
   _cachedStudents: null, _cachedLogGroups: null,
 };
+// 持久化展示设置（按设备）：仅保存用户设定，不保存运行时/分页/缓存字段。重启后自动恢复。
+const HOME_EXHIBIT_PERSIST = ['dim','pool','auto','interval','logClass','fsAuto','fsBg','fsScreen'];
+function saveHomeExhibit() {
+  try {
+    const o = {};
+    HOME_EXHIBIT_PERSIST.forEach(k => { if (k in homeExhibit) o[k] = homeExhibit[k]; });
+    localStorage.setItem(HOME_EXHIBIT_KEY, JSON.stringify(o));
+  } catch (e) {}
+}
+function loadHomeExhibit() {
+  try {
+    const raw = localStorage.getItem(HOME_EXHIBIT_KEY);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    if (o && typeof o === 'object') {
+      HOME_EXHIBIT_PERSIST.forEach(k => { if (k in o) homeExhibit[k] = o[k]; });
+    }
+  } catch (e) {}
+}
 
 function renderHomePointsCard() {
   const week = ptRecent(7);
   const dimOpts = `<option value="all">总分</option>` + POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('');
   const poolOpts = `<option value="10">前 10</option><option value="15">前 15</option><option value="20">前 20</option><option value="0">全部</option>`;
-  const intOpts = `<option value="5">5 秒</option><option value="8" selected>8 秒</option><option value="12">12 秒</option>`;
+  const intOpts = `<option value="5">5 秒</option><option value="8">8 秒</option><option value="10">10 秒</option><option value="12">12 秒</option><option value="15">15 秒</option>`;
   return `
   <div class="col-span-12 rounded-2xl overflow-hidden border border-gray-200 relative bg-gradient-to-br from-slate-50 to-gray-100">
     <!-- 展览面板头部（含全部控制项） -->
@@ -7721,7 +7741,7 @@ function renderHomePointsCard() {
 function homeExhibitFsHTML() {
   const dimOpts = `<option value="all">总分</option>` + POINT_DIMS.map(d => `<option value="${d.id}">${d.icon} ${d.label}</option>`).join('');
   const poolOpts = `<option value="10">前 10</option><option value="15">前 15</option><option value="20">前 20</option><option value="30">前 30</option><option value="0">全部</option>`;
-  const intOpts = `<option value="5">5 秒</option><option value="10" selected>10 秒</option><option value="15">15 秒</option>`;
+  const intOpts = `<option value="5">5 秒</option><option value="8">8 秒</option><option value="10">10 秒</option><option value="12">12 秒</option><option value="15">15 秒</option>`;
   return `
   <div id="homeFsOverlay" class="hidden fixed inset-0 z-[100] overflow-auto" style="--fsc:rgba(30,41,59,.6);--fsb:rgba(148,163,184,.25);background:linear-gradient(135deg,#0f172a,#1e293b);color:#e2e8f0">
     <div class="sticky top-0 z-10 flex items-center justify-between px-6 py-3" style="background:rgba(15,23,42,.6);backdrop-filter:blur(8px)">
@@ -7916,9 +7936,10 @@ function setHomeExhibitAuto(v) {
   if (btn) btn.textContent = v ? '⏸️ 暂停' : '▶️ 轮换';
   if (badge) { badge.textContent = v ? '自动轮换中' : '已暂停'; badge.className = 'text-[10px] px-2 py-0.5 rounded-full ' + (v ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-400') + ' font-semibold'; }
   if (v) startHomeExhibitAuto(); else stopHomeExhibitAuto();
+  saveHomeExhibit();
 }
 function toggleHomeExhibitAuto() { setHomeExhibitAuto(!homeExhibit.auto); }
-function setHomeExhibitInterval(v) { homeExhibit.interval = v; if (homeExhibit.auto) startHomeExhibitAuto(); if (homeExhibit.fsAuto) startHomeExhibitFsAuto(); }
+function setHomeExhibitInterval(v) { homeExhibit.interval = v; if (homeExhibit.auto) startHomeExhibitAuto(); if (homeExhibit.fsAuto) startHomeExhibitFsAuto(); saveHomeExhibit(); }
 
 function startHomeExhibitAuto() {
   stopHomeExhibitAuto();
@@ -7949,6 +7970,7 @@ function homeExhibitSetPool(v) {
   const el = document.getElementById('homePoolSel'); if (el) el.value = String(homeExhibit.pool);
   const fs = document.getElementById('homeFsPool'); if (fs) fs.value = String(homeExhibit.pool);
   renderHomeExhibit(); renderHomeFs();
+  saveHomeExhibit();
 }
 function homeExhibitSetDim(v) {
   homeExhibit.dim = v;
@@ -7956,6 +7978,7 @@ function homeExhibitSetDim(v) {
   const el = document.getElementById('homeDimSel'); if (el) el.value = v;
   const fs = document.getElementById('homeFsDim'); if (fs) fs.value = v;
   renderHomeExhibit(); renderHomeFs();
+  saveHomeExhibit();
 }
 function setHomeExhibitLogClass(v) {
   homeExhibit.logClass = v;
@@ -7964,6 +7987,7 @@ function setHomeExhibitLogClass(v) {
   // 同步更新全屏设置面板中的选择器（如果存在）
   const fsSel = document.getElementById('homeFsLogCls');
   if (fsSel) fsSel.value = v;
+  saveHomeExhibit();
 }
 
 // ---- 全屏展览 ----
@@ -7974,6 +7998,7 @@ function toggleHomeExhibitFs() {
   o.classList.toggle('hidden', !homeExhibit.fs);
   if (homeExhibit.fs) { renderHomeFs(); startHomeFsClock(); if (homeExhibit.fsAuto) startHomeExhibitFsAuto(); }
   else { stopHomeFsClock(); stopHomeExhibitFsAuto(); }
+  // 注意：fs（全屏开/关）不持久化，避免每次启动自动弹出全屏；其余展示设置在各自 setter 保存
 }
 function toggleHomeExhibitFsSettings() { const p = document.getElementById('homeFsPanel'); if (p) p.classList.toggle('hidden'); }
 
@@ -7993,6 +8018,7 @@ function renderHomeFs() {
   if (!body) return;
   const sp = document.getElementById('homeFsPool'); if (sp) sp.value = String(homeExhibit.pool);
   const sd = document.getElementById('homeFsDim'); if (sd) sd.value = homeExhibit.dim;
+  const fi = document.getElementById('homeFsInt'); if (fi) fi.value = String(homeExhibit.interval);
   const cols = homeFsGridCols();
   if (homeExhibit.fsScreen === 'rank') {
     document.getElementById('homeFsTitle').textContent = '🏆 积分排行';
@@ -8018,7 +8044,7 @@ function renderHomeFs() {
   body.insertAdjacentHTML('beforeend', `<div class="flex justify-center gap-4 mt-8 pb-8"><button class="text-base px-6 py-2.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'rank' ? 'bg-pink-500 text-white border-pink-500' : ''} hover:bg-white/10" data-lock-allow onclick="switchHomeFs('rank')">🏆 积分排行</button><button class="text-base px-6 py-2.5 rounded-full border border-[var(--fsb)] ${homeExhibit.fsScreen === 'log' ? 'bg-pink-500 text-white border-pink-500' : ''} hover:bg-white/10" data-lock-allow onclick="switchHomeFs('log')">📓 班级日志</button></div>`);
 }
 
-function switchHomeFs(s) { homeExhibit.fsScreen = s; homeExhibit.fsRankPage = 0; homeExhibit.fsLogPage = 0; renderHomeFs(); }
+function switchHomeFs(s) { homeExhibit.fsScreen = s; homeExhibit.fsRankPage = 0; homeExhibit.fsLogPage = 0; renderHomeFs(); saveHomeExhibit(); }
 function homeFsPage(which, d) {
   if (which === 'rank') { const list = homeExhibitStudents(), per = homeFsPerPage(), tp = Math.max(1, Math.ceil(list.length / per)); homeExhibit.fsRankPage = Math.max(0, Math.min(tp - 1, homeExhibit.fsRankPage + d)); }
   else { const n = homeExhibitLogGroups().length; homeExhibit.fsLogPage = Math.max(0, Math.min(n - 1, homeExhibit.fsLogPage + d)); }
@@ -8030,6 +8056,7 @@ function setHomeExhibitFsAuto(v) {
   if (on) on.className = 'flex-1 border rounded-lg py-1 ' + (v ? 'bg-primary text-white' : '');
   if (off) off.className = 'flex-1 border rounded-lg py-1 ' + (v ? '' : 'bg-primary text-white');
   if (v) startHomeExhibitFsAuto(); else stopHomeExhibitFsAuto();
+  saveHomeExhibit();
 }
 function startHomeExhibitFsAuto() {
   stopHomeExhibitFsAuto();
@@ -8054,6 +8081,7 @@ function stopHomeFsClock() { if (homeExhibit._clock) { clearInterval(homeExhibit
 function setHomeExhibitFsBg(light) {
   const o = document.getElementById('homeFsOverlay'); if (!o) return;
   homeExhibit.fsBg = light ? 'light' : 'dark';
+  saveHomeExhibit();
   if (light) { o.style.background = 'linear-gradient(135deg,#f8fafc,#e2e8f0)'; o.style.color = '#1e293b'; o.style.setProperty('--fsc', 'rgba(255,255,255,.9)'); o.style.setProperty('--fsb', 'rgba(148,163,184,.3)'); }
   else { o.style.background = 'linear-gradient(135deg,#0f172a,#1e293b)'; o.style.color = '#e2e8f0'; o.style.setProperty('--fsc', 'rgba(30,41,59,.6)'); o.style.setProperty('--fsb', 'rgba(148,163,184,.25)'); }
   [['homeBgDark', !light], ['homeBgLight', light], ['homeFsBgDark', !light], ['homeFsBgLight', light]].forEach(([id, on]) => {
@@ -8068,6 +8096,7 @@ function initHomeExhibit() {
   const poolSel = document.getElementById('homePoolSel');
   if (!dimSel || !poolSel) return;
   dimSel.value = homeExhibit.dim; poolSel.value = String(homeExhibit.pool);
+  const intSel = document.getElementById('homeIntSel'); if (intSel) intSel.value = String(homeExhibit.interval);
   // 统一走 homeExhibitSet*，保证类型一致(pool 为数字)且内嵌/全屏两个面板互相同步
   dimSel.onchange = () => homeExhibitSetDim(dimSel.value);
   poolSel.onchange = () => homeExhibitSetPool(+poolSel.value);
@@ -10902,6 +10931,9 @@ function startCloudSync() {
     }
   });
 }
+
+// 启动：恢复首页/积分展示页的展示设置（显示人数、翻页速度、维度、自动轮换等），再渲染
+loadHomeExhibit();
 
 // 启动：有本机缓存则直接打开（大屏/本机模式，免登录、可用），仅在全新设备才需登录
 if (localStorage.getItem(STORAGE_KEY)) {
