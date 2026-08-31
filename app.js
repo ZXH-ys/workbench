@@ -10200,6 +10200,7 @@ let pmRolesEdit = false;
 let curCtx = { mode:'role', key:null, day:null, task:null };
 let pmDescId = null;
 let pmTreeDragId = null;
+let pmStatsSort = 'count';
 
 function pmStudentNames(){ return (state.students||[]).filter(s=>s&&s.name&&s.class===state.headTeacherClass).map(s=>s.name); }
 function pmStudentIdByName(name){ const s=(state.students||[]).find(x=>x.name===name&&x.class===state.headTeacherClass); return s?s.id:null; }
@@ -10214,7 +10215,7 @@ function pmRefreshAll(){ const b=document.getElementById('pm-body'); if(b) b.inn
 
 /* ===== 页面框架 ===== */
 function renderPositions(){
-  const segs=[['roles','职务架构'],['duty','值日生'],['kedaibiao','课代表'],['dutymonitor','值日班长轮值'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分']];
+  const segs=[['roles','职务架构'],['duty','值日生'],['kedaibiao','课代表'],['dutymonitor','值日班长轮值'],['points','职务积分'],['tree','职务树'],['deduct','关联扣分'],['stats','任职统计']];
   const segHtml=segs.map(([id,label])=>`<button class="pm-seg px-4 py-2 rounded-lg text-sm font-medium ${pmTab===id?'active':'text-slate-600 hover:bg-slate-100'}" data-pmtab="${id}" onclick="pmSwitch('${id}')">${label}</button>`).join('');
   return `<div>
     <div class="flex gap-1 mb-5 bg-white p-1 rounded-xl shadow-sm w-fit">${segHtml}</div>
@@ -10228,6 +10229,7 @@ function pmRenderTab(tab){
   if(tab==='points') return pmRenderPoints();
   if(tab==='tree') return pmRenderTree();
   if(tab==='deduct') return pmRenderDeduct();
+  if(tab==='stats') return pmRenderStats();
   return pmRenderRoles();
 }
 function pmSwitch(tab){
@@ -10235,6 +10237,46 @@ function pmSwitch(tab){
   const body=document.getElementById('pm-body');
   if(body) body.innerHTML=pmRenderTab(tab);
   document.querySelectorAll('.pm-seg').forEach(b=>{ const on=b.getAttribute('data-pmtab')===tab; b.className='pm-seg px-4 py-2 rounded-lg text-sm font-medium '+(on?'active':'text-slate-600 hover:bg-slate-100'); });
+}
+
+/* ===== 任职统计 ===== */
+function pmStatsSetSort(s){ pmStatsSort=s; pmRefreshAll(); }
+function pmRenderStats(){
+  const P = (state.positions && typeof state.positions==='object') ? state.positions : defaultPositions();
+  const names = pmStudentNames();
+  // 统计每个人的现有职务：职务架构中的职务 + 课代表（与「按职务计算任职分」口径一致）
+  const rows = names.map(name=>{
+    const pos=[];
+    (P.structure||[]).forEach(r=>{ if((P.assign[r.id]||[]).indexOf(name)>=0) pos.push(r.name); });
+    (P.representatives||[]).forEach(r=>{ if((r.names||[]).indexOf(name)>=0) pos.push(r.subject+'课代表'); });
+    return { name, pos, count:pos.length };
+  });
+  if(pmStatsSort==='count') rows.sort((a,b)=> b.count-a.count || a.name.localeCompare(b.name,'zh'));
+  else rows.sort((a,b)=> a.name.localeCompare(b.name,'zh') || b.count-a.count);
+  const withPos = rows.filter(r=>r.count>0).length;
+  const totalPos = rows.reduce((s,r)=>s+r.count,0);
+  let html=`<div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+    <div class="text-sm font-semibold text-slate-600">共 ${rows.length} 人，其中 ${withPos} 人任职（合计 ${totalPos} 个职务）</div>
+    <div class="flex gap-2">
+      <button class="text-sm border rounded-lg px-3 py-1.5 ${pmStatsSort==='count'?'bg-indigo-600 text-white':'hover:bg-gray-50'}" onclick="pmStatsSetSort('count')">按职务数量</button>
+      <button class="text-sm border rounded-lg px-3 py-1.5 ${pmStatsSort==='name'?'bg-indigo-600 text-white':'hover:bg-gray-50'}" onclick="pmStatsSetSort('name')">按姓名</button>
+    </div>
+  </div>`;
+  html+=`<div class="bg-white rounded-2xl shadow-sm overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="bg-slate-50 text-slate-500"><th class="text-left p-3 font-medium whitespace-nowrap">姓名</th><th class="text-left p-3 font-medium w-20 whitespace-nowrap">职务数</th><th class="text-left p-3 font-medium">现有职务</th></tr></thead>
+      <tbody>`;
+  rows.forEach(r=>{
+    const chips = r.pos.length ? r.pos.map(p=>`<span class="inline-flex items-center bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded-full border border-indigo-200 mr-1 mb-1">${esc(p)}</span>`).join('') : '<span class="text-slate-300">暂无职务</span>';
+    html+=`<tr class="border-b border-slate-100">
+      <td class="p-3 font-medium text-slate-700 whitespace-nowrap">${esc(r.name)}</td>
+      <td class="p-3"><span class="inline-block min-w-[24px] text-center rounded-full ${r.count?'bg-indigo-100 text-indigo-700':'text-slate-300'} text-xs px-2 py-0.5">${r.count}</span></td>
+      <td class="p-3">${chips}</td>
+    </tr>`;
+  });
+  html+=`</tbody></table></div>
+  <p class="text-xs text-slate-400 mt-3">统计范围：职务架构中的职务 + 课代表。在「职务架构」「课代表」中增删人员后会自动更新；按职务数量排列时同数量按姓名排序。</p>`;
+  return html;
 }
 
 /* ===== 职务架构 ===== */
