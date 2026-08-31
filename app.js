@@ -71,10 +71,17 @@ function pushSync() {
         // mergeMissing(云端, 本机)：把云端比本机多的记录补进本机 state（不改动本机已有的修改）
         const added = mergeMissing(merged, state);
         toPush = state;
+        // 采纳云端的墓碑（别的设备删的东西，本机也要认），并据此剔除已删除条目，避免删除被复活
+        toPush._deleted = unionDeleted(state._deleted, merged._deleted);
+        applyTombstones(toPush);
         if (added > 0) {
           toPush._savedAt = Date.now();
           try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toPush)); } catch (e) {}
         }
+      } else {
+        toPush = state;
+        toPush._deleted = unionDeleted(state._deleted, (cloud && cloud.state && cloud.state._deleted) || null);
+        applyTombstones(toPush);
       }
     }
     return apiPost('/api/data', { state: toPush });
@@ -95,6 +102,77 @@ function pushSync() {
 }
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+// ===== 删除墓碑（tombstone）：让「删除」也能跨设备同步 =====
+// 旧合并逻辑是「按 id / 值取并集」，只增不删。某设备删了记录，云端还在，下次同步又把记录加回来（用户现象：删了又冒出来）。
+// 修复：删除时不只是从数组移除，同时把「被删条目」记进 state._deleted（墓碑）。
+// 合并 / 推送时遇到墓碑里的条目就跳过，不再复活；其他设备拉取时也按墓碑过滤，删除随之同步。
+function _tomboHas(deleted, k, key, val) {
+  if (!deleted || !deleted.length) return false;
+  for (let i = 0; i < deleted.length; i++) {
+    const d = deleted[i];
+    if (!d || d.k !== k) continue;
+    if (key === 'id' ? (d.id === val) : (d.v === val)) return true;
+  }
+  return false;
+}
+function markDeletedId(k, id) {
+  if (id == null) return;
+  state._deleted = state._deleted || [];
+  if (!_tomboHas(state._deleted, k, 'id', id)) state._deleted.push({ k: k, id: id });
+}
+function markDeletedVal(k, v) {
+  if (v == null) return;
+  state._deleted = state._deleted || [];
+  if (!_tomboHas(state._deleted, k, 'v', v)) state._deleted.push({ k: k, v: v });
+}
+function unionDeleted(a, b) {
+  const out = (a && a.length) ? a.slice() : [];
+  if (b && b.length) for (let i = 0; i < b.length; i++) {
+    const d = b[i];
+    if (!d || !d.k) continue;
+    const key = (d.id != null) ? 'id' : 'v';
+    const val = (d.id != null) ? d.id : d.v;
+    if (!_tomboHas(out, d.k, key, val)) out.push(d);
+  }
+  return out;
+}
+// 把墓碑里的条目从 state 各数组里物理剔除（本地视图 & 推送前清理）
+function applyTombstones(s) {
+  if (!s || !s._deleted || !s._deleted.length) return;
+  const D = s._deleted;
+  MERGE_ARRAY_KEYS.forEach(k => {
+    if (!Array.isArray(s[k])) return;
+    s[k] = s[k].filter(x => !(x && _tomboHas(D, k, 'id', x.id)));
+  });
+  MERGE_NESTED_ARRAYS.forEach(pair => {
+    const p = pair[0], c = pair[1];
+    if (s[p] && s[p][c] && Array.isArray(s[p][c])) {
+      s[p][c] = s[p][c].filter(x => !(x && _tomboHas(D, p + '.' + c, 'id', x.id)));
+    }
+  });
+  if (s.positions && typeof s.positions === 'object') {
+    const P = s.positions;
+    if (Array.isArray(P.structure)) P.structure = P.structure.filter(x => !(x && _tomboHas(D, 'positions.structure', 'id', x.id)));
+    if (P.assign && typeof P.assign === 'object') {
+      Object.keys(P.assign).forEach(rid => {
+        if (Array.isArray(P.assign[rid])) P.assign[rid] = P.assign[rid].filter(n => !_tomboHas(D, 'positions.assign.' + rid, 'v', n));
+      });
+    }
+    if (Array.isArray(P.representatives)) P.representatives = P.representatives.filter(x => !(x && _tomboHas(D, 'positions.representatives', 'id', x.id)));
+  }
+  if (Array.isArray(s.students)) {
+    s.students.forEach(st => { if (st && Array.isArray(st.records)) st.records = st.records.filter(r => !(r && _tomboHas(D, 'students.records', 'id', r.id))); });
+  }
+  if (s.recKeywords && typeof s.recKeywords === 'object') {
+    ['labels', 'desc'].forEach(sk => {
+      const m = s.recKeywords[sk];
+      if (!m || typeof m !== 'object') return;
+      Object.keys(m).forEach(t => { if (Array.isArray(m[t])) m[t] = m[t].filter(x => !_tomboHas(D, 'recKeywords.' + sk + '.' + t, 'v', x)); });
+    });
+  }
+  if (Array.isArray(s.homeworkKeywords)) s.homeworkKeywords = s.homeworkKeywords.filter(x => !_tomboHas(D, 'homeworkKeywords', 'v', x));
+}
 
 // ===== 轻量内容哈希：缓存变更检测用 =====
 // 背景：积分维度签名、成绩派生数据签名原本靠「把整份数据拼成大字符串再比对」判断是否变化。
@@ -157,6 +235,7 @@ function defaultState() {
     locked: true,
     lockPass: '1234',
     defaultLocked: true,
+    _deleted: [],
     nav: [
       { id: 'home', label: '工作台首页', icon: '🏠' },
       { section: '日常记录', items: [
@@ -456,6 +535,7 @@ function defaultPositions() {
 }
 
 function migrateState(s) {
+  if (!Array.isArray(s._deleted)) s._deleted = []; // 墓碑数组兜底（旧数据可能缺此字段）
   const ds = defaultState();
   // 确保所有顶层字段存在（从旧备份/早期版本导入的数据可能缺少某些模块）
   ['schedule','students','todos','templates','classLogs','communications','homework','scores','seating','seatingByClass','reminders','classRecords','user','nav','points','examData','convertRatios','snapshots','attendance','positions','classRecordSubjects','homeworkKeywords','classes','headTeacherClass','activeClass','locked','lockPass','defaultLocked','handbook'].forEach(k => {
@@ -761,19 +841,29 @@ const MERGE_NESTED_ARRAYS = [['attendance', 'logs'], ['examData', 'records'], ['
 const MERGE_OBJECT_KEYS = ['seatingByClass'];
 
 // 按 id 取并集：把 la 里 cloud 没有的补进 ca，返回补入条数
-function mergeById(la, ca) {
+function mergeById(la, ca, kp) {
   if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
   let n = 0;
   const have = new Set(ca.map(x => x && x.id));
-  la.forEach(x => { if (x && x.id && !have.has(x.id)) { ca.unshift(x); have.add(x.id); n++; } });
+  const D = (kp && state && state._deleted) ? state._deleted : null;
+  la.forEach(x => {
+    if (!x || !x.id || have.has(x.id)) return;
+    if (D && _tomboHas(D, kp, 'id', x.id)) return; // 墓碑：已删除的不再复活
+    ca.unshift(x); have.add(x.id); n++;
+  });
   return n;
 }
 // 按值取并集（字符串数组，如识别关键词）
-function mergeByValue(la, ca) {
+function mergeByValue(la, ca, kp) {
   if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
   let n = 0;
   const have = new Set(ca);
-  la.forEach(x => { if (x != null && !have.has(x)) { ca.push(x); have.add(x); n++; } });
+  const D = (kp && state && state._deleted) ? state._deleted : null;
+  la.forEach(x => {
+    if (x == null || have.has(x)) return;
+    if (D && _tomboHas(D, kp, 'v', x)) return; // 墓碑：已删除的不再复活
+    ca.push(x); have.add(x); n++;
+  });
   return n;
 }
 // 把 local 里有、cloud 里没有的记录补进 cloud（按 id 取并集，不做覆盖式替换）
@@ -782,7 +872,7 @@ function mergeMissing(local, cloud) {
   MERGE_ARRAY_KEYS.forEach(k => {
     if (!Array.isArray(local[k]) || !local[k].length) return;
     if (!Array.isArray(cloud[k])) cloud[k] = [];
-    added += mergeById(local[k], cloud[k]);
+    added += mergeById(local[k], cloud[k], k);
   });
   MERGE_NESTED_ARRAYS.forEach(pair => {
     const [p, c] = pair;
@@ -791,7 +881,7 @@ function mergeMissing(local, cloud) {
     if (!Array.isArray(lp[c]) || !lp[c].length) return;
     if (!cloud[p] || typeof cloud[p] !== 'object') cloud[p] = {};
     if (!Array.isArray(cloud[p][c])) cloud[p][c] = [];
-    added += mergeById(lp[c], cloud[p][c]);
+    added += mergeById(lp[c], cloud[p][c], p + '.' + c);
   });
   MERGE_OBJECT_KEYS.forEach(k => {
     const lo = local[k];
@@ -808,14 +898,14 @@ function mergeMissing(local, cloud) {
     const cp = cloud.positions;
     if (Array.isArray(lp.structure) && lp.structure.length) {
       if (!Array.isArray(cp.structure)) cp.structure = [];
-      added += mergeById(lp.structure, cp.structure);
+      added += mergeById(lp.structure, cp.structure, 'positions.structure');
     }
     if (lp.assign && typeof lp.assign === 'object') {
       cp.assign = cp.assign || {};
       Object.keys(lp.assign).forEach(rid => {
         const ln = Array.isArray(lp.assign[rid]) ? lp.assign[rid] : [];
         if (!Array.isArray(cp.assign[rid])) cp.assign[rid] = [];
-        added += mergeByValue(ln, cp.assign[rid]);
+        added += mergeByValue(ln, cp.assign[rid], 'positions.assign.' + rid);
       });
     }
     if (Array.isArray(lp.representatives) && lp.representatives.length) {
@@ -826,7 +916,7 @@ function mergeMissing(local, cloud) {
         if (!r || !r.id) return;
         if (!byId[r.id]) { cp.representatives.push(r); byId[r.id] = r; added++; return; }
         if (!Array.isArray(byId[r.id].names)) byId[r.id].names = [];
-        added += mergeByValue(r.names || [], byId[r.id].names);
+        added += mergeByValue(r.names || [], byId[r.id].names, 'positions.representatives.names');
       });
     }
   }
@@ -840,25 +930,26 @@ function mergeMissing(local, cloud) {
       cloud.recKeywords[sk] = cloud.recKeywords[sk] || {};
       Object.keys(src).forEach(t => {
         if (!Array.isArray(cloud.recKeywords[sk][t])) cloud.recKeywords[sk][t] = [];
-        added += mergeByValue(src[t] || [], cloud.recKeywords[sk][t]);
+        added += mergeByValue(src[t] || [], cloud.recKeywords[sk][t], 'recKeywords.' + sk + '.' + t);
       });
     });
   }
   // 作业识别关键词（字符串数组）
   if (Array.isArray(local.homeworkKeywords) && local.homeworkKeywords.length) {
     if (!Array.isArray(cloud.homeworkKeywords)) cloud.homeworkKeywords = [];
-    added += mergeByValue(local.homeworkKeywords, cloud.homeworkKeywords);
+    added += mergeByValue(local.homeworkKeywords, cloud.homeworkKeywords, 'homeworkKeywords');
   }
   // 学生身上的行为记录（students[].records）
   if (Array.isArray(cloud.students) && Array.isArray(local.students)) {
     const byId = {};
+    const D2 = (state && state._deleted) ? state._deleted : null;
     local.students.forEach(s => { if (s && s.id) byId[s.id] = s; });
     cloud.students.forEach(cs => {
       const ls = byId[cs.id];
       if (!ls || !Array.isArray(ls.records)) return;
       if (!Array.isArray(cs.records)) cs.records = [];
       const have = new Set(cs.records.map(x => x && x.id));
-      ls.records.forEach(r => { if (r && r.id && !have.has(r.id)) { cs.records.unshift(r); have.add(r.id); added++; } });
+      ls.records.forEach(r => { if (r && r.id && !have.has(r.id)) { if (D2 && _tomboHas(D2, 'students.records', 'id', r.id)) return; cs.records.unshift(r); have.add(r.id); added++; } });
     });
   }
   return added;
@@ -868,6 +959,7 @@ function applyCloudState(cloudRaw) {
   // 锁定态是本机显示偏好，不参与云端同步：先记下本机当前是否锁定，合并后再还原，
   // 避免「同步数据把别的设备的锁定/解锁状态带到本机」，也避免同步时把已解锁设备重新锁死。
   const localLocked = isLocked();
+  const localDeleted = (state && state._deleted) ? state._deleted.slice() : [];
   if (!cloudRaw) { return; }
   let cloud;
   try { cloud = migrateState(cloudRaw); } catch (e) { cloud = null; }
@@ -883,6 +975,9 @@ function applyCloudState(cloudRaw) {
   }
   state = cloud;
   state.locked = localLocked; // 还原本机锁定态（不被云端覆盖）
+  // 合并墓碑（本机删的 + 云端删的，全部保留），并据此剔除已删除条目，使删除跨设备同步、不再复活
+  state._deleted = unionDeleted(localDeleted, cloud._deleted);
+  applyTombstones(state);
   if (added > 0) {
     save(true); // internal：恢复数据属于系统行为，锁定状态下也要写回
     setTimeout(() => { try { toast(`已恢复 ${added} 条未同步到云端的记录`); } catch (e) {} }, 600);
@@ -2222,11 +2317,16 @@ function purgeStudentLiveRefs(id, name) {
     if (st && Array.isArray(st.cells)) st.cells = st.cells.map(row => row.map(x => (x === id ? null : x)));
   });
   const P = state.positions || {};
-  Object.keys(P.assign || {}).forEach(rid => { P.assign[rid] = (P.assign[rid] || []).filter(n => n !== name); });
+  Object.keys(P.assign || {}).forEach(rid => { P.assign[rid] = (P.assign[rid] || []).filter(n => n !== name); markDeletedVal('positions.assign.' + rid, name); });
   (P.representatives || []).forEach(r => { r.names = (r.names || []).filter(n => n !== name); });
 }
 // 清理历史记录（可选）：积分流水 / 课堂 / 作业 / 成绩
 function purgeStudentHistory(id, name) {
+  (state.classRecords || []).forEach(r => { if (r.studentId === id || r.studentName === name) markDeletedId('classRecords', r.id); });
+  (state.homework || []).forEach(h => { if (h.studentId === id || h.studentName === name) markDeletedId('homework', h.id); });
+  if (state.examData && Array.isArray(state.examData.records)) {
+    (state.examData.records).forEach(r => { if (r.studentName === name) markDeletedId('examData.records', r.id); });
+  }
   state.points.logs = (state.points.logs || []).filter(l => l.studentId !== id);
   state.classRecords = (state.classRecords || []).filter(r => r.studentId !== id && r.studentName !== name);
   state.homework = (state.homework || []).filter(h => h.studentId !== id && h.studentName !== name);
@@ -2259,6 +2359,7 @@ function deleteStudent(id) {
       };
       if (snap.idx < 0) return;
       state.students.splice(snap.idx, 1);
+      markDeletedId('students', id);
       purgeStudentLiveRefs(id, s.name);
       if (alsoHistory) purgeStudentHistory(id, s.name);
       save();
@@ -2392,6 +2493,7 @@ function deleteRecord(sid, rid) {
   const s = state.students.find(x=>x.id===sid);
   if(!s) return;
   if (state.classLogs) state.classLogs = state.classLogs.filter(l => l.behaviorId !== rid);
+  markDeletedId('classLogs', rid); markDeletedId('students.records', rid); // 记墓碑，删除跨设备同步
   // 若在行为记录页删除，删除后刷新该页；否则回到学生档案
   if (currentRoute === 'behavior') doDelete(()=>s.records, rid, '记录', null);
   else doDelete(()=>s.records, rid, '记录', () => openStudentProfile(sid));
@@ -2441,6 +2543,7 @@ function deleteTemplate(id) {
   const t = state.templates.find(x=>x.id===id);
   if(!t) return;
   confirmModal('确定删除模板「' + t.title + '」？', function(){
+    markDeletedId('templates', id);
     doDelete(()=>state.templates, id, t.title);
   });
 }
@@ -2506,6 +2609,7 @@ function saveClassLog() {
 function deleteClassLog(id) {
   const c = state.classLogs.find(x=>x.id===id);
   if(!c) return;
+  markDeletedId('classLogs', id);
   doDelete(()=>state.classLogs, id, c.content.slice(0,12) || '日志');
 }
 
@@ -2557,6 +2661,7 @@ function setCommStatus(id, status) {
 function deleteComm(id) {
   const c = state.communications.find(x=>x.id===id);
   if(!c) return;
+  markDeletedId('communications', id);
   doDelete(()=>state.communications, id, (c.student || c.parent || '沟通'));
 }
 
@@ -2864,6 +2969,7 @@ function saveHomework() {
 function deleteHomework(id) {
   const h = state.homework.find(x=>x.id===id);
   if(!h) return;
+  markDeletedId('homework', id);
   doDelete(()=>state.homework, id, h.title || '作业');
 }
 function openHomeworkKeywordSettings() {
@@ -2935,6 +3041,7 @@ function saveScore() {
 function deleteScore(id) {
   const s = state.scores.find(x=>x.id===id);
   if(!s) return;
+  markDeletedId('scores', id);
   doDelete(()=>state.scores, id, (s.name + ' · ' + s.subject));
 }
 
@@ -2984,6 +3091,7 @@ function toggleTodo(id) {
 function deleteTodo(id) {
   const t = state.todos.find(x=>x.id===id);
   if(!t) return;
+  markDeletedId('todos', id);
   doDelete(()=>state.todos, id, t.title || '待办');
 }
 function openReminderForm() {
@@ -3112,6 +3220,7 @@ function deleteHbItem(kind, id) {
   if (isLocked()) return;
   const it = hbList(kind).find(x => x.id === id);
   if (!it) return;
+  markDeletedId('handbook.' + kind, id);
   doDelete(() => hbList(kind), id, hbMeta(kind).title + '：' + String(it.text || '').slice(0, 12));
 }
 function moveHbItem(kind, id, dir) {
@@ -3475,6 +3584,7 @@ function saveClassRecord() {
 function deleteClassRecord(id) {
   const r = state.classRecords.find(x => x.id === id);
   if (!r) return;
+  markDeletedId('classRecords', id);
   doDelete(() => state.classRecords, id, (r.content || '课堂记录').slice(0, 12));
 }
 
@@ -4956,7 +5066,7 @@ function viewSnapshot(id) {
       <tbody>${rows}</tbody></table>
     </div>`, 'lg');
 }
-function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !== id); save(); openPtHistory(); }
+function delSnapshot(id) { state.snapshots = state.snapshots.filter(x => x.id !== id); markDeletedId('snapshots', id); save(); openPtHistory(); }
 
 // ===================== 体育管理（打卡 + 早操 · 基线抵扣模型）=====================
 // 模型：每天自动获得「打卡 +2 + 出操 +2」基线分（计入体育维度），只登记异常负分对冲：
@@ -6224,8 +6334,10 @@ function updateExam(id) {
 }
 function delExam(id) {
   if (!confirm('删除该考试？其下所有成绩记录也会删除。')) return;
+  (state.examData.records || []).forEach(r => { if (r.examId === id) markDeletedId('examData.records', r.id); });
   state.examData.records = state.examData.records.filter(r => r.examId !== id);
   state.examData.exams = state.examData.exams.filter(e => e.id !== id);
+  markDeletedId('examData.exams', id);
   save(); render();
 }
 function saveExamScore() {
@@ -10197,7 +10309,9 @@ function pmAddPosition(){
 }
 function pmDeletePosition(id){
   if(!confirm('确定删除这个职务吗？')) return;
+  (state.positions.assign[id]||[]).forEach(n=>markDeletedVal('positions.assign.'+id, n));
   state.positions.structure=state.positions.structure.filter(p=>p.id!==id);
+  markDeletedId('positions.structure', id);
   delete state.positions.assign[id];
   save(); pmRefreshAll();
 }
@@ -10208,7 +10322,7 @@ function pmRemoveRole(id, name){
   if (!Array.isArray(arr)) return pmRefreshAll();
   const idx = arr.indexOf(name);
   if (idx < 0) return pmRefreshAll();      // 已被别人改过，直接重画即可
-  arr.splice(idx, 1); save(); pmRefreshAll();
+  arr.splice(idx, 1); markDeletedVal('positions.assign.' + id, name); save(); pmRefreshAll();
 }
 function pmOpenDescEdit(id){
   const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
@@ -10265,7 +10379,7 @@ function pmToggleStu(name){
   }
   else cur=((state.positions.dutyWeekly[curCtx.day]&&state.positions.dutyWeekly[curCtx.day][curCtx.task])||[]).slice();
   const i=cur.indexOf(name);
-  if(i>=0) cur.splice(i,1); else cur.push(name);
+  if(i>=0){ cur.splice(i,1); if(curCtx.mode==='role') markDeletedVal('positions.assign.'+curCtx.key, name); } else cur.push(name);
   if(curCtx.mode==='role') state.positions.assign[curCtx.key]=cur;
   else if(curCtx.mode==='rep'){
     const r=state.positions.representatives.find(x=>x.id===curCtx.key); if(r) r.names=cur; pmSyncKedaibiaoAssign();
@@ -10315,7 +10429,7 @@ function pmRenderDuty(){
   </div>`;
   return html;
 }
-function pmRemoveDuty(day,task,i){ state.positions.dutyWeekly[day][task].splice(i,1); save(); pmRefreshAll(); }
+function pmRemoveDuty(day,task,i){ const _nm=state.positions.dutyWeekly[day][task][i]; state.positions.dutyWeekly[day][task].splice(i,1); markDeletedVal('positions.dutyWeekly.'+day+'.'+task, _nm); save(); pmRefreshAll(); }
 function pmToggleDutyEdit(day,task){ state.positions.dutyEditMode[day]=state.positions.dutyEditMode[day]||{}; state.positions.dutyEditMode[day][task]=!state.positions.dutyEditMode[day][task]; pmRefreshAll(); }
 function pmExportDutyXlsx(){
   if(typeof XLSX==='undefined'){ return alert('导出组件未加载，请刷新后重试'); }
@@ -10506,7 +10620,7 @@ function pmUpdateRepSubject(id,field,value){
 }
 function pmRemoveRepName(id,idx){
   const r=state.positions.representatives.find(x=>x.id===id); if(!r||!r.names) return;
-  r.names.splice(idx,1);
+  const _nm=r.names[idx]; r.names.splice(idx,1); markDeletedVal('positions.representatives.names', _nm);
   pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
 }
 function pmOpenAddRep(id){
