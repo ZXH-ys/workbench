@@ -572,6 +572,19 @@ function migrateState(s) {
     if (!p.category) p.category = _catMap[p.id] || (p.group === '学生会' ? '非班委' : '班委');
   });
   if (!s.positions.dutyTree || typeof s.positions.dutyTree !== 'object') s.positions.dutyTree = defaultPositions().dutyTree;
+  // 职务树结构对齐：存量用户的数据是在「拖地」等节点新增前保存的，其 dutyTree 可能缺失该节点或缺少 dutyTask 关联属性。
+  // 此处按节点 id 递归合并默认树：补齐 dutyTask/roleId 关联属性，并补入缺失的默认子节点（如拖地），解决职务树不显示拖地的 bug。
+  (function pmMergeDutyTree(def, pers){
+    if(!def) return pers;
+    if(!pers || pers.id !== def.id) return JSON.parse(JSON.stringify(def));
+    if('dutyTask' in def) pers.dutyTask = def.dutyTask;
+    if('roleId' in def) pers.roleId = def.roleId;
+    const dc = def.children || [], pc = pers.children || [], merged = [], used = new Set();
+    dc.forEach(d=>{ const p = pc.find(x=>x && x.id===d.id); if(p){ merged.push(pmMergeDutyTree(d,p)); used.add(d.id); } else { merged.push(JSON.parse(JSON.stringify(d))); } });
+    pc.forEach(x=>{ if(x && !used.has(x.id)) merged.push(x); });
+    pers.children = merged;
+    return pers;
+  })(defaultPositions().dutyTree, s.positions.dutyTree);
   if (!s.positions.dutyWeekly || typeof s.positions.dutyWeekly !== 'object') s.positions.dutyWeekly = {};
   if (!s.positions.deductionKeywords || typeof s.positions.deductionKeywords !== 'object') s.positions.deductionKeywords = defaultPositions().deductionKeywords;
   if (typeof s.positions.deductionPoints !== 'number') s.positions.deductionPoints = 1;
