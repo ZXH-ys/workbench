@@ -1,6 +1,9 @@
 // 班主任工作台 Service Worker
-// 策略：网络优先（保证每次部署更新立即可见），离线时回退到缓存壳
-// 缓存版本：每次发布递增，activate 阶段会自动清掉旧缓存
+// 策略：stale-while-revalidate（缓存优先秒回 + 后台静默刷新缓存）
+// 原因：后端（Railway）休眠后首次请求极慢，若网络优先会导致刷新时整页白屏数秒；
+//       改为「有缓存先秒回、后台再拉新版本更新缓存」，冷后端也不再白屏。
+// 注意：采用 SWR 后不再依赖缓存版本号强制刷新——资源随后台 revalidate 自动更新，
+//       故缓存名保持稳定即可（无需每次部署递增）。
 const CACHE = 'wb-shell-v5';
 const ASSETS = [
   './',
@@ -37,19 +40,20 @@ self.addEventListener('fetch', (e) => {
   // 只缓存同源静态资源，避免把 CDN 上的第三方响应塞进自己的缓存
   if (url.origin !== self.location.origin) return;
   e.respondWith((async () => {
-    try {
-      const net = await fetch(e.request);
-      const c = await caches.open(CACHE);
-      c.put(e.request, net.clone());
-      return net;
-    } catch (err) {
-      const cached = await caches.match(e.request);
-      if (cached) return cached;
-      if (e.request.mode === 'navigate') {
-        const shell = await caches.match('./index.html');
-        if (shell) return shell;
-      }
-      return Response.error();
+    const cache = await caches.open(CACHE);
+    const cached = await cache.match(e.request);
+    // stale-while-revalidate：有缓存先秒回（避免冷后端白屏），后台再拉网络更新缓存
+    const network = fetch(e.request).then(res => {
+      if (res && res.status === 200) cache.put(e.request, res.clone());
+      return res;
+    }).catch(() => null);
+    if (cached) return cached;
+    const net = await network;
+    if (net) return net;
+    if (e.request.mode === 'navigate') {
+      const shell = await cache.match('./index.html');
+      if (shell) return shell;
     }
+    return Response.error();
   })());
 });
