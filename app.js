@@ -11,11 +11,14 @@ function apiPost(url, body) {
     .then(r => r.ok ? r.json() : Promise.reject(new Error('sync fail ' + r.status)))
     .catch(e => { console.warn('[sync]', e.message); return null; });
 }
-function apiGet(url) {
+function apiGet(url, timeoutMs) {
   if (!AUTH_TOKEN) return Promise.resolve(null);
-  return fetch(url, { headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN } })
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), typeof timeoutMs === 'number' ? timeoutMs : 15000);
+  return fetch(url, { headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN }, signal: ctrl.signal })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('sync fail ' + r.status)))
-    .catch(e => { console.warn('[sync]', e.message); return null; });
+    .catch(e => { console.warn('[sync]', e.message); return null; })
+    .finally(() => clearTimeout(timer));
 }
 function setSyncBadge(text, isErr) {
   const el = document.getElementById('sync-badge');
@@ -10816,13 +10819,26 @@ function applyDefaultLock() {
   if (state && state.defaultLocked && state.lockPass) state.locked = true;
 }
 
-// 优先：已登录 -> 拉云端数据；未登录 -> 登录页
+// 优先：已登录 -> 先用本地缓存秒开，后台再静默同步云端；未登录 -> 登录页
 if (AUTH_TOKEN) {
-  apiGet('/api/data').then(res => {
-    applyCloudState(res && res.state); // 内部含本地未同步记录的补回逻辑
-    render();
-  }).catch(() => { render(); });
+  // 关键修复：曾因「先等 /api/data 返回才 render」，后端冷启动（Railway 休眠后首次
+  // 请求极慢）时 fetch 长时间挂起，登录态用户刷新首屏直接白屏。改为本地已加载的 state
+  // 立即渲染，云端数据在后台拉取，回来再合并重渲染——用户永远先看到界面，不再白屏。
+  applyDefaultLock();
+  render();
+  setSyncBadge('同步中…', false);
+  apiGet('/api/data', 30000).then(res => {
+    if (res && res.state) {
+      applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑
+      render();
+    } else {
+      setSyncBadge('⚠️ 未同步（仅本机）', true);
+    }
+  }).catch(() => {
+    setSyncBadge('⚠️ 未同步（仅本机）', true);
+  });
 } else if (localStorage.getItem('ct_offline') === '1') {
+  applyDefaultLock();
   render();
 } else {
   showLogin();
