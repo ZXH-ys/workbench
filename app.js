@@ -10244,11 +10244,13 @@ function pmStatsSetSort(s){ pmStatsSort=s; pmRefreshAll(); }
 function pmRenderStats(){
   const P = (state.positions && typeof state.positions==='object') ? state.positions : defaultPositions();
   const names = pmStudentNames();
-  // 统计每个人的现有职务：职务架构中的职务 + 课代表（与「按职务计算任职分」口径一致）
+  // 统计每个人的现有职务：职务架构中的职务 + 课代表 + 值日任务（值日按任务去重，同一任务不随排表天数重复计数）
   const rows = names.map(name=>{
     const pos=[];
     (P.structure||[]).forEach(r=>{ if((P.assign[r.id]||[]).indexOf(name)>=0) pos.push(r.name); });
     (P.representatives||[]).forEach(r=>{ if((r.names||[]).indexOf(name)>=0) pos.push(r.subject+'课代表'); });
+    const dutySeen={};
+    pmDays.forEach(d=>{ pmDutyTasks.forEach(t=>{ const arr=((P.dutyWeekly&&P.dutyWeekly[d]&&P.dutyWeekly[d][t])||[]); if(arr.indexOf(name)>=0 && !dutySeen[t]){ dutySeen[t]=1; pos.push('值日·'+t); } }); });
     return { name, pos, count:pos.length };
   });
   if(pmStatsSort==='count') rows.sort((a,b)=> b.count-a.count || a.name.localeCompare(b.name,'zh'));
@@ -10275,7 +10277,7 @@ function pmRenderStats(){
     </tr>`;
   });
   html+=`</tbody></table></div>
-  <p class="text-xs text-slate-400 mt-3">统计范围：职务架构中的职务 + 课代表。在「职务架构」「课代表」中增删人员后会自动更新；按职务数量排列时同数量按姓名排序。</p>`;
+  <p class="text-xs text-slate-400 mt-3">统计范围：职务架构中的职务 + 课代表 + 值日任务（值日按「任务」去重，同一任务不随排表天数重复计数）。在「职务架构」「课代表」「值日生」中增删后会自动更新；按职务数量排列时同数量按姓名排序。</p>`;
   return html;
 }
 
