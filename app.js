@@ -3,6 +3,7 @@ const STORAGE_KEY = 'ct_workbench_v1';
 const AUTH_KEY = 'ct_auth_token';
 const CLOUD_BACKUP_KEY = 'ct_cloud_backup_v1'; // 合并前留一份云端原始数据，出问题可回滚
 let AUTH_TOKEN = (typeof localStorage !== 'undefined') ? localStorage.getItem(AUTH_KEY) : '';
+let GUEST_MODE = false; // 大屏访客模式：免登录直接展示本机缓存（只读）
 
 // 后端 API（多设备同步）。无后端时自动退化到纯本地。
 function apiPost(url, body) {
@@ -1375,10 +1376,17 @@ function setActiveClass(cls) {
 }
 
 function renderTopBar() {
-  const lockBanner = isLocked() ? `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
-    <span>🔒 只读模式：当前仅可查看，所有修改已禁用</span>
-    <button data-lock-allow onclick="doUnlockPrompt()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">🔓 解锁</button>
-  </div>` : '';
+  const lockBanner = isLocked() ? (() => {
+    const msg = GUEST_MODE
+      ? '🖥️ 大屏访客模式（只读）：数据来自本机缓存，未登录不可修改'
+      : '🔒 只读模式：当前仅可查看，所有修改已禁用';
+    const btn = GUEST_MODE
+      ? `<button data-lock-allow onclick="showLogin()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">登录</button>`
+      : `<button data-lock-allow onclick="doUnlockPrompt()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">🔓 解锁</button>`;
+    return `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
+      <span>${msg}</span>${btn}
+    </div>`;
+  })() : '';
   const classSwitch = `<div class="flex items-center gap-1 bg-gray-100 rounded-full p-0.5 mr-2 overflow-x-auto max-w-[60vw]">
     ${(state.classes || []).map(c => `<button data-lock-allow onclick="setActiveClass('${c.id}')" class="text-xs px-3 py-1 rounded-full transition whitespace-nowrap ${state.activeClass===c.id?'bg-white text-primary shadow-sm font-medium':'text-gray-500 hover:text-gray-700'}">${c.name}</button>`).join('')}
   </div>`;
@@ -1396,7 +1404,8 @@ function renderTopBar() {
     <button data-lock-allow onclick="gsOpen()" class="text-primary text-xs font-medium hover:underline">搜索</button>
   </div>`;
   const syncBadge = `<span id="sync-badge" class="text-[11px] text-gray-400 mr-1"></span>`;
-  const logoutBtn = `<button data-lock-allow onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>`;
+  const logoutBtn = AUTH_TOKEN ? `<button data-lock-allow onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>` : '';
+  const loginBtn = GUEST_MODE ? `<button data-lock-allow onclick="showLogin()" class="ml-2 text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" title="切换到完整登录模式">登录</button>` : '';
   let extra = '';
   if (currentRoute === 'points') {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
@@ -1406,7 +1415,7 @@ function renderTopBar() {
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtLogs()">📜 日志</button>
         <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtBatch()">批量加减分</button>
         <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openPtAdjust(null,'daily',1)">+ 加减分</button>
-        ${syncBadge}${themeBtn}${logoutBtn}
+        ${syncBadge}${loginBtn}${themeBtn}${logoutBtn}
       </div>
     </header>${lockBanner}`;
   }
@@ -1432,7 +1441,7 @@ function renderTopBar() {
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
     ${menuBtn}${classSwitch}${homeDateBar}${searchBox}
-    <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${syncBadge}${themeBtn}${logoutBtn}</div>
+    <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${syncBadge}${loginBtn}${themeBtn}${logoutBtn}</div>
   </header>${lockBanner}`;
 }
 
@@ -9449,6 +9458,8 @@ function doLock() {
     state.lockPass = v;
   }
   state.locked = true;
+  // 「默认锁定」勾选才在刷新后保持锁定；未勾选则本次锁定仅当前会话，刷新自动解锁。
+  state.lockManuallySet = !!(chk && chk.checked);
   save(true); closeModal(); render();   // internal：上锁操作本身必须能落盘
   toast('已锁定为只读模式');
 }
@@ -9474,7 +9485,7 @@ function doUnlock() {
   if (v === state.lockPass || v === RESET_PASSWORD_CODE) {
     const chk = document.getElementById('defaultLockedCheck');
     if (chk) state.defaultLocked = chk.checked;
-    state.locked = false; save(true); closeModal(); render();   // internal：解锁本身必须能落盘
+    state.locked = false; state.lockManuallySet = false; save(true); closeModal(); render();   // internal：解锁本身必须能落盘
     toast('已解锁，可正常编辑');
   } else {
     const m = document.getElementById('unlockMsg');
@@ -10749,6 +10760,7 @@ function pmConfirmQrDeduct(){
 
 // ===================== Init =====================
 function showLogin() {
+  GUEST_MODE = false;
   const app = document.getElementById('app');
   if (app) app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-pink-50 to-rose-50 px-4">
@@ -10787,6 +10799,7 @@ function doLogin() {
     .then(r => r.ok ? r.json() : Promise.reject(new Error('账号或密码错误')))
     .then(d => {
       AUTH_TOKEN = d.token;
+      GUEST_MODE = false;
       localStorage.setItem(AUTH_KEY, d.token);
       // 拉取服务端数据（applyCloudState 会把本地未同步的记录补回，避免丢数据）
       apiGet('/api/data').then(res => {
@@ -10816,16 +10829,12 @@ function doLogout() {
 }
 
 function applyDefaultLock() {
-  if (state && state.defaultLocked && state.lockPass) state.locked = true;
+  // 不再在打开时强制只读：自动锁定会让用户一进应用就被锁住、无法使用（智慧黑板场景尤其明显）。
+  // 改为：仅当「手动上锁」(lockManuallySet) 才保持锁定；否则打开即可用。手动锁会持久化，刷新不丢。
+  if (!state || state.lockManuallySet) return;
+  state.locked = false;
 }
-
-// 优先：已登录 -> 先用本地缓存秒开，后台再静默同步云端；未登录 -> 登录页
-if (AUTH_TOKEN) {
-  // 关键修复：曾因「先等 /api/data 返回才 render」，后端冷启动（Railway 休眠后首次
-  // 请求极慢）时 fetch 长时间挂起，登录态用户刷新首屏直接白屏。改为本地已加载的 state
-  // 立即渲染，云端数据在后台拉取，回来再合并重渲染——用户永远先看到界面，不再白屏。
-  applyDefaultLock();
-  render();
+function startCloudSync() {
   setSyncBadge('同步中…', false);
   apiGet('/api/data', 30000).then(res => {
     if (res && res.state) {
@@ -10837,6 +10846,20 @@ if (AUTH_TOKEN) {
   }).catch(() => {
     setSyncBadge('⚠️ 未同步（仅本机）', true);
   });
+}
+
+// 启动：有本机缓存则直接打开（大屏/本机模式，免登录、可用），仅在全新设备才需登录
+if (localStorage.getItem(STORAGE_KEY)) {
+  // 关键修复（白屏）：本地已加载的 state 立即渲染，云端在后台同步，用户永远先看到界面。
+  GUEST_MODE = !AUTH_TOKEN;
+  applyDefaultLock(); // 解析锁定态：未手动上锁则打开即可用，不再强制只读
+  render();
+  if (AUTH_TOKEN) startCloudSync();
+  else setSyncBadge('🖥️ 大屏模式 · 未登录（改动仅存本机）', true);
+} else if (AUTH_TOKEN) {
+  applyDefaultLock();
+  render();
+  startCloudSync();
 } else if (localStorage.getItem('ct_offline') === '1') {
   applyDefaultLock();
   render();
