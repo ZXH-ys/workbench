@@ -482,7 +482,7 @@ function defaultPositions() {
           { id:'t_zrs_sn', label:'室内', dutyTask:'室内走廊' },
           { id:'t_zrs_sw', label:'室外', dutyTask:'室外走廊（含窗台）' },
           { id:'t_zrs_lj', label:'垃圾桶', dutyTask:'垃圾桶' },
-          { id:'t_zrs_td', label:'拖地' }
+          { id:'t_zrs_td', label:'拖地', dutyTask:'拖地' }
         ]}
       ]},
       { id:'jiancha', label:'监察员', roleId:'jiancha', children:[
@@ -517,7 +517,7 @@ function defaultPositions() {
   return {
     structure, assign, dutyTree,
     dutyWeekly:{}, dutyEditMode:{},
-    dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null },
+    dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null, '拖地':null },
     deductionKeywords, deductionPoints:1,
     dutyRota:{ startDate:'', stepDays:1, spanDays:30, scope:'all', schedule:[] },
     representatives: [
@@ -575,6 +575,13 @@ function migrateState(s) {
   if (!s.positions.deductionKeywords || typeof s.positions.deductionKeywords !== 'object') s.positions.deductionKeywords = defaultPositions().deductionKeywords;
   if (typeof s.positions.deductionPoints !== 'number') s.positions.deductionPoints = 1;
   if (!s.positions.dutyTaskPoints || typeof s.positions.dutyTaskPoints !== 'object') s.positions.dutyTaskPoints = defaultPositions().dutyTaskPoints;
+  // 补齐新增值日任务（如「拖地」）的积分与排表槽位，保证存量用户数据与最新任务列表一致
+  for (const t of pmDutyTasks) if (!(t in s.positions.dutyTaskPoints)) s.positions.dutyTaskPoints[t] = null;
+  if (!s.positions.dutyWeekly || typeof s.positions.dutyWeekly !== 'object') s.positions.dutyWeekly = {};
+  pmDays.forEach(d => {
+    s.positions.dutyWeekly[d] = s.positions.dutyWeekly[d] || {};
+    pmDutyTasks.forEach(t => { if (!Array.isArray(s.positions.dutyWeekly[d][t])) s.positions.dutyWeekly[d][t] = []; });
+  });
   if (!Array.isArray(s.positions.representatives)) s.positions.representatives = defaultPositions().representatives;
   if (!Array.isArray(s.positions.assign.kedaibiao)) s.positions.assign.kedaibiao = [];
   // 课代表关联进班级职务体系：补全 pts、同步职务树子节点与关联扣分关键词
@@ -10187,7 +10194,7 @@ function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 // ===================== 职务与值日管理 =====================
 const pmDays = ['周一','周二','周三','周四','周五'];
-const pmDutyTasks = ['黑板（全部）','室内走廊','垃圾桶','室外走廊（含窗台）'];
+const pmDutyTasks = ['黑板（全部）','室内走廊','垃圾桶','室外走廊（含窗台）','拖地'];
 let pmTab = 'roles';
 let pmRolesEdit = false;
 let curCtx = { mode:'role', key:null, day:null, task:null };
