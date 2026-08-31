@@ -1402,17 +1402,27 @@ function setActiveClass(cls) {
 }
 
 function renderTopBar() {
-  const lockBanner = isLocked() ? (() => {
-    const msg = GUEST_MODE
-      ? '🖥️ 大屏访客模式（只读）：数据来自本机缓存，未登录不可修改'
-      : '🔒 只读模式：当前仅可查看，所有修改已禁用';
-    const btn = GUEST_MODE
-      ? `<button data-lock-allow onclick="showLogin()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">登录</button>`
-      : `<button data-lock-allow onclick="doUnlockPrompt()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">🔓 解锁</button>`;
-    return `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
-      <span>${msg}</span>${btn}
+  let lockBanner = '';
+  if (isLocked()) {
+    // 真正的只读锁定：仅查看，修改被拦截。未登录时引导登录（登录即解锁）；已登录时提供解锁
+    if (GUEST_MODE) {
+      lockBanner = `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
+        <span>🔒 只读模式（未登录）：请输入账号登录以解锁编辑</span>
+        <button data-lock-allow onclick="showLogin()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">登录</button>
+      </div>`;
+    } else {
+      lockBanner = `<div class="bg-amber-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
+        <span>🔒 只读模式：当前仅可查看，所有修改已禁用</span>
+        <button data-lock-allow onclick="doUnlockPrompt()" class="bg-white/90 text-amber-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">🔓 解锁</button>
+      </div>`;
+    }
+  } else if (GUEST_MODE) {
+    // 未登录的访客模式：可查看、可本地改动，但未同步云端（不是只读锁定）
+    lockBanner = `<div class="bg-blue-500 text-white text-xs sm:text-sm px-4 py-2 flex items-center justify-between sticky top-0 z-20">
+      <span>🖥️ 大屏模式 · 未登录（改动仅存本机，未同步云端）</span>
+      <button data-lock-allow onclick="showLogin()" class="bg-white/90 text-blue-600 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ml-2">登录</button>
     </div>`;
-  })() : '';
+  }
   const classSwitch = `<div class="flex items-center gap-1 bg-gray-100 rounded-full p-0.5 mr-2 overflow-x-auto max-w-[60vw]">
     ${(state.classes || []).map(c => `<button data-lock-allow onclick="setActiveClass('${c.id}')" class="text-xs px-3 py-1 rounded-full transition whitespace-nowrap ${state.activeClass===c.id?'bg-white text-primary shadow-sm font-medium':'text-gray-500 hover:text-gray-700'}">${c.name}</button>`).join('')}
   </div>`;
@@ -10797,11 +10807,11 @@ function showLogin() {
           <p class="text-xs text-gray-400 mt-1">登录后多设备同步你的数据</p>
         </div>
         <div class="space-y-3">
-          <input id="login-user" placeholder="账号" value="admin" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
-          <input id="login-pass" type="password" placeholder="密码" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
-          <label class="flex items-center gap-2 text-xs text-gray-500 select-none"><input id="login-remember" type="checkbox" checked class="w-4 h-4 text-primary rounded" /> 记住本设备（下次自动登录，无需再输密码）</label>
-          <button onclick="doLogin()" class="w-full bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition">登录</button>
-          <button onclick="enterOffline()" class="w-full text-gray-500 py-2 rounded-lg text-sm hover:bg-gray-50 transition">📴 本地离线使用（数据仅存本机，不上云）</button>
+          <input id="login-user" data-lock-allow placeholder="账号" value="admin" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
+          <input id="login-pass" data-lock-allow type="password" placeholder="密码" class="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-200" />
+          <label data-lock-allow class="flex items-center gap-2 text-xs text-gray-500 select-none"><input id="login-remember" type="checkbox" checked class="w-4 h-4 text-primary rounded" /> 记住本设备（下次自动登录，无需再输密码）</label>
+          <button data-lock-allow onclick="doLogin()" class="w-full bg-primary text-white py-2.5 rounded-lg text-sm font-medium hover:bg-rose-500 transition">登录</button>
+          <button data-lock-allow onclick="enterOffline()" class="w-full text-gray-500 py-2 rounded-lg text-sm hover:bg-gray-50 transition">📴 本地离线使用（数据仅存本机，不上云）</button>
           <p id="login-err" class="text-xs text-red-500 text-center h-4"></p>
         </div>
         <p class="text-[11px] text-gray-300 text-center">默认账号 admin / admin123，登录后可在数据管理修改密码</p>
@@ -10843,6 +10853,9 @@ function doLogin() {
         } else {
           applyDefaultLock();
         }
+        // 登录即视为本人操作：解除只读锁定（云端若存过 locked 也一并清除），进入可编辑状态
+        if (state) { state.locked = false; state.lockManuallySet = false; }
+        save(true);
         render();
       }).catch(() => { render(); });
     })
@@ -10874,6 +10887,8 @@ function startCloudSync() {
   apiGet('/api/data', 30000).then(res => {
     if (res && res.state) {
       applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑
+      // 已登录设备视为本人操作：解除只读锁定（云端若存过 locked 也一并清除），避免重启/同步后被重新锁死
+      if (AUTH_TOKEN && state) { state.locked = false; state.lockManuallySet = false; save(true); }
       render();
     } else {
       setSyncBadge('⚠️ 未同步（仅本机）', true);
