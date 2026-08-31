@@ -518,6 +518,7 @@ function defaultPositions() {
     structure, assign, dutyTree,
     dutyWeekly:{}, dutyEditMode:{},
     dutyTaskPoints:{ '黑板（全部）':null, '室内走廊':null, '垃圾桶':null, '室外走廊（含窗台）':null, '拖地':null },
+    dutyTaskMax:{ '黑板（全部）':1, '室内走廊':1, '垃圾桶':1, '室外走廊（含窗台）':1, '拖地':1 },
     deductionKeywords, deductionPoints:1,
     dutyRota:{ startDate:'', stepDays:1, spanDays:30, scope:'all', schedule:[] },
     representatives: [
@@ -582,6 +583,9 @@ function migrateState(s) {
     s.positions.dutyWeekly[d] = s.positions.dutyWeekly[d] || {};
     pmDutyTasks.forEach(t => { if (!Array.isArray(s.positions.dutyWeekly[d][t])) s.positions.dutyWeekly[d][t] = []; });
   });
+  // 补齐「每槽最多人数」设置（值日自动排表用）
+  if (!s.positions.dutyTaskMax || typeof s.positions.dutyTaskMax !== 'object') s.positions.dutyTaskMax = defaultPositions().dutyTaskMax;
+  for (const t of pmDutyTasks) if (!(t in s.positions.dutyTaskMax) || typeof s.positions.dutyTaskMax[t] !== 'number') s.positions.dutyTaskMax[t] = 1;
   if (!Array.isArray(s.positions.representatives)) s.positions.representatives = defaultPositions().representatives;
   if (!Array.isArray(s.positions.assign.kedaibiao)) s.positions.assign.kedaibiao = [];
   // 课代表关联进班级职务体系：补全 pts、同步职务树子节点与关联扣分关键词
@@ -10443,10 +10447,37 @@ function pmToggleStu(name){
 }
 
 /* ===== 值日生轮换 ===== */
+function pmDutyPosCount(name){
+  // 与「任职统计」前半段口径一致：职务架构中的职务 + 课代表（不含值日，值日单独计 runDuty）
+  const P=state.positions; let c=0;
+  (P.structure||[]).forEach(r=>{ if((P.assign[r.id]||[]).indexOf(name)>=0) c++; });
+  (P.representatives||[]).forEach(r=>{ if((r.names||[]).indexOf(name)>=0) c++; });
+  return c;
+}
 function pmAutoDuty(){
-  const names=pmStudentNames(); state.positions.dutyWeekly={}; let i=0;
-  pmDays.forEach(d=>{ state.positions.dutyWeekly[d]={}; pmDutyTasks.forEach(t=>{ state.positions.dutyWeekly[d][t]=[ names[i%names.length] ]; i++; }); });
+  const P=state.positions;
+  const names=pmStudentNames();
+  // 不清空已有排表：仅确保结构存在
+  if(!P.dutyWeekly||typeof P.dutyWeekly!=='object') P.dutyWeekly={};
+  pmDays.forEach(d=>{ P.dutyWeekly[d]=P.dutyWeekly[d]||{}; pmDutyTasks.forEach(t=>{ if(!Array.isArray(P.dutyWeekly[d][t])) P.dutyWeekly[d][t]=[]; }); });
+  // 每种任务每槽最多人数（默认 1），仅约束自动排表，不删你已经排好的
+  const maxOf=t=>{ const v=(P.dutyTaskMax&&typeof P.dutyTaskMax[t]==='number')?P.dutyTaskMax[t]:1; return v>=1?v:1; };
+  // 运行中的值日计数（含已有排表），用于均衡负载，避免同一人被排满
+  const runDuty={}; names.forEach(n=>{ runDuty[n]=0; });
+  pmDays.forEach(d=>{ pmDutyTasks.forEach(t=>{ (P.dutyWeekly[d][t]||[]).forEach(n=>{ if(runDuty[n]!=null) runDuty[n]++; }); }); });
+  // 静态职务数量：优先排职务数量少的学生
+  const posCnt={}; names.forEach(n=>{ posCnt[n]=pmDutyPosCount(n); });
+  // 遍历所有待补槽位（天×任务 稳定顺序），每个槽补到 max，但绝不删已有
+  const slots=[]; pmDays.forEach(d=>{ pmDutyTasks.forEach(t=>{ slots.push([d,t]); }); });
+  slots.forEach(([d,t])=>{
+    const cur=P.dutyWeekly[d][t]; const max=maxOf(t); const need=max-cur.length;
+    if(need<=0) return;
+    const inSlot=new Set(cur);
+    const cands=names.filter(n=>!inSlot.has(n)).map(n=>({n,key:posCnt[n]+runDuty[n]})).sort((a,b)=>a.key-b.key||a.n.localeCompare(b.n,'zh')).slice(0,need);
+    cands.forEach(c=>{ P.dutyWeekly[d][t].push(c.n); runDuty[c.n]++; });
+  });
   save(); pmRefreshAll();
+  toast('已自动补排：保留你已排好的，空缺处优先安排职务数量少的学生');
 }
 function pmRenderDuty(){
   const P=state.positions;
@@ -10460,6 +10491,10 @@ function pmRenderDuty(){
         <button class="text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50" onclick="pmExportDutyXlsx()">⬇ 导出 Excel</button>
         <button class="text-sm bg-sky-600 text-white rounded-lg px-3 py-1.5 hover:bg-sky-700" onclick="pmAutoDuty()">⚡ 自动排表</button>
       </div>
+    </div>
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 text-xs text-slate-500">
+      <span class="font-medium text-slate-600">每槽最多人数（自动排表上限）：</span>
+      ${pmDutyTasks.map(t=>{ const v=(P.dutyTaskMax&&typeof P.dutyTaskMax[t]==='number')?P.dutyTaskMax[t]:1; return `<label class="flex items-center gap-1">${esc(t)}<input type="number" min="1" value="${v}" onchange="pmSetDutyMax('${esc(t)}',this.value)" class="inline-input w-12 text-center"></label>`; }).join('')}
     </div>
     <div class="overflow-x-auto"><table class="w-full text-sm border-collapse">
       <thead><tr class="bg-slate-50"><th class="text-left p-2 font-medium text-slate-500">任务 / 日</th>${pmDays.map(d=>`<th class="p-2 font-medium text-slate-500">${d}</th>`).join('')}</tr></thead>
@@ -10478,12 +10513,13 @@ function pmRenderDuty(){
     html+=`</tr>`;
   });
   html+=`</tbody></table></div>
-    <p class="text-xs text-slate-400 mt-3">点击任意格子可添加成员；点姓名上的 × 删除；每天人数随成员增减自动变化。</p>
+    <p class="text-xs text-slate-400 mt-3">点击任意格子可添加成员；点姓名上的 × 删除；每天人数随成员增减自动变化。<br>「⚡ 自动排表」会保留你已排好的，仅在空缺处补人，并优先安排职务数量少的学生；每种任务每槽最多人数见上方设置。</p>
   </div>`;
   return html;
 }
 function pmRemoveDuty(day,task,i){ const _nm=state.positions.dutyWeekly[day][task][i]; state.positions.dutyWeekly[day][task].splice(i,1); markDeletedVal('positions.dutyWeekly.'+day+'.'+task, _nm); save(); pmRefreshAll(); }
 function pmToggleDutyEdit(day,task){ state.positions.dutyEditMode[day]=state.positions.dutyEditMode[day]||{}; state.positions.dutyEditMode[day][task]=!state.positions.dutyEditMode[day][task]; pmRefreshAll(); }
+function pmSetDutyMax(task,val){ const P=state.positions; P.dutyTaskMax=P.dutyTaskMax||{}; const v=parseInt(val,10); P.dutyTaskMax[task]=(v>=1)?v:1; save(); pmRefreshAll(); }
 function pmExportDutyXlsx(){
   if(typeof XLSX==='undefined'){ return alert('导出组件未加载，请刷新后重试'); }
   const P=state.positions;
