@@ -56,8 +56,29 @@ function setSyncBadge(text, isErr) {
 }
 let _syncFailCount = 0;
 function pushSync() {
+  // 大屏/访客模式（未登录）：数据只存本机，不尝试云端同步，也不显示误导性的「未同步」告警
+  if (!AUTH_TOKEN) return;
   setSyncBadge('同步中…', false);
-  apiPost('/api/data', { state }).then(r => {
+  // 读-合并-写（read-merge-write）：推送前先拉取云端最新数据，把「云端有、本机没有」的记录并入本机，
+  // 再整体写回。既保留本机刚做的修改，又不会把别的设备刚写入的新记录整体覆盖掉，
+  // 避免多设备同时使用时出现「信息不同步 / 记录凭空消失」。
+  apiGet('/api/data', 15000).then(cloud => {
+    let toPush = state;
+    if (cloud && cloud.state) {
+      let merged;
+      try { merged = migrateState(cloud.state); } catch (e) { merged = null; }
+      if (merged) {
+        // mergeMissing(云端, 本机)：把云端比本机多的记录补进本机 state（不改动本机已有的修改）
+        const added = mergeMissing(merged, state);
+        toPush = state;
+        if (added > 0) {
+          toPush._savedAt = Date.now();
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toPush)); } catch (e) {}
+        }
+      }
+    }
+    return apiPost('/api/data', { state: toPush });
+  }).then(r => {
     if (r && r.ok) {
       _syncFailCount = 0;
       setSyncBadge('已同步 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), false);
@@ -10886,7 +10907,8 @@ function doLogin() {
         if (state) { state.locked = false; state.lockManuallySet = false; }
         save(true);
         render();
-      }).catch(() => { render(); });
+        startSyncTimer(); // 登录成功即启动实时同步
+      }).catch(() => { render(); startSyncTimer(); });
     })
     .catch(e => { err.textContent = e.message; });
 }
@@ -10902,6 +10924,7 @@ function doLogout() {
   AUTH_TOKEN = '';
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem(REMEMBER_KEY); // 退出登录同时清除「记住本设备」，需重新输入密码
+  stopSyncTimer(); // 退出登录即停止轮询
   showLogin();
 }
 
@@ -10919,6 +10942,7 @@ function startCloudSync() {
       // 已登录设备视为本人操作：解除只读锁定（云端若存过 locked 也一并清除），避免重启/同步后被重新锁死
       if (AUTH_TOKEN && state) { state.locked = false; state.lockManuallySet = false; save(true); }
       render();
+      startSyncTimer(); // 登录态下启动定时拉取，让多设备在数秒内自动同步
     } else {
       setSyncBadge('⚠️ 未同步（仅本机）', true);
     }
@@ -10931,6 +10955,40 @@ function startCloudSync() {
     }
   });
 }
+
+// ===================== 多设备实时同步 =====================
+// 之前只在「保存时推送、打开时拉取」，多设备同时用会出现信息不一致。
+// 这里补上：定时拉取 + 窗口聚焦/切回可见时立即对账，让各端在数秒内自动同步。
+let _syncTimer = null;
+function syncNow() {
+  if (!AUTH_TOKEN || GUEST_MODE) return; // 大屏访客模式（未登录）不参与云端同步
+  apiGet('/api/data', 15000).then(res => {
+    if (!res || !res.state) { setSyncBadge('⚠️ 未同步（仅本机）', true); return; }
+    const ct = res.state._savedAt || 0;
+    const lt = (state && state._savedAt) ? state._savedAt : 0;
+    if (ct > lt) {
+      // 云端更新：拉下来并渲染
+      applyCloudState(res.state);
+      render();
+    } else if (lt > ct) {
+      // 本机更新：推上去（pushSync 内部先合并，不会覆盖他人新记录）
+      pushSync();
+    }
+    // 相等：无需操作
+  }).catch(() => { setSyncBadge('⚠️ 未同步（仅本机）', true); });
+}
+function startSyncTimer() {
+  stopSyncTimer();
+  _syncTimer = setInterval(syncNow, 10000);
+}
+function stopSyncTimer() {
+  if (_syncTimer) { clearInterval(_syncTimer); _syncTimer = null; }
+}
+// 聚焦窗口 / 切回本标签页时立即对账，替代手动刷新
+window.addEventListener('focus', syncNow);
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') syncNow();
+});
 
 // 启动：恢复首页/积分展示页的展示设置（显示人数、翻页速度、维度、自动轮换等），再渲染
 loadHomeExhibit();

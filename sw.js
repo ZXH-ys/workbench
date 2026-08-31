@@ -2,13 +2,13 @@
 // 策略：stale-while-revalidate（缓存优先秒回 + 后台静默刷新缓存）
 // 原因：后端（Railway）休眠后首次请求极慢，若网络优先会导致刷新时整页白屏数秒；
 //       改为「有缓存先秒回、后台再拉新版本更新缓存」，冷后端也不再白屏。
-// 注意：采用 SWR 后不再依赖缓存版本号强制刷新——资源随后台 revalidate 自动更新，
-//       故缓存名保持稳定即可（无需每次部署递增）。
-const CACHE = 'wb-shell-v5';
+// 注意：采用 SWR 后资源本可随后台 revalidate 自动更新；但为了确保「多设备实时同步」这一关键修复
+//       在所有设备上立即生效，本次仍主动递增缓存名 + 资源版本号，强制各端拉取新代码一次。
+const CACHE = 'wb-shell-v6';
 const ASSETS = [
   './',
   './index.html',
-  './app.js?v=20260829d',
+  './app.js?v=20260831a',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
