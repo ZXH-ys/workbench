@@ -55,6 +55,20 @@ function setSyncBadge(text, isErr) {
   el.className = 'text-[11px] ' + (isErr ? 'text-orange-500' : 'text-gray-400');
 }
 let _syncFailCount = 0;
+let _cloudDirty = false;
+function updateCloudDirty() {
+  const el = document.getElementById('cloud-dirty');
+  if (!el) return;
+  if (_cloudDirty) { el.textContent = '● 未保存'; el.className = 'text-[11px] text-orange-500 mr-1'; }
+  else { el.textContent = ''; el.className = 'text-[11px] text-gray-400 mr-1'; }
+}
+// 手动保存到云端：把当前本机状态整体上传（pushSync 内部会先合并云端独有记录，不会覆盖他人新数据）
+function saveToCloud() {
+  if (!AUTH_TOKEN) { try { toast('未登录，无法保存到云端。请先登录。'); } catch (e) {} return; }
+  _cloudDirty = false; updateCloudDirty();
+  pushSync();
+  try { toast('已保存到云端 ☁️'); } catch (e) {}
+}
 function pushSync() {
   // 大屏/访客模式（未登录）：数据只存本机，不尝试云端同步，也不显示误导性的「未同步」告警
   if (!AUTH_TOKEN) return;
@@ -870,7 +884,8 @@ function save(internal) {
   catch (e) { alert('保存失败，可能是本地存储空间已满。' + e.message); }
   _hwNameIdx = null; // 名册可能已变，让姓名索引缓存失效
   ptDropSigMemo(); // 数据已变，积分维度的签名记忆作废
-  pushSync();
+  // 手动保存模式：save() 只落本机（localStorage），不再自动上传云端；需要上传时由用户点「☁️ 保存到云端」主动触发。
+  _cloudDirty = true; updateCloudDirty();
   _bumpExhibitDataVer(); // 数据变更后失效展览缓存
 }
 
@@ -1043,10 +1058,24 @@ function applyCloudState(cloudRaw) {
   state.locked = localLocked; // 还原本机锁定态（不被云端覆盖）
   // 合并墓碑（本机删的 + 云端删的，全部保留），并据此剔除已删除条目，使删除跨设备同步、不再复活
   state._deleted = unionDeleted(localDeleted, cloud._deleted);
+  // 修剪「陈旧取消勾选」墓碑：职务/值日按值墓碑，若其姓名仍是现存学生，
+  // 说明它只是旧逻辑反复取消勾选留下的、并非真删除——剔除之，否则 applyTombstones
+  // 会把该生从职务/值日里剔除，导致「勾了保存不上 / 没法多选」。真删除的学生姓名已不在名单，会被保留。
+  let _delPruned = false;
+  if (state.students && Array.isArray(state.students)) {
+    const _live = new Set(state.students.map(x => x && x.name).filter(Boolean));
+    const _before = (state._deleted || []).length;
+    state._deleted = (state._deleted || []).filter(d => {
+      if (!d || !d.k) return true;
+      if ((d.k.indexOf('positions.assign.') === 0 || d.k.indexOf('positions.dutyWeekly.') === 0) && d.v != null && _live.has(d.v)) return false;
+      return true;
+    });
+    _delPruned = (state._deleted || []).length !== _before;
+  }
   applyTombstones(state);
   // 名单自愈：若本次从云端套用的名单被清洗掉了脏条目，把干净名单推回云端，彻底断掉污染源
   const healed = rawStudentCount - (Array.isArray(state.students) ? state.students.length : 0);
-  if (added > 0 || healed > 0) {
+  if (added > 0 || healed > 0 || _delPruned) {
     save(true); // internal：恢复数据属于系统行为，锁定状态下也要写回
     setTimeout(() => { try {
       toast(healed > 0 ? `已自动清理名单中的 ${healed} 条重复/无效条目` : `已恢复 ${added} 条未同步到云端的记录`);
@@ -1632,6 +1661,8 @@ function renderTopBar() {
   const syncBadge = `<span id="sync-badge" class="text-[11px] text-gray-400 mr-1"></span>`;
   const logoutBtn = AUTH_TOKEN ? `<button data-lock-allow onclick="doLogout()" class="ml-2 text-lg" title="退出登录">🚪</button>` : '';
   const loginBtn = GUEST_MODE ? `<button data-lock-allow onclick="showLogin()" class="ml-2 text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" title="切换到完整登录模式">登录</button>` : '';
+  const cloudDirtyBadge = `<span id="cloud-dirty" class="text-[11px] text-gray-400 mr-1"></span>`;
+  const saveCloudBtn = (!GUEST_MODE && AUTH_TOKEN) ? `<button data-lock-allow onclick="saveToCloud()" class="ml-1 text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" title="把当前修改上传到云端，刷新/换设备后仍在">☁️ 保存到云端</button>` : '';
   let extra = '';
   if (currentRoute === 'points') {
     return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
@@ -1641,7 +1672,7 @@ function renderTopBar() {
         <button class="text-sm text-gray-500 hover:text-primary px-2" onclick="openPtLogs()">📜 日志</button>
         <button class="text-sm text-primary border border-primary px-3 py-1.5 rounded-full hover:bg-primary/5" onclick="openPtBatch()">批量加减分</button>
         <button class="bg-primary text-white px-4 py-1.5 rounded-full text-sm hover:bg-primaryDark" onclick="openPtAdjust(null,'daily',1)">+ 加减分</button>
-        ${syncBadge}${loginBtn}${themeBtn}${logoutBtn}
+        ${cloudDirtyBadge}${saveCloudBtn}${syncBadge}${loginBtn}${themeBtn}${logoutBtn}
       </div>
     </header>${lockBanner}`;
   }
@@ -1667,7 +1698,7 @@ function renderTopBar() {
   }
   return `<header class="bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
     ${menuBtn}${classSwitch}${homeDateBar}${searchBox}
-    <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${syncBadge}${loginBtn}${themeBtn}${logoutBtn}</div>
+    <div class="flex items-center gap-3 flex-wrap justify-end">${extra}${cloudDirtyBadge}${saveCloudBtn}${syncBadge}${loginBtn}${themeBtn}${logoutBtn}</div>
   </header>${lockBanner}`;
 }
 
@@ -10454,7 +10485,7 @@ function pmRemoveRole(id, name){
   if (!Array.isArray(arr)) return pmRefreshAll();
   const idx = arr.indexOf(name);
   if (idx < 0) return pmRefreshAll();      // 已被别人改过，直接重画即可
-  arr.splice(idx, 1); markDeletedVal('positions.assign.' + id, name); save(); pmRefreshAll();
+  arr.splice(idx, 1); save(); pmRefreshAll();
 }
 function pmOpenDescEdit(id){
   const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
@@ -10511,7 +10542,7 @@ function pmToggleStu(name){
   }
   else cur=((state.positions.dutyWeekly[curCtx.day]&&state.positions.dutyWeekly[curCtx.day][curCtx.task])||[]).slice();
   const i=cur.indexOf(name);
-  if(i>=0){ cur.splice(i,1); if(curCtx.mode==='role') markDeletedVal('positions.assign.'+curCtx.key, name); } else cur.push(name);
+  if(i>=0){ cur.splice(i,1); } else cur.push(name);
   if(curCtx.mode==='role') state.positions.assign[curCtx.key]=cur;
   else if(curCtx.mode==='rep'){
     const r=state.positions.representatives.find(x=>x.id===curCtx.key); if(r) r.names=cur; pmSyncKedaibiaoAssign();
@@ -11224,7 +11255,9 @@ function startCloudSync() {
     if (res && res.state) {
       applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑（并保留本机锁定态）
       render();
-      startSyncTimer(); // 登录态下启动定时拉取，让多设备在数秒内自动同步
+      // 手动保存模式：不再后台定时拉取（旧逻辑每 10 秒用云端副本覆盖本机，导致「改不了东西」）。
+      // 改为：打开/刷新读取云端一次（上方 applyCloudState 已完成），改动由「☁️ 保存到云端」主动上传。
+      _cloudDirty = false; updateCloudDirty();
     } else {
       setSyncBadge('⚠️ 未同步（仅本机）', true);
     }
@@ -11260,17 +11293,14 @@ function syncNow() {
   }).catch(() => { setSyncBadge('⚠️ 未同步（仅本机）', true); });
 }
 function startSyncTimer() {
+  // 手动保存模式：停用后台定时拉取（避免编辑中被云端副本覆盖）。保留空实现以防其它入口调用。
   stopSyncTimer();
-  _syncTimer = setInterval(syncNow, 10000);
 }
 function stopSyncTimer() {
   if (_syncTimer) { clearInterval(_syncTimer); _syncTimer = null; }
 }
-// 聚焦窗口 / 切回本标签页时立即对账，替代手动刷新
-window.addEventListener('focus', syncNow);
-document.addEventListener('visibilitychange', function () {
-  if (document.visibilityState === 'visible') syncNow();
-});
+// 手动保存模式：不再在「聚焦 / 切回标签页」时自动对账（那会在用户编辑中途用云端覆盖本机）。
+// 用户改完点「☁️ 保存到云端」上传；刷新/重开自动读取云端。
 
 // 启动：恢复首页/积分展示页的展示设置（显示人数、翻页速度、维度、自动轮换等），再渲染
 loadHomeExhibit();
