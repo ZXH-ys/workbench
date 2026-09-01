@@ -865,27 +865,28 @@ const MERGE_NESTED_ARRAYS = [['attendance', 'logs'], ['examData', 'records'], ['
 const MERGE_OBJECT_KEYS = ['seatingByClass'];
 
 // 按 id 取并集：把 la 里 cloud 没有的补进 ca，返回补入条数
-function mergeById(la, ca, kp) {
+// D 为「墓碑并集」（本地 + 云端），命中墓碑的条目不再复活
+function mergeById(la, ca, kp, D) {
   if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
   let n = 0;
   const have = new Set(ca.map(x => x && x.id));
-  const D = (kp && state && state._deleted) ? state._deleted : null;
+  const del = D || null;
   la.forEach(x => {
     if (!x || !x.id || have.has(x.id)) return;
-    if (D && _tomboHas(D, kp, 'id', x.id)) return; // 墓碑：已删除的不再复活
+    if (del && _tomboHas(del, kp, 'id', x.id)) return; // 墓碑：已删除的不再复活
     ca.unshift(x); have.add(x.id); n++;
   });
   return n;
 }
 // 按值取并集（字符串数组，如识别关键词）
-function mergeByValue(la, ca, kp) {
+function mergeByValue(la, ca, kp, D) {
   if (!Array.isArray(la) || !la.length || !Array.isArray(ca)) return 0;
   let n = 0;
   const have = new Set(ca);
-  const D = (kp && state && state._deleted) ? state._deleted : null;
+  const del = D || null;
   la.forEach(x => {
     if (x == null || have.has(x)) return;
-    if (D && _tomboHas(D, kp, 'v', x)) return; // 墓碑：已删除的不再复活
+    if (del && _tomboHas(del, kp, 'v', x)) return; // 墓碑：已删除的不再复活
     ca.push(x); have.add(x); n++;
   });
   return n;
@@ -893,10 +894,13 @@ function mergeByValue(la, ca, kp) {
 // 把 local 里有、cloud 里没有的记录补进 cloud（按 id 取并集，不做覆盖式替换）
 function mergeMissing(local, cloud) {
   let added = 0;
+  // 墓碑并集：本地已删 + 云端已删，合并时命中任一墓碑的条目都不再复活，
+  // 这样无论合并方向如何，「删除」都能跨设备生效，不会出现「删了又冒出来」。
+  const D = unionDeleted(local && local._deleted, cloud && cloud._deleted);
   MERGE_ARRAY_KEYS.forEach(k => {
     if (!Array.isArray(local[k]) || !local[k].length) return;
     if (!Array.isArray(cloud[k])) cloud[k] = [];
-    added += mergeById(local[k], cloud[k], k);
+    added += mergeById(local[k], cloud[k], k, D);
   });
   MERGE_NESTED_ARRAYS.forEach(pair => {
     const [p, c] = pair;
@@ -905,7 +909,7 @@ function mergeMissing(local, cloud) {
     if (!Array.isArray(lp[c]) || !lp[c].length) return;
     if (!cloud[p] || typeof cloud[p] !== 'object') cloud[p] = {};
     if (!Array.isArray(cloud[p][c])) cloud[p][c] = [];
-    added += mergeById(lp[c], cloud[p][c], p + '.' + c);
+    added += mergeById(lp[c], cloud[p][c], p + '.' + c, D);
   });
   MERGE_OBJECT_KEYS.forEach(k => {
     const lo = local[k];
@@ -922,14 +926,14 @@ function mergeMissing(local, cloud) {
     const cp = cloud.positions;
     if (Array.isArray(lp.structure) && lp.structure.length) {
       if (!Array.isArray(cp.structure)) cp.structure = [];
-      added += mergeById(lp.structure, cp.structure, 'positions.structure');
+      added += mergeById(lp.structure, cp.structure, 'positions.structure', D);
     }
     if (lp.assign && typeof lp.assign === 'object') {
       cp.assign = cp.assign || {};
       Object.keys(lp.assign).forEach(rid => {
         const ln = Array.isArray(lp.assign[rid]) ? lp.assign[rid] : [];
         if (!Array.isArray(cp.assign[rid])) cp.assign[rid] = [];
-        added += mergeByValue(ln, cp.assign[rid], 'positions.assign.' + rid);
+        added += mergeByValue(ln, cp.assign[rid], 'positions.assign.' + rid, D);
       });
     }
     if (Array.isArray(lp.representatives) && lp.representatives.length) {
@@ -940,7 +944,7 @@ function mergeMissing(local, cloud) {
         if (!r || !r.id) return;
         if (!byId[r.id]) { cp.representatives.push(r); byId[r.id] = r; added++; return; }
         if (!Array.isArray(byId[r.id].names)) byId[r.id].names = [];
-        added += mergeByValue(r.names || [], byId[r.id].names, 'positions.representatives.names');
+        added += mergeByValue(r.names || [], byId[r.id].names, 'positions.representatives.names', D);
       });
     }
   }
@@ -954,26 +958,25 @@ function mergeMissing(local, cloud) {
       cloud.recKeywords[sk] = cloud.recKeywords[sk] || {};
       Object.keys(src).forEach(t => {
         if (!Array.isArray(cloud.recKeywords[sk][t])) cloud.recKeywords[sk][t] = [];
-        added += mergeByValue(src[t] || [], cloud.recKeywords[sk][t], 'recKeywords.' + sk + '.' + t);
+        added += mergeByValue(src[t] || [], cloud.recKeywords[sk][t], 'recKeywords.' + sk + '.' + t, D);
       });
     });
   }
   // 作业识别关键词（字符串数组）
   if (Array.isArray(local.homeworkKeywords) && local.homeworkKeywords.length) {
     if (!Array.isArray(cloud.homeworkKeywords)) cloud.homeworkKeywords = [];
-    added += mergeByValue(local.homeworkKeywords, cloud.homeworkKeywords, 'homeworkKeywords');
+    added += mergeByValue(local.homeworkKeywords, cloud.homeworkKeywords, 'homeworkKeywords', D);
   }
   // 学生身上的行为记录（students[].records）
   if (Array.isArray(cloud.students) && Array.isArray(local.students)) {
     const byId = {};
-    const D2 = (state && state._deleted) ? state._deleted : null;
     local.students.forEach(s => { if (s && s.id) byId[s.id] = s; });
     cloud.students.forEach(cs => {
       const ls = byId[cs.id];
       if (!ls || !Array.isArray(ls.records)) return;
       if (!Array.isArray(cs.records)) cs.records = [];
       const have = new Set(cs.records.map(x => x && x.id));
-      ls.records.forEach(r => { if (r && r.id && !have.has(r.id)) { if (D2 && _tomboHas(D2, 'students.records', 'id', r.id)) return; cs.records.unshift(r); have.add(r.id); added++; } });
+      ls.records.forEach(r => { if (r && r.id && !have.has(r.id)) { if (D && _tomboHas(D, 'students.records', 'id', r.id)) return; cs.records.unshift(r); have.add(r.id); added++; } });
     });
   }
   return added;
@@ -988,15 +991,15 @@ function applyCloudState(cloudRaw) {
   let cloud;
   try { cloud = migrateState(cloudRaw); } catch (e) { cloud = null; }
   if (!cloud) { return; }
-  const lt = state && state._savedAt ? state._savedAt : 0;
-  const ct = cloud._savedAt ? cloud._savedAt : 0;
-  // 仅当「本地保存时间明显晚于云端」时才合并 —— 说明本地有改动没推上去。
-  // 云端没有时间戳（旧数据）时不合并，避免把别处已删除的记录大量复活。
+  // 关键修复：不再用「本地时间戳明显晚于云端才合并」的过严闸门。
+  // 旧逻辑下，背景轮询拉到的「只比本机旧几秒」的云端副本会直接 state = cloud
+  // 整体替换本机状态，把刚做的多选（如一次性勾多个组长）等未推送改动冲掉，
+  // 表现为「之前点的会自动取消」。现改为：无论时间戳如何，都先把本机已改、
+  // 云端还没有的记录并入云端副本，再整体采用云端副本。墓碑（_deleted）参与
+  // 并集计算，云端已删除的条目不会被本机旧副本复活（删除可正常跨设备同步）。
   let added = 0;
-  if (lt && ct && lt > ct + 5000) {
-    try { localStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify(cloud)); } catch (e) {} // 合并前留底，便于回滚
-    added = mergeMissing(state, cloud);
-  }
+  try { localStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify(cloud)); } catch (e) {} // 合并前留底，便于回滚
+  added = mergeMissing(state, cloud);
   state = cloud;
   state.locked = localLocked; // 还原本机锁定态（不被云端覆盖）
   // 合并墓碑（本机删的 + 云端删的，全部保留），并据此剔除已删除条目，使删除跨设备同步、不再复活
