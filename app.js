@@ -1077,6 +1077,20 @@ function applyCloudState(cloudRaw) {
   const healed = rawStudentCount - (Array.isArray(state.students) ? state.students.length : 0);
   if (added > 0 || healed > 0 || _delPruned) {
     save(true); // internal：恢复数据属于系统行为，锁定状态下也要写回
+    // 把清洗后的干净副本推回云端，并打上「远未来时间戳」做一次性消毒：
+    // 仍开着的旧版(20260831l)设备每 10 秒轮询，syncNow 比较 _savedAt 时若发现「云端远新于本机」
+    // 会直接采用云端、不再把自己脏副本推上去，从而彻底断掉反复回污。正常刷新/重开读到的也是这份干净数据。
+    // 该远未来时间戳仅用于本次消毒；用户之后点「☁️ 保存到云端」会写入真实时间戳，自然取代之。
+    if (AUTH_TOKEN) {
+      try {
+        const _snap = JSON.parse(JSON.stringify(state));
+        _snap._savedAt = Date.now() + 365 * 24 * 3600 * 1000;
+        apiPost('/api/data', { state: _snap }).then(r => {
+          if (r && r.ok) setSyncBadge('已同步 ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), false);
+        });
+        _cloudDirty = false; updateCloudDirty();
+      } catch (e) {}
+    }
     setTimeout(() => { try {
       toast(healed > 0 ? `已自动清理名单中的 ${healed} 条重复/无效条目` : `已恢复 ${added} 条未同步到云端的记录`);
     } catch (e) {} }, 600);
