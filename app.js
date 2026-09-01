@@ -3593,21 +3593,33 @@ function saveClassRecord() {
   if(!content) return alert('请输入内容');
   const sid = document.getElementById('crStudent').value;
   const s = sid ? state.students.find(x=>x.id===sid) : null;
+  const crId = uid();
+  const crDate = parseDtLocal(document.getElementById('crDate').value) || nowStampSec();
+  const crSubject = document.getElementById('crSubject').value.trim()||'—';
+  const crClass = s ? s.class : state.activeClass;
   state.classRecords.unshift({
-    id: uid(),
-    date: parseDtLocal(document.getElementById('crDate').value) || nowStampSec(),
+    id: crId,
+    date: crDate,
     ts: nowTs(),
-    subject: document.getElementById('crSubject').value.trim()||'—',
+    subject: crSubject,
     studentId: s ? s.id : null,
     studentName: s ? s.name : '',
-    class: s ? s.class : state.activeClass,
+    class: crClass,
     content
   });
+  // 同步写入班级日志（与一句话记录的课堂记录保持一致）
+  if (!state.classLogs) state.classLogs = [];
+  state.classLogs.unshift({ id: uid(), date: crDate, ts: nowTs(), content: `${s ? s.name : '（未指定学生）'} 课堂·${crSubject}：${content}`, classRecordId: crId, class: crClass });
   save(); closeModal(); render();
 }
 function deleteClassRecord(id) {
   const r = state.classRecords.find(x => x.id === id);
   if (!r) return;
+  // 同步删除班级日志里对应的课堂记录条目，避免残留孤儿
+  if (state.classLogs) {
+    state.classLogs.filter(l => l.classRecordId === id).forEach(l => markDeletedId('classLogs', l.id));
+    state.classLogs = state.classLogs.filter(l => l.classRecordId !== id);
+  }
   markDeletedId('classRecords', id);
   doDelete(() => state.classRecords, id, (r.content || '课堂记录').slice(0, 12));
 }
@@ -9336,9 +9348,11 @@ function qrSave() {
         nPoint++;
         autoPointLogs.push(`${s.name} ${dimLabel(rule.dim)}${rule.delta >= 0 ? '+' : ''}${rule.delta}`);
       });
-      // 课堂记录（所有班都记，按学生所属班级归档）
+      // 课堂记录（所有班都记，按学生所属班级归档）；并同步写入班级日志（与行为记录平级展示，避免课堂记录被静默漏记）
       subjects.forEach(sub => {
-        state.classRecords.unshift({ id: uid(), date: recDate, ts, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
+        const crId = uid();
+        state.classRecords.unshift({ id: crId, date: recDate, ts, subject: sub.name, studentId: s.id, studentName: s.name, class: stuClass, content, auto: 'quick' });
+        state.classLogs.unshift({ id: uid(), date: recDate, ts, content: `${s.name} 课堂·${sub.name}：${content}`, classRecordId: crId, class: stuClass });
         nClass++;
       });
       // 作业管理（作业完成情况台账）：记「是否完成」，并保留学生姓名以便按人检索
@@ -9355,12 +9369,14 @@ function qrSave() {
       }
     });
   });
-  // 班级日志：仅在「没有行为记录同步、但存在课堂/作业/积分动作」时保留一句汇总，避免与逐条行为日志重复
-  const wroteBehavior = nRecord > 0 || nLeave > 0;
-  if (!wroteBehavior && (nClass > 0 || nHomework > 0 || nPoint > 0)) {
-    let logContent = `一句话记录：${qrDraft.raw}`;
-    if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
-    state.classLogs.unshift({ id: uid(), date, ts, content: logContent });
+  // 班级日志：行为记录（logBehaviorToClassLog）与课堂记录（上方逐条）均已写入；
+  // 仅当存在「作业/积分」动作且没有逐条记录（行为/课堂）时，补一句汇总，避免漏记、也不与逐条行为日志重复
+  if (nHomework > 0 || nPoint > 0) {
+    if (nRecord === 0 && nLeave === 0 && nClass === 0) {
+      let logContent = `一句话记录：${qrDraft.raw}`;
+      if (autoPointLogs.length) logContent += `（${autoPointLogs.join('、')}）`;
+      state.classLogs.unshift({ id: uid(), date, ts, content: logContent });
+    }
   }
   lastRecordContent = qrDraft.raw;
   const totalSaved = nRecord + nLeave + nPoint + nClass + nHomework;
