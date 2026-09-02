@@ -1,5 +1,9 @@
 // ===================== Storage =====================
 const STORAGE_KEY = 'ct_workbench_v1';
+// 日期补零辅助：原先声明在文件较后（~1305 行），但 boot 期的 autoArchiveAttendance()
+// 在跨日归档时会调用 nowStampSec -> _p2，早于其声明位置触发 const 暂时性死区(TDZ) 抛错、
+// 导致整页白屏。上移到此处（所有 boot 调用之前）彻底规避。
+const _p2 = n => String(n).padStart(2, '0');
 const AUTH_KEY = 'ct_auth_token';
 const REMEMBER_KEY = 'ct_remember_login'; // 记住本设备：存账号密码，实现「直接登录 / 记住密码」
 const HOME_EXHIBIT_KEY = 'ct_home_exhibit'; // 首页/积分展示页的展示设置，按设备持久化（大屏与笔记本可各自不同）
@@ -1275,7 +1279,9 @@ function autoArchiveAttendance(){
 }
 
 let state = loadState();
-autoArchiveAttendance();   // ★ 跨日自动归档：打开即把前一天考勤存入历史并重置当天
+// 注意：跨日自动归档 autoArchiveAttendance() 原先在此处（早于大量模块级 let/const 声明）调用，
+// 其内部 save() -> ptDropSigMemo() 会读取晚声明的 _ptSigMemo，跨日首次打开即触发 const 暂时性死区(TDZ)
+// 抛错、整页白屏。已将其调用挪到文件末尾的启动区（loadHomeExhibit() 之后），确保在所有声明初始化后再执行。
 let currentRoute = 'home';
 let gsQuery = '';            // 全局搜索框内容（姓名/科目）
 let profileSid = null;       // 当前查看的学生档案
@@ -1302,7 +1308,6 @@ function formatDate(d) {
 //   ts   —— 该条记录**实际录入**的毫秒时间戳（Date.now()），永远有值。
 //   两者分离，才能分清「事情哪天发生」和「这条什么时候记的」。
 //   旧数据只有「8月30日」这类日期、没有 ts，展示时不显示时间（不伪造）。
-const _p2 = n => String(n).padStart(2, '0');
 function nowTs() { return Date.now(); }
 // 「YYYY-MM-DD HH:mm:ss」（本地时区，精确到秒）
 function nowStampSec(d) {
@@ -11400,6 +11405,10 @@ function stopSyncTimer() {
 
 // 启动：恢复首页/积分展示页的展示设置（显示人数、翻页速度、维度、自动轮换等），再渲染
 loadHomeExhibit();
+
+// 启动：跨日自动归档——打开即把前一天考勤存入历史并重置当天。
+// 放在此处（所有模块级 let/const 已初始化之后）调用，避免 boot 期 TDZ 白屏（见上方 let state 注释）。
+autoArchiveAttendance();
 
 // 启动：始终先打开工作台（只读锁定）。登录 / 解锁仅按需触发，避免大屏卡在登录界面。
 GUEST_MODE = !AUTH_TOKEN;
