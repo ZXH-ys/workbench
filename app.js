@@ -10870,6 +10870,7 @@ function pmAddRepSubject(){
 function pmRemoveRepSubject(id){
   if(!confirm('确定删除这个科目吗？')) return;
   state.positions.representatives=state.positions.representatives.filter(r=>r.id!==id);
+  markDeletedId('positions.representatives', id);   // 写墓碑，确保删除跨设备/云端同步、刷新后不复活
   pmSyncRepTree(); pmSyncKedaibiaoAssign(); save(); pmRefreshAll();
 }
 function pmUpdateRepSubject(id,field,value){
@@ -10905,6 +10906,18 @@ function pmDutyPointRow(task){
 function pmRepPointRow(r){
   return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td><td class="p-2 text-xs text-slate-400">课代表</td></tr>`;
 }
+// 统计 [start, end] 闭区间内某星期几（getDay 值，0=周日…6=周六）出现的次数（值日按周累计用）
+function pmWeekdayOccurrences(start, end, dow) {
+  if (!start || !end || end.getTime() < start.getTime()) return 0;
+  const d = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  let guard = 0;
+  while (d.getDay() !== dow && guard < 7) { d.setDate(d.getDate() + 1); guard++; }
+  if (d > end) return 0;
+  const diff = Math.floor((end.getTime() - d.getTime()) / 86400000);
+  return Math.floor(diff / 7) + 1;
+}
+// 工作日标签（周一~周日）→ JS getDay() 值
+const PM_WDOW = { '周一':1, '周二':2, '周三':3, '周四':4, '周五':5, '周六':6, '周日':0 };
 // 任职分核心计算：把每名学生在本班各职务（含课代表）的"日积分"之和 × 距起始日天数，
 // 写入 post 维度日志（auto:'job'，覆盖上次自动结果，手动 post 日志保留）。
 // 返回 { ok, days, count, unmatched }；ok=false 表示起始日不早于今天，无法计算。
@@ -10925,7 +10938,8 @@ function pmComputeJobScores() {
   };
   state.positions.structure.forEach(r => { (state.positions.assign[r.id] || []).forEach(n => addDaily(n, r.pts)); });
   (state.positions.representatives || []).forEach(r => { (r.names || []).forEach(n => addDaily(n, r.pts)); });
-  // 值日生：按轮值表实际排表天数计数（同一任务排几天计几次，不乘全局天数；轮值表每周循环，无法外推周数）
+  // 值日生：轮值表每周循环，按「起始日→今天」内每个工作日（周一~周五）的实际出现周数累计。
+  // 例：周一黑板值日 × N 个周一 = 该生 N 倍值日分；与班委「每日×天数」口径一致（按学期累计）。
   const dutyByName = {};
   const addDuty = (name, pts) => {
     if (!name) return;
@@ -10934,9 +10948,13 @@ function pmComputeJobScores() {
   };
   const dw = state.positions.dutyWeekly || {};
   const dtp = state.positions.dutyTaskPoints || {};
+  // 每个工作日在 [起始日, 今天] 内的出现次数（周数外推）
+  const dutyWeeks = {};
+  (pmDays || []).forEach(d => { dutyWeeks[d] = pmWeekdayOccurrences(start, today, PM_WDOW[d]); });
   (pmDays || []).forEach(d => (pmDutyTasks || []).forEach(t => {
     const arr = (dw[d] && dw[d][t]) || [];
-    if (Array.isArray(arr)) arr.forEach(n => addDuty(n, dtp[t]));
+    const wc = dutyWeeks[d] || 1;
+    if (Array.isArray(arr)) arr.forEach(n => addDuty(n, (parseFloat(dtp[t]) || 0) * wc));
   }));
   // 合并两类姓名，统一写 post 维度日志（auto:'job'）
   const names = new Set([...Object.keys(dailyByName), ...Object.keys(dutyByName)]);
@@ -10949,7 +10967,7 @@ function pmComputeJobScores() {
     const total = Math.round((daily * days + duty) * 100) / 100;
     const parts = [];
     if (daily > 0) parts.push(`每日${fmtScore(daily)}分 × ${days}天`);
-    if (duty > 0) parts.push(`值日${fmtScore(duty)}分`);
+    if (duty > 0) parts.push(`值日${fmtScore(duty)}分（按周轮值累计）`);
     ptWriteLog(st.id, 'post', total, `履职任职分（${parts.join(' + ')}）`, '', 'job', state.points.calcStartDate);
     count++;
   });
