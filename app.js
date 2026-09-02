@@ -572,6 +572,12 @@ function defaultPositions() {
   };
 }
 
+// 职务常量：必须声明在 migrateState 之前。migrateState 在「从 localStorage 载入数据」时会引用这两个量，
+// 若用 const 声明在文件末尾，执行到迁移逻辑时它们尚未初始化，会触发暂时性死区（TDZ），
+// 被 loadState 的 catch 吞掉并回退成默认空数据（纯本地用户每次刷新都会丢数据）。上移消除该隐患。
+const pmDays = ['周一','周二','周三','周四','周五'];
+const pmDutyTasks = ['黑板（全部）','室内走廊','垃圾桶','室外走廊（含窗台）','拖地'];
+
 function migrateState(s) {
   if (!Array.isArray(s._deleted)) s._deleted = []; // 墓碑数组兜底（旧数据可能缺此字段）
   const ds = defaultState();
@@ -10358,8 +10364,7 @@ function openModal(title, body, size='md') {
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 // ===================== 职务与值日管理 =====================
-const pmDays = ['周一','周二','周三','周四','周五'];
-const pmDutyTasks = ['黑板（全部）','室内走廊','垃圾桶','室外走廊（含窗台）','拖地'];
+// 注：pmDays / pmDutyTasks 的原始声明已上移至 migrateState 之前（消除载入数据时的 TDZ 隐患）。
 let pmTab = 'roles';
 let pmRolesEdit = false;
 let curCtx = { mode:'role', key:null, day:null, task:null };
@@ -10604,7 +10609,7 @@ function pmToggleStu(name){
   }
   else state.positions.dutyWeekly[curCtx.day][curCtx.task]=cur;
   pmBuildAssignBody(cur);
-  save(); pmRefreshAll();
+  save(); pmRefreshAll(); pmAutoCalcJobScores();
 }
 
 /* ===== 值日生轮换 ===== */
@@ -10895,12 +10900,14 @@ function pmDutyPointRow(task){
 function pmRepPointRow(r){
   return `<tr><td class="p-2 font-medium">${esc(r.subject)} 课代表</td><td class="p-2"><input type="number" step="0.5" class="inline-input" value="${r.pts==null?'':r.pts}" onchange="pmUpdateRepPoint('${r.id}',this.value)"></td><td class="p-2 text-xs text-slate-400">课代表</td></tr>`;
 }
-// 按职务计算任职分：把每名学生在本班各职务（含课代表）的"日积分"之和 × 距起始日天数，写入 post 维度日志（auto:'job'，可重算覆盖）
-function pmCalcJobScores() {
+// 任职分核心计算：把每名学生在本班各职务（含课代表）的"日积分"之和 × 距起始日天数，
+// 写入 post 维度日志（auto:'job'，覆盖上次自动结果，手动 post 日志保留）。
+// 返回 { ok, days, count, unmatched }；ok=false 表示起始日不早于今天，无法计算。
+function pmComputeJobScores() {
   const start = ptCalcStartDate();
   const today = new Date(); today.setHours(0,0,0,0);
   const ms = today.getTime() - start.getTime();
-  if (ms <= 0) return alert('任职积分起始日（' + (state.points.calcStartDate || '未设置') + '）需早于今天，才能计算任职分');
+  if (ms <= 0) return { ok:false, days:0, count:0, unmatched:[] };
   const days = Math.floor(ms / 86400000) + 1; // 含起始日当天，按"每日计分"理解
   // 先移除上一次自动计算的任职分记录，保留手动调整的 post 日志
   state.points.logs = state.points.logs.filter(l => !(l.auto === 'job' && l.dim === 'post'));
@@ -10922,10 +10929,25 @@ function pmCalcJobScores() {
     ptWriteLog(st.id, 'post', total, `履职任职分（每日${fmtScore(daily)}分 × ${days}天）`, '', 'job', state.points.calcStartDate);
     count++;
   });
+  return { ok:true, days, count, unmatched };
+}
+// 静默自动重算：载入数据 / 改动职务后调用，保证「积分管理」里的任职赋分始终有值。
+// 不弹窗、不强制落盘（只读锁定下 save 会被拦截），仅改内存并失效积分缓存；手动保存/云端同步时会随当前内存一并写入。
+function pmAutoCalcJobScores() {
+  try {
+    if (!state || !state.points || !state.positions || !Array.isArray(state.points.logs)) return;
+    pmComputeJobScores();
+    if (typeof ptDropSigMemo === 'function') ptDropSigMemo();
+  } catch (e) { console.warn('pmAutoCalcJobScores failed', e); }
+}
+// 手动触发（按钮）：重算并提示
+function pmCalcJobScores() {
+  const r = pmComputeJobScores();
+  if (!r.ok) return alert('任职积分起始日（' + (state.points.calcStartDate || '未设置') + '）需早于今天，才能计算任职分');
   save();
   if (typeof render === 'function') { try { render(); } catch (e) {} }
-  let msg = `已按职务计算任职分：${count} 名学生，起始日 ${state.points.calcStartDate} 起共 ${days} 天。`;
-  if (unmatched.length) msg += `（${unmatched.length} 个姓名未匹配到学生：${unmatched.join('、')}，请核对职务分配中的姓名）`;
+  let msg = `已按职务计算任职分：${r.count} 名学生，起始日 ${state.points.calcStartDate} 起共 ${r.days} 天。`;
+  if (r.unmatched.length) msg += `（${r.unmatched.length} 个姓名未匹配到学生：${r.unmatched.join('、')}，请核对职务分配中的姓名）`;
   toast(msg);
 }
 function pmRenderPoints(){
@@ -10968,7 +10990,7 @@ function pmUpdatePoint(id,field,val){
   const p=state.positions.structure.find(x=>x.id===id); if(!p) return;
   const v=val.trim();
   if(v==='') p[field]=null; else p[field]=field==='pts'?parseFloat(v):parseInt(v,10);
-  save(); pmRefreshAll();
+  save(); pmRefreshAll(); pmAutoCalcJobScores();
 }
 function pmUpdateDutyPoint(task,val){
   const v=val.trim();
@@ -10979,7 +11001,7 @@ function pmUpdateRepPoint(id,val){
   const r=state.positions.representatives.find(x=>x.id===id); if(!r) return;
   const v=val.trim();
   r.pts = v===''?null:parseFloat(v);
-  save(); pmRefreshAll();
+  save(); pmRefreshAll(); pmAutoCalcJobScores();
 }
 
 /* ===== 职务树（横向组织图 + 拖动分支） ===== */
@@ -11309,7 +11331,7 @@ function startCloudSync() {
   apiGet('/api/data', 30000).then(res => {
     if (res && res.state) {
       applyCloudState(res.state); // 内部含本地未同步记录的补回逻辑（并保留本机锁定态）
-      render();
+      pmAutoCalcJobScores(); render(); // 载入云端后自动重算任职分，保证积分管理有值
       // 手动保存模式：不再后台定时拉取（旧逻辑每 10 秒用云端副本覆盖本机，导致「改不了东西」）。
       // 改为：打开/刷新读取云端一次（上方 applyCloudState 已完成），改动由「☁️ 保存到云端」主动上传。
       _cloudDirty = false; updateCloudDirty();
@@ -11363,7 +11385,7 @@ loadHomeExhibit();
 // 启动：始终先打开工作台（只读锁定）。登录 / 解锁仅按需触发，避免大屏卡在登录界面。
 GUEST_MODE = !AUTH_TOKEN;
 applyDefaultLock();   // 打开即进入只读锁定
-render();
+pmAutoCalcJobScores(); render(); // 载入即自动重算任职分，保证积分管理有值
 if (AUTH_TOKEN) {
   startCloudSync();   // 已登录：拉云端并启动实时同步
 } else if (getRememberedLogin()) {
