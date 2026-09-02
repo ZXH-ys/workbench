@@ -126,7 +126,10 @@ function _tomboHas(deleted, k, key, val) {
   for (let i = 0; i < deleted.length; i++) {
     const d = deleted[i];
     if (!d || d.k !== k) continue;
-    if (key === 'id' ? (d.id === val) : (d.v === val)) return true;
+    // 仅当墓碑确实含有该字段时才比较：否则「按 id 墓碑」(无 v 字段) 会在 val=undefined 时
+    // 误匹配「按姓名+班级墓碑」的查询，导致 unionDeleted 把后者错误去重掉、删除无法跨设备生效。
+    if (key === 'id') { if (d.id != null && d.id === val) return true; }
+    else { if (d.v != null && d.v === val) return true; }
   }
   return false;
 }
@@ -139,6 +142,24 @@ function markDeletedVal(k, v) {
   if (v == null) return;
   state._deleted = state._deleted || [];
   if (!_tomboHas(state._deleted, k, 'v', v)) state._deleted.push({ k: k, v: v });
+}
+// 同名同班墓碑：删除学生时，除了墓碑其 id，还把「姓名+班级」整体墓碑。
+// 历史脏同步会让同一学生以多个不同 id 的副本散落在各端，仅墓碑单个 id 无法拦住其它副本复活；
+// 按「姓名+班级」墓碑后，无论副本 id 如何变化，applyTombstones / mergeById 都能识别并剔除，删除彻底跨设备生效。
+function markDeletedStudentNameClass(name, cls) {
+  if (!name) return;
+  const v = (name || '') + ' ' + (cls || '');
+  state._deleted = state._deleted || [];
+  if (!_tomboHas(state._deleted, 'students', 'nc', v)) state._deleted.push({ k: 'students', nc: v });
+}
+function _tomboHasStudentNC(deleted, name, cls) {
+  if (!deleted || !deleted.length) return false;
+  const v = (name || '') + ' ' + (cls || '');
+  for (let i = 0; i < deleted.length; i++) {
+    const d = deleted[i];
+    if (d && d.k === 'students' && d.nc === v) return true;
+  }
+  return false;
 }
 function unionDeleted(a, b) {
   const out = (a && a.length) ? a.slice() : [];
@@ -176,6 +197,8 @@ function applyTombstones(s) {
     if (Array.isArray(P.representatives)) P.representatives = P.representatives.filter(x => !(x && _tomboHas(D, 'positions.representatives', 'id', x.id)));
   }
   if (Array.isArray(s.students)) {
+    // 同名同班墓碑：删除学生后，其任何副本（含其它端以不同 id 同步过来的）都不再复活
+    s.students = s.students.filter(st => !(st && _tomboHasStudentNC(D, st.name, st.class)));
     s.students.forEach(st => { if (st && Array.isArray(st.records)) st.records = st.records.filter(r => !(r && _tomboHas(D, 'students.records', 'id', r.id))); });
   }
   if (s.recKeywords && typeof s.recKeywords === 'object') {
@@ -910,6 +933,8 @@ function mergeById(la, ca, kp) {
   la.forEach(x => {
     if (!x || !x.id || have.has(x.id)) return;
     if (D && _tomboHas(D, kp, 'id', x.id)) return; // 墓碑：已删除的不再复活
+    // 同名同班墓碑：已删除学生的任意副本（不同 id）都不得被合并回来
+    if (kp === 'students' && D && _tomboHasStudentNC(D, x.name, x.class)) return;
     ca.unshift(x); have.add(x.id); n++;
   });
   return n;
@@ -2452,16 +2477,25 @@ function purgeStudentHistory(id, name) {
 function deleteStudent(id) {
   const s = state.students.find(x => x.id === id);
   if (!s) return;
+  // 同名同班视为同一学生的重复副本（历史脏同步会让同一人以多个不同 id 散落在各端）。
+  // 删除时一并清除所有副本，否则剩下的副本会在下次加载被 sanitizeStudents 重新「合并」成一条，
+  // 表现为「删了又自动回来」。同时墓碑「姓名+班级」，使跨设备副本也无法复活。
+  const matches = state.students
+    .map((st, i) => ({ st, i }))
+    .filter(o => o.st && o.st.name === s.name && (o.st.class || '') === (s.class || ''));
   const ref = studentRefSummary(id, s.name);
   const histTotal = ref.points + ref.classRecords + ref.homework + ref.exam;
+  const dupN = matches.length - 1;
   const msg = `确定删除学生「${esc(s.name)}」吗？`
+    + (dupN > 0 ? `<br><br>检测到 ${dupN} 条同名同班重复副本，将一并清除（避免删了又自动回来）。` : '')
     + `<br><br>一定清理：考勤在册 ${ref.attN} 处、座次占位 ${ref.seatN} 处、任职 ${ref.posN} 处。`
     + (histTotal ? `<br>可选清理：历史记录 ${histTotal} 条（积分 ${ref.points} / 课堂 ${ref.classRecords} / 作业 ${ref.homework} / 成绩 ${ref.exam}）。` : '');
   confirmModal(msg, function () {
     const finish = (alsoHistory) => {
-      // 快照：撤销时能整体还原（含关联数据），避免「撤销后学生回来了但记录没了」
+      // 快照：撤销时能整体还原（含所有同名副本与关联数据），避免「撤销后学生回来了但记录没了」
       const snap = {
-        idx: state.students.indexOf(s), stu: s,
+        idx: state.students.indexOf(s),
+        stus: matches.map(o => o.st),
         attendance: JSON.parse(JSON.stringify(state.attendance || {})),
         seatingByClass: JSON.parse(JSON.stringify(state.seatingByClass || {})),
         positions: JSON.parse(JSON.stringify(state.positions || {})),
@@ -2472,14 +2506,21 @@ function deleteStudent(id) {
           examRecords: ((state.examData && state.examData.records) || []).slice(),
         } : null,
       };
-      if (snap.idx < 0) return;
-      state.students.splice(snap.idx, 1);
-      markDeletedId('students', id);
-      purgeStudentLiveRefs(id, s.name);
+      // 从后往前删除所有同名同班副本，逐个墓碑其 id，并整体墓碑「姓名+班级」
+      for (let j = matches.length - 1; j >= 0; j--) {
+        const st = matches[j].st;
+        const i = state.students.indexOf(st);
+        if (i >= 0) state.students.splice(i, 1);
+        markDeletedId('students', st.id);
+      }
+      markDeletedStudentNameClass(s.name, s.class);
+      matches.forEach(o => purgeStudentLiveRefs(o.st.id, o.st.name));
       if (alsoHistory) purgeStudentHistory(id, s.name);
       save();
       recordUndo(`学生「${s.name}」`, () => {
-        state.students.splice(Math.min(snap.idx, state.students.length), 0, snap.stu);
+        // 还原所有同名副本（按原顺序插回参考位附近）
+        let at = Math.min(snap.idx, state.students.length);
+        snap.stus.forEach(st => { state.students.splice(at, 0, st); at++; });
         state.attendance = snap.attendance;
         state.seatingByClass = snap.seatingByClass;
         state.positions = snap.positions;
@@ -2492,7 +2533,7 @@ function deleteStudent(id) {
         save(); closeModal(); render();
       });
       closeModal(); render();
-      toast(`已删除「${s.name}」，清理 ${ref.live + (alsoHistory ? histTotal : 0)} 条关联数据（可撤销）`);
+      toast(`已删除「${s.name}」${dupN > 0 ? `及 ${dupN} 条重复副本` : ''}，清理 ${ref.live + (alsoHistory ? histTotal : 0)} 条关联数据（可撤销）`);
     };
     if (histTotal) {
       confirmModal(`是否同时删除「${esc(s.name)}」的 ${histTotal} 条历史记录？<br><br>选「取消」会保留历史（之后仍可按姓名查到）。`,
