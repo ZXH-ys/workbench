@@ -10911,22 +10911,41 @@ function pmComputeJobScores() {
   const days = Math.floor(ms / 86400000) + 1; // 含起始日当天，按"每日计分"理解
   // 先移除上一次自动计算的任职分记录，保留手动调整的 post 日志
   state.points.logs = state.points.logs.filter(l => !(l.auto === 'job' && l.dim === 'post'));
-  // 按姓名聚合各职务日积分（同名学生跨多个职务累加）
-  const byName = {};
-  const addPts = (name, pts) => {
+  // 班委/课代表：按姓名聚合各职务「日积分」（同名学生跨多个职务累加），× 全局天数（每日履职）
+  const dailyByName = {};
+  const addDaily = (name, pts) => {
     if (!name) return;
     const p = parseFloat(pts); if (!(p > 0)) return;
-    byName[name] = (byName[name] || 0) + p;
+    dailyByName[name] = (dailyByName[name] || 0) + p;
   };
-  state.positions.structure.forEach(r => { (state.positions.assign[r.id] || []).forEach(n => addPts(n, r.pts)); });
-  (state.positions.representatives || []).forEach(r => { (r.names || []).forEach(n => addPts(n, r.pts)); });
+  state.positions.structure.forEach(r => { (state.positions.assign[r.id] || []).forEach(n => addDaily(n, r.pts)); });
+  (state.positions.representatives || []).forEach(r => { (r.names || []).forEach(n => addDaily(n, r.pts)); });
+  // 值日生：按轮值表实际排表天数计数（同一任务排几天计几次，不乘全局天数；轮值表每周循环，无法外推周数）
+  const dutyByName = {};
+  const addDuty = (name, pts) => {
+    if (!name) return;
+    const p = parseFloat(pts); if (!(p > 0)) return;
+    dutyByName[name] = (dutyByName[name] || 0) + p;
+  };
+  const dw = state.positions.dutyWeekly || {};
+  const dtp = state.positions.dutyTaskPoints || {};
+  (pmDays || []).forEach(d => (pmDutyTasks || []).forEach(t => {
+    const arr = (dw[d] && dw[d][t]) || [];
+    if (Array.isArray(arr)) arr.forEach(n => addDuty(n, dtp[t]));
+  }));
+  // 合并两类姓名，统一写 post 维度日志（auto:'job'）
+  const names = new Set([...Object.keys(dailyByName), ...Object.keys(dutyByName)]);
   let count = 0; const unmatched = [];
-  Object.keys(byName).forEach(name => {
+  names.forEach(name => {
     const st = state.students.find(s => s.name === name && s.class === state.headTeacherClass) || state.students.find(s => s.name === name);
     if (!st) { unmatched.push(name); return; }
-    const daily = byName[name];
-    const total = Math.round(daily * days * 100) / 100;
-    ptWriteLog(st.id, 'post', total, `履职任职分（每日${fmtScore(daily)}分 × ${days}天）`, '', 'job', state.points.calcStartDate);
+    const daily = dailyByName[name] || 0;
+    const duty = dutyByName[name] || 0;
+    const total = Math.round((daily * days + duty) * 100) / 100;
+    const parts = [];
+    if (daily > 0) parts.push(`每日${fmtScore(daily)}分 × ${days}天`);
+    if (duty > 0) parts.push(`值日${fmtScore(duty)}分`);
+    ptWriteLog(st.id, 'post', total, `履职任职分（${parts.join(' + ')}）`, '', 'job', state.points.calcStartDate);
     count++;
   });
   return { ok:true, days, count, unmatched };
