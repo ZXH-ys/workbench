@@ -1,3 +1,4 @@
+// redeploy trigger 2026-09-03（Railway 502 自愈：后端容器卡死时重建）
 // ===================== Storage =====================
 const STORAGE_KEY = 'ct_workbench_v1';
 // 日期补零辅助：原先声明在文件较后（~1305 行），但 boot 期的 autoArchiveAttendance()
