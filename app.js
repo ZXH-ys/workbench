@@ -853,6 +853,18 @@ function migrateState(s) {
     // 移除旧「早锻炼打卡」规则：基线模型下保留会与基线双发
       s.points.rules = s.points.rules.filter(r => !(r.dim === 'sport' && (r.label || '').includes('早锻炼打卡')));
   }
+  // 自愈：清理历史遗留的「【考勤】X 请假」班级日志重复条目（同名同原因同日只保留首条），
+  // 旧版本会同时由「即时写入」与「次日归档」两条路径各写一次，导致周报汇总重复
+  if (Array.isArray(s.classLogs)) {
+    const seen = new Set();
+    s.classLogs = s.classLogs.filter(l => {
+      if (!l || typeof l.content !== 'string' || !l.content.startsWith('【考勤】') || !l.content.includes('请假')) return true;
+      const key = l.content + '|' + (l.date || '').slice(0,10);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
   sanitizeStudents(s);
   return s;
 }
@@ -1263,7 +1275,11 @@ function archiveCurrentAttendance(cur){
     const ts=(cur.leaveTs||{})[name]||0;
     // 归档日 = 请假发生那天；时刻能追溯就补上，没有就只留日期
     const d=ts ? nowStampSec(new Date(ts)) : (cur.date||'');
-    state.classLogs.unshift({ id:uid(), date:d, ts:ts||nowTs(), content:`【考勤】${name} 请假${r?('（'+r+'）'):''}` });
+    const dayKey=d.slice(0,10);
+    const content=`【考勤】${name} 请假${r?('（'+r+'）'):''}`;
+    // 幂等：若当天已有同一条（来自 addLeave 即时写入的班级日志），不再重复写入，避免周报多次重复
+    if (attLeaveClassLogExists(name, r, dayKey)) return;
+    state.classLogs.unshift({ id:uid(), date:d, ts:ts||nowTs(), content });
   });
 }
 // 第二天打开（首次加载）时：归档前一天快照、清空请假、固定回家按周期保留
@@ -6028,6 +6044,12 @@ function toggleAttDay(name, day){
   if(i>-1) s.weeklyHome.splice(i,1); else s.weeklyHome.push(day);
   attRecomputeHome(); save(); render();
 }
+// 判断当天「【考勤】X 请假」班级日志是否已存在（按姓名+原因+日期去重，避免同日重复保存）
+function attLeaveClassLogExists(name, reason, dayKey){
+  if(!dayKey) return false;
+  const content=`【考勤】${name} 请假${reason?('（'+reason+'）'):''}`;
+  return (state.classLogs||[]).some(l=>(l.content||'')===content && (l.date||'').slice(0,10)===dayKey);
+}
 function addLeave(name, reason, skipClassLog){
   name=(name||'').trim(); if(!name) return false;
   const a=state.attendance; if(!a.current) a.current={date:attDateKey(new Date()),home:attDeriveHome(),leave:{},leaveTs:{}};
@@ -6036,8 +6058,11 @@ function addLeave(name, reason, skipClassLog){
   const lvTs=nowTs();                       // 请假登记时刻（精确到秒）
   a.current.leaveTs[name]=lvTs;
   if(!skipClassLog){
-    // 班级日志里也记到秒：date 用完整时间戳，ts 是实际录入时刻
-    state.classLogs.unshift({ id:uid(), date:nowStampSec(new Date(lvTs)), ts:lvTs, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+    // 班级日志里也记到秒：date 用完整时间戳，ts 是实际录入时刻；同日重复登记（快速记录多次/补录）幂等跳过
+    const dayKey=attDateKey(new Date(lvTs));
+    if(!attLeaveClassLogExists(name, reason, dayKey)){
+      state.classLogs.unshift({ id:uid(), date:nowStampSec(new Date(lvTs)), ts:lvTs, content:`【考勤】${name} 请假${reason?('（'+reason+'）'):''}` });
+    }
   }
   save(); return true;
 }
@@ -9465,10 +9490,9 @@ function qrSave() {
           // 早操/出操请假不写入当天考勤（≠全天请假），只在体育维度留痕扣分，
           // 避免污染「考勤全勤=本周请假0」的判定
           const isSportLeave = dim === 'sport' || /早操|出操|课间操|跑操/.test(content || '');
-          if (!isSportLeave) addLeave(s.name, content || '请假', true);
+          if (!isSportLeave) addLeave(s.name, content || '请假'); // 请假统一由 addLeave 写入班级日志（【考勤】X 请假），次日归档时幂等跳过，避免周报重复
           const recId = uid();
           s.records.unshift({ id: recId, type: 'leave', date: recDate, ts, content: content || '请假' });
-          logBehaviorToClassLog(recId, s.name, 'leave', content || '请假', recDate);
           nLeave++;
         }
       } else if (recType) {
